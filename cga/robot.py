@@ -42,7 +42,7 @@ FIXED = "fixed"
 MOVABLE = (REVOLUTE, PRISMATIC, CONTINUOUS)
 
 # blade 类型
-BLADES = ("cylinder", "box", "sphere", "plane", "circle")
+BLADES = ("cylinder", "box", "sphere", "plane", "circle", "mesh")
 ROLES = ("visual", "collision")
 
 
@@ -60,6 +60,8 @@ class Geometry:
       sphere:   radius
       plane:    normal + distance (平面 n·x = d, CGA 扩展)
       circle:   radius (圆盘, 局部法向 +Z, CGA 扩展)
+      mesh:     file (不透明字符串, 可含 package:// URI) + scale ——
+                像 URDF 一样的文件引用, 引擎不渲染 (interop 用)
     """
 
     blade: str
@@ -71,6 +73,8 @@ class Geometry:
     size: tuple[float, float, float] | None = None
     normal: tuple[float, float, float] | None = None
     distance: float | None = None
+    file: str | None = None
+    scale: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,12 @@ def _geometry(d: dict, where: str, materials: dict[str, Material]) -> Geometry:
         if all(x == 0.0 for x in normal):
             raise RobotError(f"{where}: plane normal 不能为零向量")
         g = _with(g, normal=normal, distance=float(d.get("distance", 0.0)))
+    if blade == "mesh":
+        file = _need(d, "file", where)
+        if not isinstance(file, str) or not file.strip():
+            raise RobotError(f"{where}: mesh 需要非空 file 引用 (URDF 式文件引用)")
+        scale = _vec3(d.get("scale", [1.0, 1.0, 1.0]), f"{where}.scale")
+        g = _with(g, file=file, scale=scale)
     return g
 
 
@@ -332,6 +342,8 @@ def _with(g: Geometry, **kw) -> Geometry:
         size=kw.get("size", g.size),
         normal=kw.get("normal", g.normal),
         distance=kw.get("distance", g.distance),
+        file=kw.get("file", g.file),
+        scale=kw.get("scale", g.scale),
     )
 
 

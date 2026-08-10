@@ -517,6 +517,41 @@ robot:
     dmax = max(abs(a1[i][j] - a2[i][j]) for i in range(4) for j in range(4))
     check("crdf urdf round-trip fk", close(dmax, 0.0, tol=1e-4))
 
+    # ── CRDF mesh 引用 (URDF 式文件引用, 引擎不渲染, interop 用) ──
+    _MESH_URDF = (
+        '<robot name="m"><link name="b"/><link name="c">'
+        '<visual><geometry><mesh filename="package://x/a.dae" scale="1 2 3"/>'
+        "</geometry></visual></link>"
+        '<joint name="j" type="fixed"><parent link="b"/><child link="c"/></joint>'
+        "</robot>"
+    )
+    rm1 = load_robot(urdf_to_crdf(_MESH_URDF, mesh_policy="keep"))
+    gm1 = rm1.link("c").geometry[0]
+    check(
+        "crdf mesh keep ref",
+        gm1.blade == "mesh"
+        and gm1.file == "package://x/a.dae"
+        and gm1.scale == (1.0, 2.0, 3.0),
+    )
+    rm2 = load_robot(urdf_to_crdf(crdf_to_urdf(rm1), mesh_policy="keep"))
+    gm2 = rm2.link("c").geometry[0]
+    check("crdf mesh round-trip", gm2.file == gm1.file and gm2.scale == gm1.scale)
+    check(
+        "crdf mesh requires file",
+        _rejects(
+            """
+robot:
+  name: x
+  base: b
+  links:
+    - name: b
+      geometry:
+        - blade: mesh
+  joints: []
+"""
+        ),
+    )
+
     # ── OOP 封装: 对偶球/平面提取走公开访问器 (motor 共轭后类型降级) ──
     s_cam = Motor.translator((1, 2, 3)).apply(Sphere((0, 0, 0), 0.5))
     (c0, c1, c2), rho = Sphere.from_dual(s_cam)

@@ -64,7 +64,7 @@ def _motor_to_origin(m: Motor) -> dict[str, Any]:
 
 
 def _geom_dict(
-    kind: str, g: ET.Element, origin: dict, mesh: str = "error"
+    kind: str, g: ET.Element, origin: dict, mesh: str = "skip"
 ) -> dict[str, Any] | None:
     if kind == "cylinder":
         r = float(g.get("radius", "0"))
@@ -80,11 +80,20 @@ def _geom_dict(
         size = [float(v) for v in g.get("size", "0 0 0").split()]
         return {"blade": "box", "size": size, "origin": origin}
     if kind == "mesh":
+        # 引擎 blade-only: mesh 不建模。skip (默认) = 忽略; keep = 保留
+        # 文件引用 (interop round-trip, 引擎不渲染)
         if mesh == "skip":
-            return None  # v1 无 mesh, 跳过 (角色提升见 urdf_to_crdf)
+            return None
+        if mesh == "keep":
+            return {
+                "blade": "mesh",
+                "file": g.get("filename", ""),
+                "scale": [float(v) for v in g.get("scale", "1 1 1").split()],
+                "origin": origin,
+            }
         raise RobotError(
-            "URDF geometry <mesh> 不在 CRDF v1 范围 (仅 cylinder/box/sphere); "
-            "想跳过 mesh 请用 urdf_to_crdf(xml, mesh_policy='skip')"
+            "URDF geometry <mesh> 需要 mesh_policy='skip' (默认, 忽略 mesh) "
+            "或 'keep' (保留文件引用 round-trip)"
         )
     raise RobotError(f"URDF geometry <{kind}> 不在 CRDF v1 范围")
 
@@ -93,7 +102,7 @@ def _role_geometry(
     role: str,
     link: ET.Element,
     mats: dict[str, list[float]],
-    mesh: str = "error",
+    mesh: str = "skip",
 ) -> list[dict[str, Any]]:
     """提取 link 的 visual/collision 块 → 几何 dict (role 单元素, 导入保真)。
 
@@ -117,25 +126,29 @@ def _role_geometry(
         gd = _geom_dict(geo[0].tag, geo[0], origin, mesh)
         if gd is None:
             continue  # mesh 跳过策略
-        mat = block.find("material")
-        name = None
-        if mat is not None:
-            name = mat.get("name")
-            c = mat.find("color")
+        for gd in [gd]:
+            mat = block.find("material")
+            name = None
+            if mat is not None:
+                name = mat.get("name")
+                c = mat.find("color")
+                if name is not None:
+                    # 内联带名定义 (如 <material name="white"><color/></material>):
+                    # 首次定义登记颜色, 后续 <material name=../> 引用可解析
+                    if c is not None:
+                        mats.setdefault(
+                            name,
+                            [float(v) for v in c.get("rgba", "1 1 1 1").split()],
+                        )
+                elif c is not None:  # 无名字内联颜色 → 合成名
+                    name = f"{link.get('name')}_{role}_{i}"
+                    mats[name] = [
+                        float(v) for v in c.get("rgba", "1 1 1 1").split()
+                    ]
             if name is not None:
-                # 内联带名定义 (如 <material name="white"><color/></material>):
-                # 首次定义登记颜色, 后续 <material name=../> 引用可解析
-                if c is not None:
-                    mats.setdefault(
-                        name, [float(v) for v in c.get("rgba", "1 1 1 1").split()]
-                    )
-            elif c is not None:  # 无名字内联颜色 → 合成名
-                name = f"{link.get('name')}_{role}_{i}"
-                mats[name] = [float(v) for v in c.get("rgba", "1 1 1 1").split()]
-        if name is not None:
-            gd["material"] = name
-        gd["role"] = [role]
-        out.append(gd)
+                gd["material"] = name
+            gd["role"] = [role]
+            out.append(gd)
     return out
 
 
@@ -166,15 +179,18 @@ def _merge_roles(geoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(by_key.values())
 
 
-def urdf_to_crdf(urdf_xml: str, mesh_policy: str = "error") -> str:
+def urdf_to_crdf(urdf_xml: str, mesh_policy: str = "skip") -> str:
     """解析 URDF XML → CRDF YAML 文本。
 
-    mesh_policy: "error" (v1 默认, mesh 几何直接报错) | "skip" (跳过 mesh
-    块; 若某 link 的 visual 全被跳过, 其 collision 圆柱提升为
-    role: [visual, collision], 保证渲染不空)。
+    mesh_policy: "skip" (默认, 忽略 mesh —— 引擎 blade-only; 某 link 的
+    visual 全被跳过时 collision 基本体提升为 [visual, collision]) |
+    "keep" (保留 mesh 文件引用, round-trip, 引擎不渲染) | "error"
+    (遇到 mesh 直接报错, 严格模式)。
     """
-    if mesh_policy not in ("error", "skip"):
-        raise RobotError(f"mesh_policy 必须是 'error'|'skip', got {mesh_policy!r}")
+    if mesh_policy not in ("error", "skip", "keep"):
+        raise RobotError(
+            f"mesh_policy 必须是 'error'|'skip'|'keep', got {mesh_policy!r}"
+        )
     try:
         root = ET.fromstring(urdf_xml)
     except ET.ParseError as e:
@@ -320,9 +336,14 @@ def _add_geometry(el: ET.Element, g: Geometry) -> None:
     elif g.blade == "box":
         geo = ET.SubElement(geo, "box")
         geo.set("size", " ".join(_f(v) for v in (g.size or (0.0, 0.0, 0.0))))
+    elif g.blade == "mesh":
+        geo = ET.SubElement(geo, "mesh")
+        geo.set("filename", g.file or "")
+        if g.scale is not None:
+            geo.set("scale", " ".join(_f(v) for v in g.scale))
     else:
         raise RobotError(
-            f"blade {g.blade!r} 无法导出为 URDF (v1 仅 cylinder/box/sphere; "
+            f"blade {g.blade!r} 无法导出为 URDF (v1 仅 cylinder/box/sphere/mesh; "
             f"plane/circle 是 CGA 扩展)"
         )
 

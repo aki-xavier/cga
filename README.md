@@ -28,7 +28,7 @@ OrbitControls 环绕一周:
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 69 项断言 (代数/图元/versor/距离)
+uv run python -m cga                   # 包自检: 75 项断言 (代数/图元/versor/距离)
 ```
 
 ## 场景代码
@@ -269,9 +269,14 @@ world = robot.fk_list([0.0, 1.1, -1.2, 0.8, 0.4, 0.3])  # link → Motor
 
 ![CRDF 机器人渲染](docs/robot_z1.png)
 
-范围声明 (v1): mesh 引用不建模, 导入按 `mesh_policy` 跳过或报错 (跳过时
-碰撞基本体兼任视觉); 惯量全 6 分量张量; 无 SRDF/transmission/gazebo 语义;
-URDF 的 floating/planar 关节不支持。
+范围声明 (v1): mesh 不建模 —— 导入时**忽略** (`mesh_policy='skip'`, 默认;
+某 link 的 visual 全被跳过时, 其 collision 基本体提升为 `[visual, collision]`
+保证渲染不空)。可选 `keep` (保留 `blade: mesh, file, scale` 文件引用,
+opaque 字符串可含 `package://` URI, interop round-trip 无损, 引擎不渲染)
+或 `error` (严格模式, 遇 mesh 报错)。
+
+惯量全 6 分量张量; 无 SRDF/transmission/gazebo 语义; URDF 的
+floating/planar 关节不支持。
 
 ## 项目布局
 
@@ -285,7 +290,7 @@ cga/
   compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
   robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
   urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
-  __main__.py      包自检: python -m cga (69 项断言)
+  __main__.py      包自检: python -m cga (75 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
 demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
@@ -294,8 +299,8 @@ models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF
 
 ## 质量
 
-- `python -m cga`: 69 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
-  exp-log 往返 / 距离公式 / 抗锯齿 / CRDF FK·校验·round-trip,
+- `python -m cga`: 75 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+  exp-log 往返 / 距离公式 / 抗锯齿 / CRDF FK·校验·round-trip·mesh,
   见 `cga/__main__.py`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 

@@ -57,6 +57,11 @@ def _to_geometry(g: Geometry):
         return PlaneGeometry(g.normal, g.distance)
     if g.blade == "circle":
         return CircleGeometry(g.radius)
+    if g.blade == "mesh":
+        raise ValueError(
+            f"mesh 引用不渲染 ({g.file}); 重新导入时用 mesh_policy='skip' "
+            "(默认, 忽略 mesh)"
+        )
     raise ValueError(f"unknown blade {g.blade!r}")
 
 
@@ -70,9 +75,9 @@ def build_scene(robot: Robot, q: list[float]) -> Scene:
             PlaneGeometry((0, 1, 0), 0.0),  # 地面 y=0, 臂底恰在地面
             MeshStandardMaterial(Color(0x9AA0A6), roughness=0.8),
         ),
-        DirectionalLight(intensity=0.5, direction=(0.4, 1.0, 0.35)),
-        PointLight(intensity=0.55, position=(0, 3.5, 2.8)),
-        AmbientLight(intensity=0.42),
+        DirectionalLight(intensity=0.65, direction=(0.4, 1.0, 0.35)),
+        PointLight(intensity=0.6, position=(0, 3.5, 2.8)),
+        AmbientLight(intensity=0.52),
     )
     for link in robot.links:
         m = WORLD_UP.gp(world[link.name])
@@ -92,15 +97,15 @@ def main() -> None:
     out_dir.mkdir(exist_ok=True)
     model = Path(sys.argv[2]) if len(sys.argv) > 2 else MODEL
     robot = load_robot(model)
-    # 默认: Z1 工作姿态 (关节角弧度); 可传自定义关节角
-    default_q = [0.0, 1.1, -1.2, 0.8, 0.4, 0.3]
+    # 默认: Z1 舒展姿态 (肩偏航 0.3 + 上臂前倾 120° + 前臂前伸)
+    default_q = [0.3, 2.0944, -2.0944, 0.4, 0.3, 0.5]
     q = [float(v) for v in sys.argv[3:]] or default_q
     scene = build_scene(robot, q)
     camera = PerspectiveCamera(
-        fov=50, aspect=4 / 3, position=(0.6, 1.25, 2.6), target=(0, 0.95, 0)
+        fov=50, aspect=4 / 3, position=(0.45, 0.22, 0.75), target=(0.25, 0.30, 0.08)
     )
-    camera.look_at((0, 0.95, 0))
-    img = Renderer(480, 360, aa=2).render(scene, camera)
+    camera.look_at((0.25, 0.30, 0.08))
+    img = Renderer(640, 480, aa=2).render(scene, camera)
     fname = "robot_z1.png" if model == MODEL else f"robot_{robot.name}.png"
     p = out_dir / fname
     Image.frombytes("RGBA", (img.shape[1], img.shape[0]), frame_to_bytes(img)).save(p)
