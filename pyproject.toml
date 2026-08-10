@@ -1,0 +1,53 @@
+[project]
+name = "cga"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "aki", email = "aki.petit@icloud.com" }]
+requires-python = ">=3.14"
+dependencies = ["matplotlib>=3.11.1", "mlx>=0.32.0", "numpy>=1.26,<2.5"]
+
+[project.scripts]
+cga = "cga.__main__:main"
+
+# 仅数值对比脚本 (src/cga/compare_clifford.py) 需要, 主包不依赖。
+# clifford→numba 0.66 要求 numpy<2.5 —— 这就是上面 numpy 上限的原因。
+[project.optional-dependencies]
+compare = ["clifford"]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+# 扁平布局: 包目录直接位于项目根 (./cga/), 不用 src/ 嵌套。
+[tool.uv.build-backend]
+module-root = ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# ruff — linter & formatter
+# ═══════════════════════════════════════════════════════════════════════
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+# ═══════════════════════════════════════════════════════════════════════
+# pyright — static type checker (used by VS Code Pylance)
+# ═══════════════════════════════════════════════════════════════════════
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportOptionalOperand = false
+reportOptionalMemberAccess = false
+reportUnusedVariable = false
+reportUnknownLambdaType = false
+reportMissingParameterType = false
+reportArgumentType = false
+reportMissingTypeArgument = false
