@@ -733,3 +733,11 @@ def render_frame(
 ) -> mx.array:
     """单帧快捷入口 (demo 用)。"""
     return Renderer(width, height, aa=aa).render(scene, camera)
+
+
+def frame_to_bytes(img: mx.array) -> bytes:
+    """(H, W, 4) uint8 RGBA 帧 → 扁平 RGBA bytes (PIL 输出桥, 无 numpy)。
+
+    demo 层用 `Image.frombytes("RGBA", (w, h), frame_to_bytes(img))` 存图。
+    """
+    return bytes(v for row in img.tolist() for px in row for v in px)

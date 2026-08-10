@@ -6,10 +6,10 @@
 场景: 地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘, 平行光 + 点光 + 环境光。
 """
 
+import math
 import sys
 from pathlib import Path
 
-import numpy as np
 from PIL import Image
 
 from cga.engine import (
@@ -28,6 +28,7 @@ from cga.engine import (
     Renderer,
     Scene,
     SphereGeometry,
+    frame_to_bytes,
 )
 
 
@@ -92,12 +93,13 @@ def main() -> None:
     paths: list[Path] = []
     for i in range(frames):
         controls.azimuth = 2.0 * 3.141592653589793 * i / frames  # 绕一圈
-        controls.elevation = 0.42 + 0.12 * np.sin(4.0 * 3.141592653589793 * i / frames)
+        controls.elevation = 0.42 + 0.12 * math.sin(4.0 * math.pi * i / frames)
         controls.update()
         img = renderer.render(scene, camera)
-        arr = np.asarray(img.tolist(), dtype=np.uint8)
         p = out_dir / f"frame_{i:03d}.png"
-        Image.fromarray(arr).save(p)
+        Image.frombytes(
+            "RGBA", (img.shape[1], img.shape[0]), frame_to_bytes(img)
+        ).save(p)
         paths.append(p)
         print(f"frame {i + 1}/{frames} saved {p}", end="\r")
     print()

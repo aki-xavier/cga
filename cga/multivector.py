@@ -21,8 +21,8 @@ import mlx.core as mx
 
 # ── 基 blade 定义 ──────────────────────────────────────────────────
 
-# 32 个基 blade 的规范排序 (公开: 互操作/工具脚本
-# 的合法元数据, 如 compare_clifford.py 的基变换)
+# 32 个基 blade 的规范排序 (公开: 互操作/工具脚本的合法元数据;
+# 排序经 clifford 库数值验证, 见 git 历史的 compare_clifford.py)
 # 每个 blade 是基向量下标元组: 0=e1, 1=e2, 2=e3, 3=e0, 4=e∞
 BASIS_BLADES: list[tuple[int, ...]] = [
     # Grade 0 (1)

@@ -28,7 +28,7 @@ OrbitControls 环绕一周:
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 59 项断言 (代数/图元/versor/距离)
+uv run python -m cga                   # 包自检: 66 项断言 (代数/图元/versor/距离)
 ```
 
 ## 场景代码
@@ -212,6 +212,69 @@ Motor 是 SE(3) 的 versor 表示, 本包已有 `exp` / `log` / `velocity_bivect
 `X_base = M_tool·X` 无机制差异 —— 多坐标系链式变换、手眼标定、双相机几何
 收敛到一个表示, 减少跨库转换 bug。
 
+### CRDF — CGA 机器人描述格式
+
+URDF 的 YAML 版: 链接树 + 关节 + 几何 (blade) + 惯量。帧语义与 URDF
+完全一致 (joint.origin = 父 frame → joint frame, axis 在 joint frame,
+几何/质心 origin 在 link frame, 单位 SI), 但可读性、去重和代数表达
+更好:
+
+| 维度 | URDF (XML) | CRDF (YAML) |
+| --- | --- | --- |
+| **语法** | XML 标签嵌套, 一个链接几十行 | YAML 映射, 一个链接几行; 注释随便写 |
+| **origin** | `xyz + rpy` 字符串 | `xyz + rpy` (URDF 兼容) 或 `motor: {axis, angle, t}` (CGA 签名原样) |
+| **几何** | mesh 文件引用或基本体, visual/collision 分写两遍 | blade 图元 (cylinder/box/sphere/plane/circle), `role: [visual, collision]` 一份复用 |
+| **变换** | 4×4 矩阵 | Motor versor; FK = Motor 链, 长链不积累正交性漂移 |
+| **运动学** | 无内置 | `fk(q)`: revolute = `M_origin·Rot(axis,q)`, prismatic = `·Trans(axis·q)` |
+
+示例 (`models/arm_7dof.crdf.yaml` 由 `simu/models/arm_7dof.urdf` 导入,
+9 条几何, 其中 8 条 visual+collision 双角色复用):
+
+```yaml
+robot:
+  name: arm_7dof
+  base: base_link
+  materials:
+    - name: dark
+      color: [0.12, 0.12, 0.14, 1.0]
+  links:
+    - name: base_link
+      geometry:
+        - blade: cylinder
+          radius: 0.1
+          length: 0.15
+          origin: {xyz: [0, 0, 0.075]}
+          material: dark
+          role: [visual, collision]
+      inertial: {mass: 5.0, com: [0, 0, 0.075], inertia: {ixx: 0.0219, iyy: 0.0219, izz: 0.025}}
+  joints:
+    - name: j1
+      type: revolute
+      parent: base_link
+      child: link1
+      origin: {xyz: [0, 0, 0.15]}
+      axis: [0, 0, 1]
+      limit: {lower: -2.967, upper: 2.967, effort: 40, velocity: 2.0}
+```
+
+用法 (加载 → FK → 直接进 CGA 引擎渲染, 无网格无中间表示):
+
+```python
+from cga.robot import load_robot, fk_list
+from cga.urdf_io import crdf_to_urdf, urdf_to_crdf  # 双向转换 (pydrake/UrdfScene 互操作)
+
+robot = load_robot("models/arm_7dof.crdf.yaml")
+world = fk_list(robot, [0.4, -0.6, 0.3, -0.8, 0.5, -0.4, 0.2])  # link → Motor
+```
+
+`demo_robot.py` 渲染该描述 (臂底 z=0 恰落地; 仅根级 Z-up(URDF)→Y-up(引擎)
+转换, 数据文件保持 URDF 语义):
+
+![CRDF 机器人渲染](docs/robot_arm.png)
+
+范围声明 (v1): 无 mesh 引用 (blade 优先); 惯量只支持对角张量; 无
+SRDF/transmission/gazebo 语义; URDF 的 floating/planar 关节不支持。
+
 ## 项目布局
 
 ```text
@@ -221,16 +284,21 @@ cga/
   motors.py        Motor: 刚体变换 versor, exp/log/插值/速度提取
   engine.py        three.js 风格渲染引擎 (MLX 批量光线追踪)
   render.py        逆渲染: SceneModel → 2D 深度/颜色 (反投影工具)
-  compare_clifford.py  与 clifford 库的数值对比 (可选依赖)
-  __main__.py      包自检: python -m cga (57 项断言)
+  compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
+  robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
+  urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
+  __main__.py      包自检: python -m cga (66 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
+demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
+models/            CRDF 机器人描述文件 (arm_7dof.crdf.yaml)
 ```
 
 ## 质量
 
-- `python -m cga`: 59 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
-  exp-log 往返 / 距离公式 / 抗锯齿, 见 `cga/__main__.py`)。
+- `python -m cga`: 66 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+  exp-log 往返 / 距离公式 / 抗锯齿 / CRDF FK·校验·round-trip,
+  见 `cga/__main__.py`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 
 ## License

@@ -9,7 +9,6 @@ meet 接受直接形式输入。
 import math
 
 import mlx.core as mx
-import numpy as np
 
 from cga import (
     Circle,
@@ -23,6 +22,8 @@ from cga import (
     Sphere,
     render_scene,
 )
+from cga.robot import RobotError, fk_list, load_robot
+from cga.urdf_io import crdf_to_urdf, urdf_to_crdf
 
 _ok = 0
 
@@ -149,9 +150,12 @@ def main() -> None:
     )
 
     # to_matrix 与 sandwich 作用一致
-    Hm = np.array(M.to_matrix())
-    p_h = Hm @ np.array([1, 0, 0, 1.0])
-    check("motor_to_matrix", np.allclose(p_h[:3], [1, 1, 0], atol=1e-4))
+    Hm = M.to_matrix()
+    p_h = [Hm[i][0] + Hm[i][3] for i in range(3)]  # M·(1,0,0,1): R[i][0] + t[i]
+    check(
+        "motor_to_matrix",
+        all(abs(p_h[i] - [1, 1, 0][i]) < 1e-4 for i in range(3)),
+    )
 
     # exp/log roundtrip 与 motor 插值 (Motor.exp(B, s): exp(-s·B), s 带符号)
     R90 = Motor.rotor((0, 0, 1), math.pi / 2)
@@ -379,6 +383,103 @@ def main() -> None:
         img_aa2[23, 31].tolist() == img_aa1[23, 31].tolist(),
     )
     check("aa smooths silhouette", bool(mx.any(img_aa1 != img_aa2).item()))
+
+    # ── CRDF 机器人描述 (内联 YAML, 无文件依赖) ─────────────────
+    _CRDF2 = """
+robot:
+  name: r2
+  base: base
+  links:
+    - name: base
+    - name: tip
+      geometry:
+        - blade: cylinder
+          radius: 0.05
+          length: 0.5
+          origin: {xyz: [0, 0, 0.25]}
+          role: [visual, collision]
+  joints:
+    - name: j
+      type: revolute
+      parent: base
+      child: tip
+      origin: {xyz: [0, 0, 0.5]}
+      axis: [0, 1, 0]
+      limit: {lower: -3.14, upper: 3.14}
+"""
+    r2 = load_robot(_CRDF2)
+    m0 = fk_list(r2, [0.0])["tip"].to_matrix()
+    check("crdf fk q=0 tip z", close(float(m0[2][3]), 0.5, tol=1e-4))
+    m90 = fk_list(r2, [math.pi / 2])["tip"].to_matrix()
+    # URDF 语义: 旋转绕 joint frame 原点原地转 (child 帧原点不动),
+    # 局部 +Z 轴经 Rot(Y, π/2) 映到 +X
+    check("crdf fk q=90 rotate in place", close(float(m90[2][3]), 0.5, tol=1e-4))
+    check(
+        "crdf fk q=90 local z->x",
+        close(float(m90[0][2]), 1.0, tol=1e-4)
+        and close(float(m90[2][0]), -1.0, tol=1e-4),
+    )
+
+    def _rejects(text: str) -> bool:
+        try:
+            load_robot(text)
+            return False
+        except RobotError:
+            return True
+
+    check("crdf reject zero axis", _rejects("""
+robot:
+  name: bad
+  base: b
+  links: [{name: b}, {name: c}]
+  joints: [{name: j, type: revolute, parent: b, child: c, axis: [0, 0, 0]}]
+"""))
+    check("crdf reject lower>upper", _rejects("""
+robot:
+  name: bad
+  base: b
+  links: [{name: b}, {name: c}]
+  joints: [{name: j, type: revolute, parent: b, child: c, axis: [0, 1, 0],
+             limit: {lower: 1.0, upper: -1.0}}]
+"""))
+    check("crdf reject dangling parent", _rejects("""
+robot:
+  name: bad
+  base: b
+  links: [{name: b}, {name: c}]
+  joints: [{name: j, type: revolute, parent: ghost, child: c, axis: [0, 1, 0]}]
+"""))
+
+    # URDF round-trip: 导出 → 再导入 → fk motor 一致 (revolute + prismatic)
+    _CRDF_RT = """
+robot:
+  name: rt
+  base: base
+  links:
+    - name: base
+    - name: arm
+    - name: tip
+  joints:
+    - name: j1
+      type: revolute
+      parent: base
+      child: arm
+      origin: {xyz: [0, 0, 0.3]}
+      axis: [0, 0, 1]
+    - name: j2
+      type: prismatic
+      parent: arm
+      child: tip
+      origin: {xyz: [0, 0, 0.2]}
+      axis: [1, 0, 0]
+      limit: {lower: 0, upper: 0.5}
+"""
+    rt1 = load_robot(_CRDF_RT)
+    rt2 = load_robot(urdf_to_crdf(crdf_to_urdf(rt1)))
+    a1 = fk_list(rt1, [0.4, 0.15])["tip"].to_matrix()
+    a2 = fk_list(rt2, [0.4, 0.15])["tip"].to_matrix()
+    dmax = max(abs(a1[i][j] - a2[i][j]) for i in range(4) for j in range(4))
+    check("crdf urdf round-trip fk", close(dmax, 0.0, tol=1e-4))
 
     print(f"\nall {_ok} checks passed")
 

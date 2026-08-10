@@ -13,7 +13,6 @@
 import sys
 from pathlib import Path
 
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from cga.engine import (
@@ -30,6 +29,7 @@ from cga.engine import (
     Renderer,
     Scene,
     SphereGeometry,
+    frame_to_bytes,
 )
 from cga.motors import Motor
 
@@ -40,15 +40,15 @@ def _render(
     scene: Scene,
     cam_pos: tuple[float, float, float],
     target: tuple[float, float, float],
-) -> np.ndarray:
-    """静态视角渲染一帧 → (H, W, 4) uint8 RGBA (numpy 桥, 仅 PIL 输出用)。
+) -> bytes:
+    """静态视角渲染一帧 → RGBA bytes (PIL 输出桥, 无 numpy)。
 
     aa=2 超采样抗锯齿: 每像素 2×2 亚像素射线平均, 轮廓/高光边缘更平滑。
     """
     camera = PerspectiveCamera(fov=50, aspect=W / H, position=cam_pos, target=target)
     camera.look_at(target)
     img = Renderer(W, H, aa=2).render(scene, camera)
-    return np.asarray(img.tolist(), dtype=np.uint8)
+    return frame_to_bytes(img)
 
 
 def panel_a_scene() -> Scene:
@@ -143,7 +143,7 @@ def _save_panel(
     """渲染一帧 + 底部说明文字 → 独立 PNG。"""
     frame = _render(scene, cam_pos, target)
     canvas = Image.new("RGB", (W, H + 26), (16, 18, 22))
-    canvas.paste(Image.fromarray(frame).convert("RGB"), (0, 0))
+    canvas.paste(Image.frombytes("RGBA", (W, H), frame).convert("RGB"), (0, 0))
     draw = ImageDraw.Draw(canvas)
     draw.text((8, H + 6), label, fill=(232, 232, 232), font=_label_font())
     p = out_dir / name
