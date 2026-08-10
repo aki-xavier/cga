@@ -325,7 +325,7 @@ def main() -> None:
     sc_basic = Scene()
     sc_basic.add(
         Mesh(SphereGeometry(1.0), MeshBasicMaterial(Color(0xFF0000))),
-        Mesh(PlaneGeometry((0, 1, 0), -1.5), MeshStandardMaterial(Color(0xAAAAAA))),
+        Mesh(PlaneGeometry((0, 1, 0), -1.0), MeshStandardMaterial(Color(0xAAAAAA))),
     )
     img_basic = render_frame(sc_basic, cam0, W3, H3)
     check(

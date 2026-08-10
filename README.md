@@ -37,7 +37,7 @@ from cga.engine import *
 
 scene = Scene()
 scene.add(
-    Mesh(PlaneGeometry((0, 1, 0), -1.0),            # 地面: 对偶平面 blade
+    Mesh(PlaneGeometry((0, 1, 0), 0.0),             # 地面: 对偶平面 blade (y=0)
          MeshStandardMaterial(Color(0xB0B0B0), roughness=0.7)),
     Mesh(SphereGeometry(1.0),                        # 球: 对偶球 blade, 半径即尺寸
          MeshStandardMaterial(Color(0xC0392B), roughness=0.25, metalness=0.25),
@@ -104,6 +104,27 @@ geometry 构造参数里; 像素级计算全部在 MLX GPU 上批量进行, Pyth
 - **无限几何天然成立** —— 无限平面 (地平线无限延伸)、无限圆柱是代数对象本身的属性, 无需裁剪; 想要有限片状面需自行按区域掩码裁剪 (见 `cga/render.py`)。
 - **变换与几何同构** —— motor 与 blade 是同一类对象, `Motor.compose` / `inverse` / `log` 直接作用于任何图元, 没有矩阵-四元数-轴角之间的换算层。
 - **代价在别处** —— 解析求交的 float32 blade 共轭限制场景尺度 (坐标宜 ±20 内); 无纹理坐标概念 (v1 无纹理); 无限平面/圆柱在相机位于退化位形时需内核特殊处理 (见下节)。
+
+### 渲染示例: 三个优势的可视化
+
+`demo_advantage.py` 把上面三个实际后果各渲染成一张独立图像
+(`uv run python demo_advantage.py` → `artifacts/advantage_{a,b,c}.png`):
+
+**无多边形** — 相机贴脸 (≈2.7× 半径) 的大球 + 无限圆柱: 轮廓是完美圆弧、
+高光无棱角; 同等距离的网格球/圆柱已能看到三角面片棱角。
+
+![无多边形](docs/advantage_a.png)
+
+**无限几何** — 地面是无限平面 (直达地平线不裁剪), 金柱是无限圆柱
+(无顶/底盖), 红球作尺度参照 (底切正好在地面)。
+
+![无限几何](docs/advantage_b.png)
+
+**变换与几何同构** — 同一个 Motor 沿 `exp(s·log(M0⁻¹M1))` 插值
+(SE(3) 螺旋), 一路驱动 6 个小球轨迹图元; 终点绿盒的旋转也由同一
+motor 给出 —— 无矩阵分解、无位置/四元数换算层。
+
+![变换与几何同构](docs/advantage_c.png)
 
 ## 范围声明 (v1 与 three.js 的差距)
 
@@ -199,6 +220,7 @@ cga/
   compare_clifford.py  与 clifford 库的数值对比 (可选依赖)
   __main__.py      包自检: python -m cga (57 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
+demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
 ```
 
 ## 质量

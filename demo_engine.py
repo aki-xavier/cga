@@ -35,7 +35,7 @@ def build_scene() -> Scene:
     scene = Scene()
     scene.add(
         Mesh(
-            PlaneGeometry((0, 1, 0), -1.0),
+            PlaneGeometry((0, 1, 0), 0.0),
             # 半光泽地面: roughness 0.7 → Blinn 指数 ~22, 掠射高光聚焦不整片过曝
             MeshStandardMaterial(Color(0xB0B0B0), roughness=0.7),
         ),
