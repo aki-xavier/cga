@@ -104,6 +104,7 @@ robot:
       length: 0.067
       origin:
         xyz: [0.072, 0.0, 0.0]
+        rpy: [0.0, 1.5707963267948966, 0.0]
       role: [visual, collision]
       material: white
     inertial:

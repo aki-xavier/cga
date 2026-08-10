@@ -4,7 +4,7 @@
 // 世界→相机刚体变换 → 图元参数进 uniform 数组 → 片段着色器逐像素求交。
 // 相机 = OrbitControls (azimuth/elevation/radius), 世界→相机 (R,t)。
 
-import { makeCGA, fk, rigid, rotate, dot } from "./cga.js";
+import { Motor, fk, rigid, rotate, dot } from "./cga.js";
 
 const MAX_PRIMS = 32;
 
@@ -187,9 +187,8 @@ export class CgaRenderer {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-    // CGA 核心 (表来自模型 JSON)
-    this.cga = makeCGA(model.basis_table, model.reverse_sign);
-    this.Motor = this.cga.Motor;
+    // CGA 核心 (原生实现, 无导出表)
+    this.Motor = Motor;
 
     // 轨道 (相机 = OrbitControls; 世界 Y-up, 模型 Z-up → 根级 Rot(X,-π/2))
     this.azimuth = 0.7;
@@ -200,7 +199,7 @@ export class CgaRenderer {
 
     // 关节滑块状态
     this.q = {};
-    for (const j of model.robot.joints) {
+    for (const j of model.joints) {
       if (j.type === "revolute" || j.type === "continuous" || j.type === "prismatic") {
         this.q[j.name] = 0;
       }
@@ -249,15 +248,15 @@ export class CgaRenderer {
     const type = new Int32Array(MAX_PRIMS);
     const p = new Float32Array(MAX_PRIMS * 12);
     const color = new Float32Array(MAX_PRIMS * 3);
-    const mats = new Map(this.model.robot.materials.map((m) => [m.name, m.color.slice(0, 3)]));
-    const world = fk(this.cga, this.model.robot, this.q);
+    const mats = new Map(this.model.materials.map((m) => [m.name, m.color.slice(0, 3)]));
+    const world = fk(this.model, this.q);
     let n = 0;
-    for (const link of this.model.robot.links) {
+    for (const link of this.model.links) {
       const lm = this.worldUp.compose(world[link.name]);
       if (!lm) continue;
       for (const g of link.geometry) {
         if (n >= MAX_PRIMS) break;
-        const m = lm.compose(this.Motor.fromArray(g.origin));
+        const m = lm.compose(g.origin);
         const { R, t } = m.toRT();
         const c = mats.get(g.material) || [0.7, 0.7, 0.7];
         const wp = worldParams(g, R, t);

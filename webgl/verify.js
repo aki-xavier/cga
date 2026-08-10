@@ -12,7 +12,7 @@ const { chromium } = require("/Users/aki/code/cv/node_modules/playwright");
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto("http://localhost:8123/index.html", { waitUntil: "load" });
+  await page.goto("http://localhost:8123/webgl/index.html", { waitUntil: "load" });
   await page.waitForTimeout(800);
 
   const snap = () => page.evaluate(() => window.__snapshot(48));

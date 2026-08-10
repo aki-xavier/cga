@@ -290,7 +290,6 @@ cga/
   compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
   robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
   urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
-  webgl.py          CGA 模型 → WebGL JSON 导出 (乘法表 + versor 模型)
   __main__.py      包自检: python -m cga (75 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
@@ -300,10 +299,16 @@ models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF
 
 ## WebGL 渲染器 (浏览器端 CGA)
 
-`webgl/` 把同一个 CGA 代数跑进浏览器 —— 隐式 blade 解析求交 + FK 走 versor 链:
+`webgl/` 把同一个 CGA 代数跑进浏览器 —— 浏览器**直接解析 CRDF 的
+`.yaml` 文件**, 无需任何转换/导出步骤:
 
-- **同一张代数表**: 32×32 基 blade 乘法表 + reverse 符号由 `cga.webgl` 从
-  Python 端导出 (`cga.js` 表驱动 gp) —— 浏览器里与 Python 是同一个代数。
+- **原生 CGA** (`cga.js`): 基 blade = bitmask, 几何积用递归恒等式
+  (向量·blade = 左收缩 + 楔积; (a∧W)·B = a·(W·B) − (a⌋W)·B), 度量
+  e1-3²=1、e0²=e∞²=0、m(e0,e∞)=−1 —— 已对照 Python 端 32×32 基乘积表
+  逐项验证 (0/1024 不匹配), 无需导出乘法表。
+- **YAML 解析** (`yaml.js`): 覆盖 CRDF 子集 (块映射/同缩进序列/流式
+  集合/注释); `model.js` 镜像 `cga/robot.py` 载入语义 (origin 的
+  xyz+rpy / motor 两种写法 → Motor versor)。
 - **渲染**: WebGL2 片段着色器逐像素解析求交 (球/平面/有限圆柱/盒/圆盘,
   与 `cga.engine` 同族数学) + Blinn-Phong; 每帧 FK (versor 乘积) →
   link motor · 几何 origin → (R,t) → 世界→相机刚体变换 → uniform 数组。
@@ -313,8 +318,8 @@ models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF
   像素读回 + 滑块联动 (需本机有 playwright/chromium)。
 
 ```bash
-uv run python -m cga.webgl models/z1_arm.crdf.yaml -o webgl/z1.json
-cd webgl && python3 -m http.server 8000   # 打开 http://localhost:8000
+cd ~/code/cga && python3 -m http.server 8000
+# 打开 http://localhost:8000/webgl/  (页面直接 fetch ../models/z1_arm.crdf.yaml)
 ```
 
 ![WebGL 渲染](docs/webgl_z1.png)

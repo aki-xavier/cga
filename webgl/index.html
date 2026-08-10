@@ -41,15 +41,19 @@
 <script type="module">
 import { CgaRenderer } from "./renderer.js";
 
+import { parseYAML } from "./yaml.js";
+import { buildModel } from "./model.js";
+
 const renderer = await (async () => {
-  const res = await fetch("z1.json");
-  if (!res.ok) throw new Error("加载 z1.json 失败: " + res.status);
-  return new CgaRenderer(document.getElementById("c"), await res.json());
+  const res = await fetch("../models/z1_arm.crdf.yaml");
+  if (!res.ok) throw new Error("加载 CRDF 失败: " + res.status);
+  const model = buildModel(parseYAML(await res.text()));
+  return new CgaRenderer(document.getElementById("c"), model);
 })();
 
-document.getElementById("title").textContent = "CGA WebGL — " + renderer.model.robot.name;
+document.getElementById("title").textContent = "CGA WebGL — " + renderer.model.name;
 document.getElementById("sub").textContent =
-  renderer.model.robot.joints.filter((j) => j.type !== "fixed").length +
+  renderer.model.joints.filter((j) => j.type !== "fixed").length +
   " 个可动关节 · 隐式 blade 解析求交 · FK 走 versor 链";
 
 // 关节滑块
@@ -58,7 +62,7 @@ const sliders = [];
 // 默认姿态 (舒展: 肩偏航 0.3 + 上臂 120° + 前臂前伸)
 const DEFAULT_Q = [0.3, 2.0944, -2.0944, 0.4, 0.3, 0.5];
 let qi = 0;
-for (const j of renderer.model.robot.joints) {
+for (const j of renderer.model.joints) {
   if (j.type === "fixed") continue;
   const div = document.createElement("div");
   div.className = "j";
