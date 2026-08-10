@@ -1,7 +1,7 @@
 [project]
 name = "cga"
 version = "0.1.0"
-description = "Add your description here"
+description = "5D 共形几何代数核心 + three.js 风格渲染引擎 (MLX GPU 光线追踪)"
 readme = "README.md"
 authors = [{ name = "aki", email = "aki.petit@icloud.com" }]
 requires-python = ">=3.14"

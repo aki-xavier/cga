@@ -36,21 +36,24 @@ def build_scene() -> Scene:
     scene.add(
         Mesh(
             PlaneGeometry((0, 1, 0), -1.0),
-            MeshStandardMaterial(Color(0xB0B0B0), roughness=0.9),
+            # 半光泽地面: roughness 0.7 → Blinn 指数 ~22, 掠射高光聚焦不整片过曝
+            MeshStandardMaterial(Color(0xB0B0B0), roughness=0.7),
         ),
+        # v1 无 envMap/IBL: 高 metalness 会黑死 (three.js 同样问题)。
+        # 压低 metalness, 保留金属色高光, 让漫反射色可读。
         Mesh(
             SphereGeometry(1.0),
-            MeshStandardMaterial(Color(0xC0392B), roughness=0.25, metalness=0.55),
+            MeshStandardMaterial(Color(0xC0392B), roughness=0.25, metalness=0.25),
             position=(0, 1, 0),
         ),
         Mesh(
             SphereGeometry(0.6),
-            MeshStandardMaterial(Color(0x2980B9), roughness=0.15, metalness=0.7),
+            MeshStandardMaterial(Color(0x2980B9), roughness=0.15, metalness=0.35),
             position=(-2.2, 0.6, 0.5),
         ),
         Mesh(
             CylinderGeometry(0.7),
-            MeshStandardMaterial(Color(0xD4AC0D), roughness=0.4, metalness=0.5),
+            MeshStandardMaterial(Color(0xD4AC0D), roughness=0.4, metalness=0.3),
             position=(2.2, 0.7, -0.5),
         ),
         Mesh(
@@ -65,9 +68,10 @@ def build_scene() -> Scene:
             rotation_axis=(1, 0, 0),
             rotation_angle=-0.4,
         ),
-        DirectionalLight(intensity=0.85, direction=(0.4, 1.0, 0.35)),
-        PointLight(intensity=1.2, position=(0, 3, 2)),
-        AmbientLight(intensity=0.2),
+        DirectionalLight(intensity=0.38, direction=(0.4, 1.0, 0.35)),  # 主光
+        PointLight(intensity=0.7, position=(0, 4, 3.5)),  # 顶面点缀
+        DirectionalLight(intensity=0.18, direction=(0, 0.35, 0.9)),  # 正面补光
+        AmbientLight(intensity=0.34),  # 环境底光: 金属暗面可读
     )
     return scene
 
