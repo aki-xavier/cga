@@ -41,10 +41,13 @@ def _render(
     cam_pos: tuple[float, float, float],
     target: tuple[float, float, float],
 ) -> np.ndarray:
-    """静态视角渲染一帧 → (H, W, 4) uint8 RGBA (numpy 桥, 仅 PIL 输出用)。"""
+    """静态视角渲染一帧 → (H, W, 4) uint8 RGBA (numpy 桥, 仅 PIL 输出用)。
+
+    aa=2 超采样抗锯齿: 每像素 2×2 亚像素射线平均, 轮廓/高光边缘更平滑。
+    """
     camera = PerspectiveCamera(fov=50, aspect=W / H, position=cam_pos, target=target)
     camera.look_at(target)
-    img = Renderer(W, H).render(scene, camera)
+    img = Renderer(W, H, aa=2).render(scene, camera)
     return np.asarray(img.tolist(), dtype=np.uint8)
 
 

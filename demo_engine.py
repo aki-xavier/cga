@@ -87,7 +87,7 @@ def main() -> None:
     )
     camera.look_at((0, 0.8, 0))
     controls = OrbitControls(camera, target=(0, 0.8, 0), radius=6.6, elevation=0.42)
-    renderer = Renderer(360, 270)
+    renderer = Renderer(360, 270, aa=2)  # 2×2 超采样抗锯齿, 轮廓无锯齿
 
     paths: list[Path] = []
     for i in range(frames):

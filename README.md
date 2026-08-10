@@ -8,8 +8,9 @@ versor 共轭, 渲染就是对 blade 的 GPU 批量求交。
 
 ## 渲染结果
 
-`demo_engine.py` 的轨道动画 (90 帧, 50ms/帧, 360×270): 地面 + 红/蓝球 + 金柱 +
-绿盒 + 紫圆盘, 平行光 + 点光 + 正面补光 + 环境光, OrbitControls 环绕一周:
+`demo_engine.py` 的轨道动画 (90 帧, ~30ms/帧, 360×270, `aa=2` 超采样抗锯齿):
+地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘, 平行光 + 点光 + 正面补光 + 环境光,
+OrbitControls 环绕一周:
 
 ![轨道渲染 demo](docs/orbit.gif)
 
@@ -20,14 +21,14 @@ versor 共轭, 渲染就是对 blade 的 GPU 批量求交。
 | 层 | 内容 |
 | --- | --- |
 | **CGA 核心** | 32 分量 multivector; 图元类 Point / PointPair / Line / Plane / Sphere / Circle / Cylinder; Motor versor 变换 (gp/reverse/log/velocity_bivector); exp/log/插值; 直接形式 `op` 与对偶形式 `ip` 两种关联判据 |
-| **渲染引擎** | three.js 命名 API: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshBasic·Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls; 场景对象 = CGA blade, 变换 = Motor 共轭 (相机也是 Motor) |
+| **渲染引擎** | three.js 命名 API: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshBasic·Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls; 场景对象 = CGA blade, 变换 = Motor 共轭 (相机也是 Motor); 超采样抗锯齿 `Renderer(aa=N)` (每像素 N×N 条亚像素射线平均) |
 | **MLX GPU** | 每像素向量化解析求交 (5 种隐式几何), 全分辨率单帧一次 kernel 批量; 相机空间 X 右 / Y 下 / Z 前 |
 
 ## 快速开始
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 57 项断言 (代数/图元/versor/距离)
+uv run python -m cga                   # 包自检: 59 项断言 (代数/图元/versor/距离)
 ```
 
 ## 场景代码
@@ -102,13 +103,16 @@ geometry 构造参数里; 像素级计算全部在 MLX GPU 上批量进行, Pyth
 
 - **球/圆柱无多边形** —— 渲染质量不随相机距离恶化, 近看不会暴露三角面片; 代价是隐式几何没有顶点/拓扑, 网格编辑类建模工具 (细分、挤出) 用不上。
 - **无限几何天然成立** —— 无限平面 (地平线无限延伸)、无限圆柱是代数对象本身的属性, 无需裁剪; 想要有限片状面需自行按区域掩码裁剪 (见 `cga/render.py`)。
-- **变换与几何同构** —— motor 与 blade 是同一类对象, `Motor.compose` / `inverse` / `log` 直接作用于任何图元, 没有矩阵-四元数-轴角之间的换算层。
-- **代价在别处** —— 解析求交的 float32 blade 共轭限制场景尺度 (坐标宜 ±20 内); 无纹理坐标概念 (v1 无纹理); 无限平面/圆柱在相机位于退化位形时需内核特殊处理 (见下节)。
+- **变换与几何同构** —— motor 与 blade 是同一类对象, `Motor.compose` / `inverse` / `log`
+  直接作用于任何图元, 没有矩阵-四元数-轴角之间的换算层。
+- **代价在别处** —— 解析求交的 float32 blade 共轭限制场景尺度 (坐标宜 ±20 内);
+  无纹理坐标概念 (v1 无纹理); 无限平面/圆柱在相机位于退化位形时需内核特殊处理 (见下节)。
 
 ### 渲染示例: 三个优势的可视化
 
 `demo_advantage.py` 把上面三个实际后果各渲染成一张独立图像
-(`uv run python demo_advantage.py` → `artifacts/advantage_{a,b,c}.png`):
+(`uv run python demo_advantage.py` → `artifacts/advantage_{a,b,c}.png`, 均以
+`aa=2` 超采样抗锯齿渲染, 轮廓无锯齿):
 
 **无多边形** — 相机贴脸 (≈2.7× 半径) 的大球 + 无限圆柱: 轮廓是完美圆弧、
 高光无棱角; 同等距离的网格球/圆柱已能看到三角面片棱角。
@@ -210,7 +214,7 @@ Motor 是 SE(3) 的 versor 表示, 本包已有 `exp` / `log` / `velocity_bivect
 
 ## 项目布局
 
-```
+```text
 cga/
   multivector.py   32 分量多重向量, 代数运算 (gp/ip/op/dual/meet/norm/...)
   algebra.py       图元类与距离 (直接/对偶两种形式)
@@ -225,8 +229,8 @@ demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值
 
 ## 质量
 
-- `python -m cga`: 57 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
-  exp-log 往返 / 距离公式, 见 `cga/__main__.py`)。
+- `python -m cga`: 59 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+  exp-log 往返 / 距离公式 / 抗锯齿, 见 `cga/__main__.py`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 
 ## License

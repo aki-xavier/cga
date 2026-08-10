@@ -369,6 +369,17 @@ def main() -> None:
         img_cyl[23, 31][:3].tolist() == [135, 206, 235],
     )
 
+    # 抗锯齿: aa=2 (2×2 亚像素采样平均) 平滑球轮廓, 内部像素不变
+    sc_aa = Scene(background=Color(0x0000FF))
+    sc_aa.add(Mesh(SphereGeometry(1.0), MeshBasicMaterial(Color(0xFF0000))))
+    img_aa1 = render_frame(sc_aa, cam0, 63, 47)
+    img_aa2 = render_frame(sc_aa, cam0, 63, 47, aa=2)
+    check(
+        "aa interior identical",
+        img_aa2[23, 31].tolist() == img_aa1[23, 31].tolist(),
+    )
+    check("aa smooths silhouette", bool(mx.any(img_aa1 != img_aa2).item()))
+
     print(f"\nall {_ok} checks passed")
 
 

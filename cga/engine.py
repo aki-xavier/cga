@@ -16,6 +16,9 @@ CGA 核心 (与 three.js 的三角网格光栅化不同):
 相机空间约定 (与 cga.render 一致): X 右 / Y 下 / Z 前, 针孔
 col = fx·X/Z + cx, row = fy·Y/Z + cy, 相机在原点。
 
+抗锯齿: Renderer(aa=N) 每像素 N×N 条分层亚像素射线, 渲染后平均
+(超采样 SSAA; 射线一次批量, 代价 = aa² × 像素数)。
+
 范围声明 (v1 与 three.js 的差距, 如实标注):
   - 无阴影/纹理/后处理/tonemap; 颜色线性 I/O, 不做 sRGB 编码。
   - Object3D 无 scale: motor 是刚体变换, 尺寸全走 geometry 参数。
@@ -572,24 +575,42 @@ class Renderer:
     (MLX GPU, 全像素向量化) → Blinn-Phong 着色 → sRGB 近似输出。
     """
 
-    def __init__(self, width: int = 640, height: int = 480):
+    def __init__(self, width: int = 640, height: int = 480, aa: int = 1):
+        """超采样抗锯齿: aa=1 每像素 1 条射线 (像素中心, 原行为);
+        aa=N → 每像素 N×N 条分层亚像素射线取平均 (SSAA, 射线一次批量)。"""
+        if aa < 1:
+            raise ValueError(f"aa must be >= 1, got {aa}")
         self.width = int(width)
         self.height = int(height)
+        self.aa = int(aa)
         self._cam = None
-        self._rays = None  # (N, 3) 单位方向, N = H·W, 按相机内参惰性构建
+        self._rays = None  # (aa²·N, 3) 单位方向, N = H·W, 按相机内参惰性构建
 
     def _build_rays(self) -> mx.array:
-        """像素网格 → 相机空间单位射线方向 (相机在原点, 无透视偏移)。"""
+        """像素网格 → 相机空间单位射线方向 (相机在原点, 无透视偏移)。
+
+        aa>1: 每像素 k×k (k=aa) 分层亚像素采样, 射线数 = aa²·H·W,
+        渲染后按样本平均 (框滤波超采样 = SSAA)。aa=1 与原行为逐位一致。
+        """
         H, W = self.height, self.width
         fy = H / (2.0 * math.tan(math.radians(self._cam.fov) / 2.0))
         fx = fy * self._cam.aspect
         cx, cy = (W - 1) / 2.0, (H - 1) / 2.0
-        u = mx.broadcast_to((mx.arange(W, dtype=mx.float32)[None, :] - cx) / fx, (H, W))
-        v = mx.broadcast_to((mx.arange(H, dtype=mx.float32)[:, None] - cy) / fy, (H, W))
+        u0 = (mx.arange(W, dtype=mx.float32) - cx) / fx  # (W,) 像素中心
+        v0 = (mx.arange(H, dtype=mx.float32) - cy) / fy  # (H,)
         z = mx.ones((H, W), dtype=mx.float32)
-        dirs = mx.stack([u, v, z], axis=-1).reshape(-1, 3)  # (N, 3)
-        n = mx.sqrt(mx.sum(dirs * dirs, axis=-1, keepdims=True))
-        return dirs / n
+        dirs = []
+        k = self.aa
+        for j in range(k):
+            for i in range(k):
+                du = ((i + 0.5) / k - 0.5) / fx  # 亚像素偏移 (射线单位, 像素内分层)
+                dv = ((j + 0.5) / k - 0.5) / fy
+                u = mx.broadcast_to((u0 + du)[None, :], (H, W))
+                v = mx.broadcast_to((v0 + dv)[:, None], (H, W))
+                dirs.append(mx.stack([u, v, z], axis=-1))
+        rays = mx.concatenate(dirs, axis=0).reshape(-1, 3)  # (aa²·N, 3)
+        n = mx.sqrt(mx.sum(rays * rays, axis=-1, keepdims=True))
+        return rays / n
 
     def _shade(
         self,
@@ -692,15 +713,23 @@ class Renderer:
             acc = mx.where(hit[:, None], col, acc)
             miss = mx.where(hit, t, miss)
         rgb = mx.where(mx.isfinite(miss)[:, None], acc, bg)
+        S = self.aa * self.aa
+        if S > 1:
+            # 超采样平均: (aa²·N, 3) → 每像素 aa² 条样本取均值
+            rgb = mx.mean(mx.reshape(rgb, (S, N // S, 3)), axis=0)
         # v1 线性 I/O: 颜色当线性值直接输出, 不做 sRGB 编码 (hex 颜色
         # 直接是 sRGB 编码, 若做 sqrt 输出会双重提亮; 精确管线留后)
-        rgba = mx.concatenate([rgb, mx.ones((N, 1), dtype=mx.float32)], axis=-1)
+        rgba = mx.concatenate([rgb, mx.ones((N // S, 1), dtype=mx.float32)], axis=-1)
         rgba = mx.clip(rgba * 255.0, 0.0, 255.0).astype(mx.uint8)
         return mx.reshape(rgba, (self.height, self.width, 4))
 
 
 def render_frame(
-    scene: Scene, camera: PerspectiveCamera, width: int = 640, height: int = 480
+    scene: Scene,
+    camera: PerspectiveCamera,
+    width: int = 640,
+    height: int = 480,
+    aa: int = 1,
 ) -> mx.array:
     """单帧快捷入口 (demo 用)。"""
-    return Renderer(width, height).render(scene, camera)
+    return Renderer(width, height, aa=aa).render(scene, camera)
