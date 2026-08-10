@@ -1,28 +1,50 @@
+# ═══════════════════════════════════════════════════════════════════
+# CRDF — CGA 机器人描述格式 (YAML, 非 XML)
+# 宇树 Z1 六自由度机械臂 (6-DOF, 最大臂展 740mm)
+#
+# 来源: unitreerobotics/unitree_ros 官方 z1.urdf 导入 (mesh_policy=skip)
+#   视觉 mesh (.dae) 不建模 —— 碰撞圆柱提升为 [visual, collision] 兼任视觉。
+# 约定:
+#   - 单位 SI: 米 / 千克 / 弧度; 坐标 Z-up (URDF 约定, 渲染时根级转 Y-up)。
+#   - 几何局部轴: 圆柱/圆盘 = +Z (rpy 决定实际朝向, 与 URDF/engine 一致)。
+#   - 惯量全 6 分量张量 (URDF 原值, 含非零非对角项)。
+# 手工富化 (非 URDF 来源):
+#   - materials: 外观配色 (暗基座 + 白体, 与 Z1 实机一致)。
+#   - link04 圆柱 rpy 修正: 原 URDF 碰撞轴朝 Z 与前臂成 ~52°,
+#     实物/兄弟 link 均沿前臂 (X), 修正为 rpy [0, π/2, 0]。
+# ═══════════════════════════════════════════════════════════════════
 robot:
   name: z1_description
   base: world
+
+  # ── 连杆 (links): 从基座到末端的运动学链 ──────────────────────
   links:
   - name: world
+    # 世界系 (固定帧, 不渲染)
+
   - name: link00
+    # 基座: 肩部电机壳体 (暗色)
     geometry:
     - blade: cylinder
-      radius: 0.0325
-      length: 0.051
+      radius: 0.0325          # 半径 32.5mm
+      length: 0.051           # 长 51mm
       origin:
         xyz: [0.0, 0.0, 0.0255]
       role: [visual, collision]
       material: dark
     inertial:
-      mass: 0.47247481
+      mass: 0.47247481        # 质量 0.47kg
       com: [-0.00334984, -0.00013615, 0.02495843]
       inertia:
         ixx: 0.00037937
         iyy: 0.00041521
         izz: 0.00053066
-        ixy: -3.5e-07
+        ixy: -3.5e-07         # 非对角项 (URDF 原值)
         ixz: -1.037e-05
         iyz: -9.9e-07
+
   - name: link01
+    # 肩段: joint1(偏航)→joint2(俯仰) 之间, 无碰撞几何故无 visual
     inertial:
       mass: 0.67332551
       com: [2.47e-06, -0.00025198, 0.02317169]
@@ -33,14 +55,16 @@ robot:
         ixy: -6.0e-08
         ixz: -4.0e-07
         iyz: 5.0e-07
+
   - name: link02
+    # 上臂: 含肩关节与肘关节电机 (最长连杆, ~415mm 跨度)
     geometry:
     - blade: cylinder
       radius: 0.0325
       length: 0.102
       origin:
         xyz: [0.0, 0.0, 0.0]
-        rpy: [1.57079633, -0.0, 0.0]
+        rpy: [1.57079633, -0.0, 0.0]   # X·π/2: 轴转至竖直 (Y)
       role: [visual, collision]
       material: white
     - blade: cylinder
@@ -48,7 +72,7 @@ robot:
       length: 0.235
       origin:
         xyz: [-0.16249998, 0.0, 0.0]
-        rpy: [0.0, 1.57079631, 3.14159265]
+        rpy: [0.0, 1.57079631, 3.14159265]   # Y·π/2: 轴转至前臂方向 (X), 上臂主体
       role: [visual, collision]
       material: white
     - blade: cylinder
@@ -56,7 +80,7 @@ robot:
       length: 0.051
       origin:
         xyz: [-0.34999999, 0.0, 0.0]
-        rpy: [1.57079633, -0.0, 0.0]
+        rpy: [1.57079633, -0.0, 0.0]   # 肘关节壳体 (竖直)
       role: [visual, collision]
       material: white
     inertial:
@@ -69,14 +93,16 @@ robot:
         ixy: 0.00062358
         ixz: 5.13e-06
         iyz: -2.1e-06
+
   - name: link03
+    # 前臂: 肘→前臂俯仰 (joint3→joint4) 之间
     geometry:
     - blade: cylinder
       radius: 0.02
       length: 0.116
       origin:
         xyz: [0.12799999, 0.0, 0.055]
-        rpy: [3.14159265, 1.57079631, 3.14159265]
+        rpy: [3.14159265, 1.57079631, 3.14159265]   # 前臂主体 (沿 X)
       role: [visual, collision]
       material: white
     - blade: cylinder
@@ -84,7 +110,7 @@ robot:
       length: 0.059
       origin:
         xyz: [0.22050001, 0.0, 0.055]
-        rpy: [-0.32175055, 1.57079632, -1.57079633]
+        rpy: [0, 1.57079632, -1.57079633]  # 前臂末端电机壳
       role: [visual, collision]
       material: white
     inertial:
@@ -97,14 +123,15 @@ robot:
         ixy: -8.669e-05
         ixz: -0.00208102
         iyz: -1.332e-05
+
   - name: link04
+    # 前臂末端段: joint4→joint5 (腕偏航) 之间
     geometry:
     - blade: cylinder
       radius: 0.0325
       length: 0.067
       origin:
         xyz: [0.072, 0.0, 0.0]
-        rpy: [0.0, 1.5707963267948966, 0.0]
       role: [visual, collision]
       material: white
     inertial:
@@ -117,7 +144,9 @@ robot:
         ixy: 8.13e-05
         ixz: 4.091e-05
         iyz: -5.96e-06
+
   - name: link05
+    # 腕段: joint5(偏航)→joint6(滚转) 之间, 无碰撞几何故无 visual
     inertial:
       mass: 0.38938492
       com: [0.03121533, 0.0, 0.00646316]
@@ -128,14 +157,16 @@ robot:
         ixy: 4.0e-07
         ixz: 5.689e-05
         iyz: -1.3e-07
+
   - name: link06
+    # 腕部/末端: 工具安装段 (暗色)
     geometry:
     - blade: cylinder
       radius: 0.0325
       length: 0.051
       origin:
         xyz: [0.0255, 0.0, 0.0]
-        rpy: [0.0, 1.5707963, 0.0]
+        rpy: [0.0, 1.5707963, 0.0]    # 沿前臂 (X)
       role: [visual, collision]
       material: dark
     inertial:
@@ -148,6 +179,8 @@ robot:
         ixy: 1.22e-06
         ixz: 5.4e-07
         iyz: 8.0e-08
+
+  # ── 关节 (joints): 帧语义与 URDF 一致 (origin = 父帧→关节帧, 轴在关节帧) ──
   joints:
   - name: base_static_joint
     type: fixed
@@ -155,7 +188,9 @@ robot:
     child: link00
     origin:
       xyz: [0.0, 0.0, 0.0]
+
   - name: joint1
+    # 肩偏航 (Z 轴旋转, ±150°)
     type: revolute
     parent: link00
     child: link01
@@ -163,13 +198,15 @@ robot:
       xyz: [0.0, 0.0, 0.0585]
     axis: [0.0, 0.0, 1.0]
     limit:
-      lower: -2.6179938779914944
-      upper: 2.6179938779914944
+      lower: -2.6179938779914944    # -150°
+      upper: 2.6179938779914944     # +150°
       effort: 30.0
       velocity: 3.1415
     dynamics:
       damping: 1.0
+
   - name: joint2
+    # 肩俯仰 (Y 轴, 0-170°; 官方 180°, URDF 略保守)
     type: revolute
     parent: link01
     child: link02
@@ -178,12 +215,14 @@ robot:
     axis: [0.0, 1.0, 0.0]
     limit:
       lower: 0.0
-      upper: 2.9670597283903604
+      upper: 2.9670597283903604    # 170°
       effort: 60.0
       velocity: 3.1415
     dynamics:
       damping: 2.0
+
   - name: joint3
+    # 肘俯仰 (Y 轴, -165°-0, 只向一个方向弯)
     type: revolute
     parent: link02
     child: link03
@@ -191,13 +230,15 @@ robot:
       xyz: [-0.34999999, 0.0, 0.0]
     axis: [0.0, 1.0, 0.0]
     limit:
-      lower: -2.8797932657906435
+      lower: -2.8797932657906435   # -165°
       upper: 0.0
       effort: 30.0
       velocity: 3.1415
     dynamics:
       damping: 1.0
+
   - name: joint4
+    # 前臂俯仰 (Y 轴, ±87°; 官方 ±80°)
     type: revolute
     parent: link03
     child: link04
@@ -205,13 +246,15 @@ robot:
       xyz: [0.21799999, 0.0, 0.057]
     axis: [0.0, 1.0, 0.0]
     limit:
-      lower: -1.5184364492350666
-      upper: 1.5184364492350666
+      lower: -1.5184364492350666   # -87°
+      upper: 1.5184364492350666    # +87°
       effort: 30.0
       velocity: 3.1415
     dynamics:
       damping: 1.0
+
   - name: joint5
+    # 腕偏航 (Z 轴, ±77°; 官方 ±85°)
     type: revolute
     parent: link04
     child: link05
@@ -219,13 +262,15 @@ robot:
       xyz: [0.07, 0.0, 0.0]
     axis: [0.0, 0.0, 1.0]
     limit:
-      lower: -1.3439035240356338
-      upper: 1.3439035240356338
+      lower: -1.3439035240356338   # -77°
+      upper: 1.3439035240356338    # +77°
       effort: 30.0
       velocity: 3.1415
     dynamics:
       damping: 1.0
+
   - name: joint6
+    # 腕滚转 (X 轴, ±160°)
     type: revolute
     parent: link05
     child: link06
@@ -233,14 +278,16 @@ robot:
       xyz: [0.0492, 0.0, 0.0]
     axis: [1.0, 0.0, 0.0]
     limit:
-      lower: -2.792526803190927
-      upper: 2.792526803190927
+      lower: -2.792526803190927    # -160°
+      upper: 2.792526803190927     # +160°
       effort: 30.0
       velocity: 3.1415
     dynamics:
       damping: 1.0
+
+  # ── 材质 (外观富化, URDF 无材质) ────────────────────────────────
   materials:
   - name: dark
-    color: [0.13, 0.13, 0.15, 1.0]
+    color: [0.13, 0.13, 0.15, 1.0]     # 基座/腕部 深灰
   - name: white
-    color: [0.88, 0.88, 0.9, 1.0]
+    color: [0.88, 0.88, 0.9, 1.0]      # 臂体 白

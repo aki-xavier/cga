@@ -49,8 +49,8 @@ export function buildModel(doc) {
     child: j.child,
     origin: originToMotor(j.origin),
     axis: j.axis ?? null,
-    lower: j.lower ?? null,
-    upper: j.upper ?? null,
+    lower: j.limit?.lower ?? null,
+    upper: j.limit?.upper ?? null,
   }));
   return {
     name: robot.name,

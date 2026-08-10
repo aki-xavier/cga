@@ -5,7 +5,8 @@
 
 export function parseYAML(text) {
   const lines = text.split(/\r?\n/).map((raw) => {
-    const line = raw.replace(/#.*$/, "").replace(/\s+$/, "");
+    // 注释/尾空白剥离: indent 在去尾空白前测量 (注释行保留缩进)
+    const line = raw.replace(/#.*$/, "");
     return { indent: line.match(/^\s*/)[0].length, content: line.trim() };
   });
   let pos = 0;
@@ -64,9 +65,15 @@ export function parseYAML(text) {
   }
 
   // 序列: 项在固定缩进; 每项可吸收后续更深缩进的键
+  function skipBlanks() {
+    while (pos < lines.length && peek().content === "") pos++;
+  }
+
   function parseSequence(indent) {
     const arr = [];
     while (pos < lines.length) {
+      skipBlanks();
+      if (pos >= lines.length) break;
       const { indent: i2, content: c2 } = peek();
       if (i2 !== indent || !isSeqItem(c2)) break;
       const rest = c2.slice(1).trim();
@@ -102,11 +109,11 @@ export function parseYAML(text) {
     const node = {};
     while (pos < lines.length) {
       const { indent, content } = peek();
-      if (indent < minIndent) break;
       if (content === "") {
-        pos++;
+        pos++; // 空行/注释行: 缩进无意义, 先跳过
         continue;
       }
+      if (indent < minIndent) break;
       if (isSeqItem(content) && indent === minIndent) {
         return parseSequence(indent); // 整个块是序列 (如顶层)
       }
@@ -116,6 +123,7 @@ export function parseYAML(text) {
       const rest = content.slice(ci + 1).trim();
       pos++;
       if (rest === "") {
+        skipBlanks();
         if (peek() && isSeqItem(peek().content) && peek().indent >= indent) {
           node[key] = parseSequence(peek().indent); // 同缩进序列
         } else if (peek() && peek().indent > indent) {
