@@ -107,13 +107,26 @@ class Object3D:
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
         rotation_angle: float = 0.0,
+        motor: Motor | None = None,
     ):
-        self.position = position
-        self.rotation_axis = rotation_axis
-        self.rotation_angle = rotation_angle
+        # Full-pose mode: an arbitrary motor (e.g. a URDF link's world pose,
+        # a compound rotation not expressible as a single axis).  Takes
+        # precedence over position/rotation_axis/rotation_angle.
+        self._motor = motor
+        if motor is not None:
+            mtx = motor.to_matrix()
+            self.position = (float(mtx[0][3]), float(mtx[1][3]), float(mtx[2][3]))
+            self.rotation_axis = (0.0, 0.0, 1.0)
+            self.rotation_angle = 0.0
+        else:
+            self.position = position
+            self.rotation_axis = rotation_axis
+            self.rotation_angle = rotation_angle
 
     def motor(self) -> Motor:
-        """局部 pose motor (T·R)。"""
+        """局部 pose motor: full motor if given, else T·R."""
+        if self._motor is not None:
+            return self._motor
         return Motor(self.rotation_axis, self.rotation_angle, self.position)
 
 
@@ -143,8 +156,9 @@ class Mesh(Object3D):
         position: tuple[float, float, float] = (0.0, 0.0, 0.0),
         rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
         rotation_angle: float = 0.0,
+        motor: Motor | None = None,
     ):
-        super().__init__(position, rotation_axis, rotation_angle)
+        super().__init__(position, rotation_axis, rotation_angle, motor)
         self.geometry = geometry
         self.material = material if material is not None else MeshStandardMaterial()
 

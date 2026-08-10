@@ -29,6 +29,14 @@ class Motor(Multivector):
 
     __slots__ = ()
 
+    def gp(self, other: Multivector) -> Motor:
+        """Type-preserving geometric product: motor·X is a Motor."""
+        return Motor._wrap(Multivector.gp(self, other))
+
+    def reverse(self) -> Motor:
+        """Type-preserving reverse: a motor's reverse is a Motor."""
+        return Motor._wrap(Multivector.reverse(self))
+
     def __init__(
         self,
         rotation_axis: tuple[float, float, float] | None = None,
@@ -177,7 +185,7 @@ class Motor(Multivector):
         wrapped.values = out.values
         return wrapped
 
-    def log(self) -> Multivector:
+    def log(self) -> Motor:
         """对数: 二重向量 Bv 使 exp(−Bv) = self。
 
         走 SE(3) 矩阵对数 (含 θ≈π 的对称部分恢复分支), 对一般螺旋
@@ -306,7 +314,7 @@ class Motor(Multivector):
     @staticmethod
     def velocity_bivector(
         angular: tuple[float, float, float], linear: tuple[float, float, float]
-    ) -> Multivector:
+    ) -> Motor:
         """角速度 + 线速度 → 速度二重向量 (twist)。
 
         V = ω + v ∧ e∞, ω = ωx·e23 + ωy·e31 + ωz·e12 为角速度二重
@@ -323,7 +331,10 @@ class Motor(Multivector):
 
         rot = Multivector(vals)
         tv = Multivector.vector(vx_val, vy_val, vz_val)
-        return rot + tv.op(EINF)
+        # Type-preserving: a bivector wrapped as Motor so chained
+        # .exp()/.gp() on twist quantities keeps working (Motor is a
+        # Multivector, so this is downward compatible).
+        return Motor._wrap(rot + tv.op(EINF))
 
     @staticmethod
     def extract_velocity(

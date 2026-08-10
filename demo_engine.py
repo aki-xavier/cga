@@ -74,7 +74,7 @@ def build_scene() -> Scene:
 
 def main() -> None:
     frames = int(sys.argv[1]) if len(sys.argv) > 1 else 90
-    out_dir = Path(sys.argv[2] if len(sys.argv) > 2 else "demo_engine_out")
+    out_dir = Path(sys.argv[2] if len(sys.argv) > 2 else "artifacts")
     out_dir.mkdir(exist_ok=True)
 
     scene = build_scene()
