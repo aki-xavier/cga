@@ -290,12 +290,34 @@ cga/
   compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
   robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
   urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
+  webgl.py          CGA 模型 → WebGL JSON 导出 (乘法表 + versor 模型)
   __main__.py      包自检: python -m cga (75 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
 demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
 models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF)
 ```
+
+## WebGL 渲染器 (浏览器端 CGA)
+
+`webgl/` 把同一个 CGA 代数跑进浏览器 —— 隐式 blade 解析求交 + FK 走 versor 链:
+
+- **同一张代数表**: 32×32 基 blade 乘法表 + reverse 符号由 `cga.webgl` 从
+  Python 端导出 (`cga.js` 表驱动 gp) —— 浏览器里与 Python 是同一个代数。
+- **渲染**: WebGL2 片段着色器逐像素解析求交 (球/平面/有限圆柱/盒/圆盘,
+  与 `cga.engine` 同族数学) + Blinn-Phong; 每帧 FK (versor 乘积) →
+  link motor · 几何 origin → (R,t) → 世界→相机刚体变换 → uniform 数组。
+- **交互**: 关节滑块 (FK 实时), 轨道相机 (拖拽旋转/滚轮缩放, 根级
+  Z-up→Y-up 与 demo_robot 一致)。
+- **验证**: `webgl/verify.js` 用 headless Chromium 检查 console 错误 +
+  像素读回 + 滑块联动 (需本机有 playwright/chromium)。
+
+```bash
+uv run python -m cga.webgl models/z1_arm.crdf.yaml -o webgl/z1.json
+cd webgl && python3 -m http.server 8000   # 打开 http://localhost:8000
+```
+
+![WebGL 渲染](docs/webgl_z1.png)
 
 ## 质量
 
