@@ -292,6 +292,15 @@ class Motor(Multivector):
         delta = Motor._wrap(self.reverse().gp(other))
         return Motor._wrap(self.gp(Motor.exp(delta.log(), t)))
 
+    def inverse(self) -> Motor:
+        """逆 motor。motor 是单位 versor, M⁻¹ = M̃ (reverse), 对任意
+        M·M⁻¹ = identity 成立 (sandwich 作用)。"""
+        return Motor._wrap(self.reverse())
+
+    def compose(self, other: Motor) -> Motor:
+        """复合: self ∘ other = self·other (先 other 后 self 的变换)。"""
+        return Motor._wrap(self.gp(other))
+
     # ── 速度二重向量 (twist) ──────────────────────────────────────
 
     @staticmethod

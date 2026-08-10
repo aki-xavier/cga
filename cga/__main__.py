@@ -45,6 +45,11 @@ def vmax(mv: Multivector) -> float:
     return float(mx.abs(mv.values).max().item())
 
 
+def diff_max(a: Multivector, b: Multivector) -> float:
+    """两 multivector 逐分量差的最大绝对值。"""
+    return float(mx.abs(a.values - b.values).max().item())
+
+
 def main() -> None:
     """全部自检: 代数 / 图元 / versor / exp-log / 距离。"""
     # null 性 + 距离
@@ -254,6 +259,115 @@ def main() -> None:
     check("cylinder inside", close(cy.dist(Point(0.2, 0.0, 2.0)), -0.8))
     check("cylinder outside", close(cy.dist(Point(3.0, -2.0, 2.0)), 2.0))
     check("cylinder surface dist symmetric", close(cy.dist(Point(-1.0, 5.0, 2.0)), 0.0))
+
+    # ── 渲染引擎 (cga.engine): from_matrix roundtrip / inverse / 方向光 ──
+    from cga.engine import (
+        AmbientLight,
+        Color,
+        CylinderGeometry,
+        DirectionalLight,
+        Mesh,
+        MeshBasicMaterial,
+        MeshStandardMaterial,
+        PerspectiveCamera,
+        PlaneGeometry,
+        Scene,
+        SphereGeometry,
+        render_frame,
+    )
+
+    # from_matrix ∘ to_matrix roundtrip (符号约定钉死)
+    for axis, ang, t in [
+        ((0, 0, 1), 0.7, (1, 2, 3)),
+        ((1, 1, 1), 2.1, (-0.5, 0.25, 0.1)),
+        ((0.3, -0.8, 0.2), 3.14159, (0, 0, 0)),
+    ]:
+        t4 = Motor(axis, ang, t).to_matrix()
+        r3 = [row[:3] for row in t4[:3]]
+        m_rt = Motor.from_matrix(r3, (t4[0][3], t4[1][3], t4[2][3]))
+        r4 = m_rt.to_matrix()
+        ok_rt = all(
+            close(r4[i][j], r3[i][j], tol=2e-3) for i in range(3) for j in range(3)
+        ) and all(close(r4[i][3], t4[i][3], tol=2e-3) for i in range(3))
+        check(f"from_matrix roundtrip ({axis}, {ang})", ok_rt)
+
+    # Motor.inverse: M·M⁻¹ = identity (点不动), 二次 inverse 复原
+    M2 = Motor((0.2, 0.5, -0.3), 1.3, (0.4, -0.1, 0.2))
+    p0 = Point(0.7, -0.2, 0.5)
+    check(
+        "motor inverse point fixed",
+        close(diff_max(M2.inverse().apply(M2.apply(p0)), p0), 0),
+    )
+    check(
+        "motor inverse double",
+        close(diff_max(M2.inverse().inverse().apply(p0), M2.apply(p0)), 0),
+    )
+
+    # 方向光: 方向向量共轭后 e1..e3 部分只由 rotor 决定 —— translator
+    # 只向 e∞ 槽写入 (t·u) 杂散项, 方向语义不受影响 (无穷远点语义)。
+    M3 = Motor((0, 0, 1), 0.6, (5, -3, 2))
+    T3 = Motor.translator((2, 1, -4))
+    d0 = Multivector.vector(0.3, -0.8, 0.5)
+    a_vec = M3.apply(d0).values[1:4]
+    b_vec = T3.compose(M3).apply(d0).values[1:4]
+    check(
+        "direction vector part rotor-only",
+        close(float(mx.abs(a_vec - b_vec).max().item()), 0, tol=1e-3),
+    )
+
+    # 引擎: 空场景背景 = 精确背景色; MeshBasicMaterial 无光照直出
+    H3, W3 = 48, 64
+    cam0 = PerspectiveCamera(fov=50, aspect=4 / 3, position=(0, 0, 5), target=(0, 0, 0))
+    cam0.look_at((0, 0, 0))
+    bg = render_frame(Scene(background=Color(0x87CEEB)), cam0, W3, H3)
+    check("engine background", bg[4, 4].tolist() == [135, 206, 235, 255])
+
+    sc_basic = Scene()
+    sc_basic.add(
+        Mesh(SphereGeometry(1.0), MeshBasicMaterial(Color(0xFF0000))),
+        Mesh(PlaneGeometry((0, 1, 0), -1.5), MeshStandardMaterial(Color(0xAAAAAA))),
+    )
+    img_basic = render_frame(sc_basic, cam0, W3, H3)
+    check(
+        "engine basic material",
+        img_basic[H3 // 2, W3 // 2][:3].tolist() == [255, 0, 0],
+    )
+
+    # 标准材质 + 平行光: 相机沿视轴平移, 同表面点着色不变 (方向光无距离)
+    # 用奇尺寸 (47,63) 让中心像素恰在轴上, 两次命中同一前表面点
+    def _lit_pixel(cam_z: float) -> list[int]:
+        sc = Scene()
+        sc.add(
+            Mesh(
+                SphereGeometry(1.0),
+                MeshStandardMaterial(Color(0x00FF00), roughness=0.5),
+            ),
+            DirectionalLight(intensity=0.8, direction=(0, 0, 1)),
+            AmbientLight(intensity=0.2),
+        )
+        cam = PerspectiveCamera(
+            fov=50, aspect=4 / 3, position=(0, 0, cam_z), target=(0, 0, 0)
+        )
+        cam.look_at((0, 0, 0))
+        return render_frame(sc, cam, 63, 47)[23, 31][:3].tolist()
+
+    p5, p4 = _lit_pixel(5.0), _lit_pixel(4.0)
+    check("directional invariant under camera move", p5 == p4)
+    # 光沿视轴 → 前表面 N·L=1 且 H=L+V 平行 → 白色高光 + 绿色漫反射
+    check("engine standard lit green", p5[1] > 240 and p5[1] > p5[0] and p5[1] > p5[2])
+
+    # 圆柱: 视线平行于轴 → 中心像素 miss (背景)
+    sc_cyl = Scene()
+    sc_cyl.add(
+        Mesh(CylinderGeometry(0.7), MeshStandardMaterial(Color(0xD4AC0D))),
+        DirectionalLight(intensity=0.8, direction=(0.5, 1, 0.3)),
+        AmbientLight(intensity=0.2),
+    )
+    img_cyl = render_frame(sc_cyl, cam0, 63, 47)
+    check(
+        "engine cylinder axial miss",
+        img_cyl[23, 31][:3].tolist() == [135, 206, 235],
+    )
 
     print(f"\nall {_ok} checks passed")
 

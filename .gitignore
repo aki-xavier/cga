@@ -217,3 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .DS_Store
+# demo 渲染输出
+/demo_engine_out/
