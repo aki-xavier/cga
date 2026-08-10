@@ -33,7 +33,7 @@ from cga.engine import (
     frame_to_bytes,
 )
 from cga.motors import Motor
-from cga.robot import Geometry, Robot, fk_list, load_robot
+from cga.robot import Geometry, Robot, load_robot
 
 WORLD_UP = Motor.rotor((1.0, 0.0, 0.0), -1.5707963267948966)  # Z-up → Y-up
 
@@ -59,7 +59,7 @@ def _to_geometry(g: Geometry):
 
 def build_scene(robot: Robot, q: list[float]) -> Scene:
     """FK(q) → 每个 link 的 world motor → 视觉几何 mesh 进场景。"""
-    world = fk_list(robot, q)
+    world = robot.fk_list(q)
     colors = {m.name: m.color for m in robot.materials}
     scene = Scene()
     scene.add(

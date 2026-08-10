@@ -24,9 +24,8 @@
 Lambert 几何明暗; rgb 只作可视化, 不作光学声明。
 """
 
-import math
 from collections.abc import Sequence
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import mlx.core as mx
 
@@ -58,32 +57,27 @@ class RenderResult(NamedTuple):
 
 
 def _plane_params(b: Multivector) -> tuple[mx.array, float]:
-    """Plane blade → (单位法向 (3,), 距离 d)。法向读取 e1..e3 系数
-    (Plane 构造已归一化; versor 共轭保持单位)。"""
-    n = b.values[1:4]
-    return n, float(b.values[5])
+    """Plane blade → (单位法向 (3,), 距离 d)。走公开访问器
+    (euclidean_vector / einf_coeff); Plane 构造已归一化, versor
+    共轭保持单位。"""
+    n = mx.array(b.euclidean_vector(), dtype=mx.float32)
+    return n, float(b.einf_coeff())
 
 
 def _sphere_params(b: Multivector) -> tuple[mx.array, float]:
-    """Sphere blade → (球心 (3,), 半径)。对偶球 s = w·(up(c) − ½ρ²e∞):
-    c = v/w, ρ² = |c|² − 2f/w (与 algebra.Sphere.dist 同公式)。"""
-    w = float(b.values[4])
-    if abs(w) < 1e-12:
-        raise ValueError("sphere blade has no e0 component")
-    v = b.values[1:4]
-    c = v / w
-    f = float(b.values[5])
-    r2 = float(mx.sum(v * v)) / (w * w) - 2.0 * f / w
-    return c, math.sqrt(max(0.0, r2))
+    """Sphere blade → (球心 (3,), 半径)。对偶球提取统一走
+    Sphere.from_dual (引擎共用同一公式)。"""
+    c, r = Sphere.from_dual(b)
+    return mx.array(c, dtype=mx.float32), r
 
 
-def _cylinder_params(b: Multivector) -> tuple[mx.array, mx.array, float]:
+def _cylinder_params(b: Cylinder) -> tuple[mx.array, mx.array, float]:
     """Cylinder (轴 Line blade + slots) → (轴点 (3,), 轴向 (3,), 半径)。
     注意: Cylinder 的几何在对象的 slots 里, motor 共轭会丢 (apply
     返回纯 Multivector) —— 圆柱暂不支持 motor 视角, 注释在 render_scene。"""
-    q = b._axis_point  # type: ignore[attr-defined]
-    n = b._axis_dir  # type: ignore[attr-defined]
-    return mx.array(q), mx.array(n), float(b.radius)  # type: ignore[attr-defined]
+    q = b.axis_point  # 公开访问器 (属性, 不碰私有槽)
+    n = b.axis_dir
+    return mx.array(q, dtype=mx.float32), mx.array(n, dtype=mx.float32), float(b.radius)
 
 
 def render_scene(
@@ -135,7 +129,7 @@ def render_scene(
         elif p.kind == "cylinder":
             # 透视射线与无限柱 (轴 n̂ 过 q, 半径 ρ): |P(t·d−q)| = ρ,
             # P = I−n̂n̂ᵀ → a·t² + 2b·t + c = 0, 近根 (实心柱前表面)
-            q_c, n_c, r_c = _cylinder_params(b)
+            q_c, n_c, r_c = _cylinder_params(cast(Cylinder, b))  # kind 已保证
             dn = mx.sum(dirs * n_c, axis=-1)
             qn = mx.sum(q_c * n_c)
             aq = mx.sum(dirs * dirs, axis=-1) - dn * dn

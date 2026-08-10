@@ -41,15 +41,11 @@ from cga.multivector import Multivector
 
 
 def _dir3(a: Multivector) -> tuple[float, float, float]:
-    """grade-1 向量 → 欧氏三元组 (只读 e1..e3 槽)。
+    """grade-1 向量 → 欧氏三元组 (走公开访问器, 忽略 e∞ 槽)。
 
     方向向量共轭后 e∞ 槽会混入 (t·u) 杂散项 (translator 写入), 方向
-    语义只看向量部分 —— 这里必须忽略 e∞ 槽。"""
-    return (
-        float(a.values[1]),
-        float(a.values[2]),
-        float(a.values[3]),
-    )
+    语义只看向量部分 —— euclidean_vector() 只读 e1..e3 槽。"""
+    return a.euclidean_vector()
 
 
 def _unit(a: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -197,13 +193,8 @@ class SphereGeometry(_Geometry):
         self.blade = Sphere((0.0, 0.0, 0.0), radius)  # 局部系原点
 
     def to_camera(self, motor: Motor) -> tuple:
-        s = motor.apply(self.blade)  # 对偶球 blade 共轭
-        w = float(s.values[4])
-        v1, v2, v3 = (float(s.values[1]), float(s.values[2]), float(s.values[3]))
-        f = float(s.values[5])
-        cx, cy, cz = v1 / w, v2 / w, v3 / w
-        r2 = (v1 * v1 + v2 * v2 + v3 * v3) / (w * w) - 2.0 * f / w
-        return ((cx, cy, cz), math.sqrt(max(0.0, r2)))
+        s = motor.apply(self.blade)  # 对偶球 blade 共轭 (类型降级为 Multivector)
+        return Sphere.from_dual(s)
 
     def intersect(
         self, params: tuple, o: mx.array, d: mx.array
@@ -242,7 +233,7 @@ class PlaneGeometry(_Geometry):
     def to_camera(self, motor: Motor) -> tuple:
         pi = motor.apply(self.blade)
         n = _unit(_dir3(pi))
-        d = float(pi.values[5])
+        d = float(pi.einf_coeff())
         return (n, d)
 
     def intersect(
@@ -404,7 +395,17 @@ class CircleGeometry(_Geometry):
 
 
 class Material:
-    pass
+    """材质基类: 着色走多态 shade (子类实现), 渲染循环零 isinstance。"""
+
+    def shade(
+        self,
+        p: mx.array,
+        n: mx.array,
+        d: mx.array,
+        lights: Sequence,
+        ambient: AmbientLight | None = None,
+    ) -> mx.array:
+        raise NotImplementedError
 
 
 class MeshBasicMaterial(Material):
@@ -412,6 +413,19 @@ class MeshBasicMaterial(Material):
 
     def __init__(self, color: Color | int = 0xFFFFFF):
         self.color = Color(color) if isinstance(color, int) else color
+
+    def shade(
+        self,
+        p: mx.array,
+        n: mx.array,
+        d: mx.array,
+        lights: Sequence,
+        ambient: AmbientLight | None = None,
+    ) -> mx.array:
+        """无光照平涂: 每像素 = 材质颜色。"""
+        return mx.broadcast_to(
+            mx.array(self.color.rgb(), dtype=mx.float32), (p.shape[0], 3)
+        )
 
 
 class MeshStandardMaterial(Material):
@@ -434,17 +448,79 @@ class MeshStandardMaterial(Material):
         self.metalness = float(min(1.0, max(0.0, metalness)))
         self.emissive = Color(emissive) if isinstance(emissive, int) else emissive
 
+    def shade(
+        self,
+        p: mx.array,
+        n: mx.array,
+        d: mx.array,
+        lights: Sequence,
+        ambient: AmbientLight | None = None,
+    ) -> mx.array:
+        """Blinn-Phong 着色 (p = 命中点, n = 相机空间法向, d = 射线方向)。
+
+        L 与点光源位置均已变换进相机空间 (motor 共轭); 每灯光的方向/
+        衰减由 light.direction_at 多态给出。
+        """
+        v = -d
+        k = 1.0 - self.roughness
+        expo = 4.0 + 196.0 * k * k  # roughness 0→200, 1→4
+        diff_c = mx.array(self.color.rgb(), dtype=mx.float32) * (1.0 - self.metalness)
+        spec_c = mx.array(
+            tuple(
+                m * (1.0 - self.metalness) + c * self.metalness
+                for m, c in zip((1.0, 1.0, 1.0), self.color.rgb())
+            ),
+            dtype=mx.float32,
+        )
+        out = mx.broadcast_to(mx.array(self.emissive.rgb(), dtype=mx.float32), p.shape)
+        if ambient is not None:
+            amb = mx.array(ambient.color.rgb(), dtype=mx.float32) * ambient.intensity
+            out = out + mx.broadcast_to(amb, p.shape) * diff_c
+        # N·V 作高光可见门 (掠射角高光消失, 廉价近似)
+        ndv = mx.maximum(mx.sum(n * v, axis=-1, keepdims=True), 0.0)
+        for light in lights:
+            lc = mx.array(light.color.rgb(), dtype=mx.float32)
+            ld, atten = light.direction_at(p)
+            nl = mx.maximum(mx.sum(n * ld, axis=-1, keepdims=True), 0.0)
+            h = ld + v
+            hn = mx.sqrt(mx.sum(h * h, axis=-1, keepdims=True))
+            h = h / mx.maximum(hn, 1e-12)  # H=0 (光与视线反向) 时防 NaN
+            spec = mx.pow(mx.maximum(mx.sum(n * h, axis=-1, keepdims=True), 0.0), expo)
+            contrib = lc * atten * (diff_c * nl + spec_c * spec * ndv)
+            out = out + contrib
+        return out
+
 
 # ── 灯光 ───────────────────────────────────────────────────────────
 
 
-class AmbientLight:
+class _Light:
+    """灯光基类: to_camera 共轭进相机空间; direction_at 提供着色方向/衰减。"""
+
+    def to_camera(self, motor: Motor) -> _Light:
+        raise NotImplementedError
+
+    def direction_at(self, p: mx.array) -> tuple[mx.array, float]:
+        """(光方向 (N,3) 单位向量, 衰减系数) —— 着色循环多态分发。"""
+        raise NotImplementedError
+
+
+class AmbientLight(_Light):
+    """环境光: 不吃变换 (to_camera 原样返回); 不进 per-light 循环
+    (render 注册式路由, direction_at 不会被调用)。"""
+
     def __init__(self, color: Color | int = 0xFFFFFF, intensity: float = 0.3):
         self.color = Color(color) if isinstance(color, int) else color
         self.intensity = float(intensity)
 
+    def to_camera(self, motor: Motor) -> AmbientLight:
+        return self
 
-class DirectionalLight:
+    def direction_at(self, p: mx.array) -> tuple[mx.array, float]:
+        raise NotImplementedError("ambient 光不进 per-light 循环")
+
+
+class DirectionalLight(_Light):
     """平行光。direction 是"光来的方向" (指向光源), 世界系单位向量。
 
     direction 以 e∞ 系数为 0 的 grade-1 向量存, motor 共轭只吃旋转、
@@ -461,8 +537,20 @@ class DirectionalLight:
         self.intensity = float(intensity)
         self.direction = _unit(direction)
 
+    def to_camera(self, motor: Motor) -> DirectionalLight:
+        """方向只吃旋转 (translator 不改方向, 自检覆盖)。"""
+        d_world = Multivector.vector(*self.direction)
+        return DirectionalLight(
+            self.color, self.intensity, _dir3(motor.apply(d_world))
+        )
 
-class PointLight:
+    def direction_at(self, p: mx.array) -> tuple[mx.array, float]:
+        """方向恒定, 衰减 = 强度 (无距离概念)。"""
+        ld = mx.broadcast_to(mx.array(self.direction, dtype=mx.float32), p.shape)
+        return ld, self.intensity
+
+
+class PointLight(_Light):
     """点光源: 位置 + 强度, 距离衰减 1/(1 + d²/8) (软衰减, v1 声明)。"""
 
     def __init__(
@@ -474,6 +562,19 @@ class PointLight:
         self.color = Color(color) if isinstance(color, int) else color
         self.intensity = float(intensity)
         self.position = position
+
+    def to_camera(self, motor: Motor) -> PointLight:
+        """位置吃平移+旋转 (点共轭)。"""
+        pos_cam = motor.apply(Point(*self.position)).coords()
+        return PointLight(self.color, self.intensity, pos_cam)
+
+    def direction_at(self, p: mx.array) -> tuple[mx.array, float]:
+        """方向 = 位置→命中点, 距离平方衰减。"""
+        lv = (
+            mx.broadcast_to(mx.array(self.position, dtype=mx.float32), p.shape) - p
+        )
+        dist2 = mx.sum(lv * lv, axis=-1, keepdims=True)
+        return lv / mx.sqrt(dist2), self.intensity / (1.0 + dist2 / 8.0)
 
 
 # ── 相机 ───────────────────────────────────────────────────────────
@@ -612,62 +713,6 @@ class Renderer:
         n = mx.sqrt(mx.sum(rays * rays, axis=-1, keepdims=True))
         return rays / n
 
-    def _shade(
-        self,
-        p: mx.array,
-        n: mx.array,
-        mat: MeshStandardMaterial,
-        lights: Sequence,
-        d: mx.array,
-        ambient: AmbientLight | None = None,
-    ) -> mx.array:
-        """Blinn-Phong 着色 (p = 命中点, n = 相机空间法向, d = 射线方向)。
-
-        L 与点光源位置均已变换进相机空间 (motor 共轭)。
-        """
-        v = -d
-        k = 1.0 - mat.roughness
-        expo = 4.0 + 196.0 * k * k  # roughness 0→200, 1→4
-        diff_c = mx.array(mat.color.rgb(), dtype=mx.float32) * (1.0 - mat.metalness)
-        spec_c = mx.array(
-            tuple(
-                m * (1.0 - mat.metalness) + c * mat.metalness
-                for m, c in zip((1.0, 1.0, 1.0), mat.color.rgb())
-            ),
-            dtype=mx.float32,
-        )
-        out = mx.broadcast_to(mx.array(mat.emissive.rgb(), dtype=mx.float32), p.shape)
-        if ambient is not None:
-            amb = mx.array(ambient.color.rgb(), dtype=mx.float32) * ambient.intensity
-            out = out + mx.broadcast_to(amb, p.shape) * diff_c
-        # N·V 作高光可见门 (掠射角高光消失, 廉价近似)
-        ndv = mx.maximum(mx.sum(n * v, axis=-1, keepdims=True), 0.0)
-        for light in lights:
-            lc = mx.array(light.color.rgb(), dtype=mx.float32)
-            if isinstance(light, DirectionalLight):
-                ld = mx.broadcast_to(
-                    mx.array(light.direction, dtype=mx.float32), p.shape
-                )
-                atten = light.intensity
-            elif isinstance(light, PointLight):
-                lv = (
-                    mx.broadcast_to(mx.array(light.position, dtype=mx.float32), p.shape)
-                    - p
-                )
-                dist2 = mx.sum(lv * lv, axis=-1, keepdims=True)
-                ld = lv / mx.sqrt(dist2)
-                atten = light.intensity / (1.0 + dist2 / 8.0)
-            else:
-                continue
-            nl = mx.maximum(mx.sum(n * ld, axis=-1, keepdims=True), 0.0)
-            h = ld + v
-            hn = mx.sqrt(mx.sum(h * h, axis=-1, keepdims=True))
-            h = h / mx.maximum(hn, 1e-12)  # H=0 (光与视线反向) 时防 NaN
-            spec = mx.pow(mx.maximum(mx.sum(n * h, axis=-1, keepdims=True), 0.0), expo)
-            contrib = lc * atten * (diff_c * nl + spec_c * spec * ndv)
-            out = out + contrib
-        return out
-
     def render(self, scene: Scene, camera: PerspectiveCamera) -> mx.array:
         """渲染一帧 → (H, W, 4) uint8 RGBA。"""
         self._cam = camera
@@ -676,24 +721,14 @@ class Renderer:
         o = mx.zeros_like(self._rays)  # 相机在原点 (N,3)
         N = o.shape[0]
         bg = mx.broadcast_to(mx.array(scene.background.rgb(), dtype=mx.float32), (N, 3))
-        # 灯光进相机空间 (点光位置吃平移, 平行光方向不吃平移); 拷贝不原地改
+        # 灯光共轭进相机空间 (多态 to_camera; 环境光独立槽 —— 注册式路由)
         lit = []
         ambient = None
         for light in scene.lights:
-            if isinstance(light, DirectionalLight):
-                d_world = Multivector.vector(*light.direction)
-                lit.append(
-                    DirectionalLight(
-                        light.color, light.intensity, _dir3(camera.motor.apply(d_world))
-                    )
-                )
-            elif isinstance(light, PointLight):
-                pos_cam = camera.motor.apply(Point(*light.position)).coords()
-                lit.append(PointLight(light.color, light.intensity, pos_cam))
-            elif isinstance(light, AmbientLight):
+            if isinstance(light, AmbientLight):
                 ambient = light
             else:
-                lit.append(light)
+                lit.append(light.to_camera(camera.motor))
         acc = mx.broadcast_to(mx.zeros(3, dtype=mx.float32), (N, 3))
         miss = mx.full((N,), float("inf"), dtype=mx.float32)
         for obj in scene.objects:
@@ -701,15 +736,8 @@ class Renderer:
             params = obj.geometry.to_camera(wm)
             t, n, mask = obj.geometry.intersect(params, o, self._rays)
             hit = mx.logical_and(mask, t < miss)
-            if isinstance(obj.material, MeshStandardMaterial):
-                p = o + t[:, None] * self._rays
-                col = self._shade(p, n, obj.material, lit, self._rays, ambient)
-            elif isinstance(obj.material, MeshBasicMaterial):
-                col = mx.broadcast_to(
-                    mx.array(obj.material.color.rgb(), dtype=mx.float32), (N, 3)
-                )
-            else:
-                raise TypeError(f"unknown material {type(obj.material).__name__}")
+            p = o + t[:, None] * self._rays
+            col = obj.material.shade(p, n, self._rays, lit, ambient)
             acc = mx.where(hit[:, None], col, acc)
             miss = mx.where(hit, t, miss)
         rgb = mx.where(mx.isfinite(miss)[:, None], acc, bg)

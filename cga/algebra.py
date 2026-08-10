@@ -135,24 +135,27 @@ class Sphere(Multivector):
         s = Point(cx, cy, cz) - Multivector.vector(0, 0, 0, 0, half_r2)
         super().__init__(s.values)
 
-    def dist(self, p: Point) -> float:
-        """点 p 到球面的带号距离 (正=外, 负=内), float64。
+    @classmethod
+    def from_dual(cls, s: Multivector) -> tuple[tuple[float, float, float], float]:
+        """对偶球 blade → (球心, 半径)。
 
-        对偶球 s = w·(up(c) − ½ρ²e∞): 球心 c = v/w, ρ² = |c|² − 2f/w
-        (v = 欧氏部分, w = e0 系数, f = e∞ 系数)。
+        s = w·(up(c) − ½ρ²e∞): c = v/w, ρ² = |c|² − 2f/w (v = 欧氏部分,
+        w = e0 系数, f = e∞ 系数)。motor 共轭后 blade 类型降级为普通
+        Multivector, 实例方法不可用 —— 做成类方法 (同 Motor.from_matrix
+        惯例), 引擎/render 共用同一公式。
         """
-        w = float(self.values[4])  # e0 系数
+        w = float(s.e0_coeff())
         if abs(w) < 1e-12:
             raise ValueError("sphere multivector has no e0 component")
-        v1, v2, v3 = (
-            float(self.values[1]),
-            float(self.values[2]),
-            float(self.values[3]),
-        )
-        f = float(self.values[5])  # e∞ coefficient
+        v1, v2, v3 = s.euclidean_vector()
+        f = float(s.einf_coeff())
         cx, cy, cz = v1 / w, v2 / w, v3 / w
         rho_sq = (v1 * v1 + v2 * v2 + v3 * v3) / (w * w) - 2.0 * f / w
-        r = math.sqrt(max(0.0, rho_sq))
+        return (cx, cy, cz), math.sqrt(max(0.0, rho_sq))
+
+    def dist(self, p: Point) -> float:
+        """点 p 到球面的带号距离 (正=外, 负=内), float64。"""
+        (cx, cy, cz), r = Sphere.from_dual(self)
         x, y, z = p.coords()
         dx, dy, dz = x - cx, y - cy, z - cz
         return math.sqrt(dx * dx + dy * dy + dz * dz) - r
@@ -184,7 +187,21 @@ class Cylinder(Multivector):
         super().__init__(Line(q, q2).values)
         self.radius = float(radius)
         self._axis_dir = (ux, uy, uz)
-        self._axis_point = tuple(float(x) for x in axis_point)
+        self._axis_point = (
+            float(axis_point[0]),
+            float(axis_point[1]),
+            float(axis_point[2]),
+        )
+
+    @property
+    def axis_dir(self) -> tuple[float, float, float]:
+        """轴方向 (单位向量)。"""
+        return self._axis_dir
+
+    @property
+    def axis_point(self) -> tuple[float, float, float]:
+        """轴上一点。"""
+        return self._axis_point
 
     def dist(self, p: Point) -> float:
         """点 p 到柱面的带号距离 (正=外, 负=内), float64。"""

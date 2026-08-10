@@ -22,7 +22,7 @@ from cga import (
     Sphere,
     render_scene,
 )
-from cga.robot import RobotError, fk_list, load_robot
+from cga.robot import RobotError, load_robot
 from cga.urdf_io import crdf_to_urdf, urdf_to_crdf
 
 _ok = 0
@@ -312,11 +312,13 @@ def main() -> None:
     M3 = Motor((0, 0, 1), 0.6, (5, -3, 2))
     T3 = Motor.translator((2, 1, -4))
     d0 = Multivector.vector(0.3, -0.8, 0.5)
-    a_vec = M3.apply(d0).values[1:4]
-    b_vec = T3.compose(M3).apply(d0).values[1:4]
+    # 方向向量部分只由 rotor 决定 (translator 向 e∞ 槽写杂散项, 方向语义
+    # 只看 e1..e3 —— 走公开访问器 euclidean_vector)
+    a_vec = M3.apply(d0).euclidean_vector()
+    b_vec = T3.compose(M3).apply(d0).euclidean_vector()
     check(
         "direction vector part rotor-only",
-        close(float(mx.abs(a_vec - b_vec).max().item()), 0, tol=1e-3),
+        close(max(abs(x - y) for x, y in zip(a_vec, b_vec, strict=True)), 0, tol=1e-3),
     )
 
     # 引擎: 空场景背景 = 精确背景色; MeshBasicMaterial 无光照直出
@@ -408,9 +410,9 @@ robot:
       limit: {lower: -3.14, upper: 3.14}
 """
     r2 = load_robot(_CRDF2)
-    m0 = fk_list(r2, [0.0])["tip"].to_matrix()
+    m0 = r2.fk_list([0.0])["tip"].to_matrix()
     check("crdf fk q=0 tip z", close(float(m0[2][3]), 0.5, tol=1e-4))
-    m90 = fk_list(r2, [math.pi / 2])["tip"].to_matrix()
+    m90 = r2.fk_list([math.pi / 2])["tip"].to_matrix()
     # URDF 语义: 旋转绕 joint frame 原点原地转 (child 帧原点不动),
     # 局部 +Z 轴经 Rot(Y, π/2) 映到 +X
     check("crdf fk q=90 rotate in place", close(float(m90[2][3]), 0.5, tol=1e-4))
@@ -476,10 +478,22 @@ robot:
 """
     rt1 = load_robot(_CRDF_RT)
     rt2 = load_robot(urdf_to_crdf(crdf_to_urdf(rt1)))
-    a1 = fk_list(rt1, [0.4, 0.15])["tip"].to_matrix()
-    a2 = fk_list(rt2, [0.4, 0.15])["tip"].to_matrix()
+    a1 = rt1.fk_list([0.4, 0.15])["tip"].to_matrix()
+    a2 = rt2.fk_list([0.4, 0.15])["tip"].to_matrix()
     dmax = max(abs(a1[i][j] - a2[i][j]) for i in range(4) for j in range(4))
     check("crdf urdf round-trip fk", close(dmax, 0.0, tol=1e-4))
+
+    # ── OOP 封装: 对偶球/平面提取走公开访问器 (motor 共轭后类型降级) ──
+    s_cam = Motor.translator((1, 2, 3)).apply(Sphere((0, 0, 0), 0.5))
+    (c0, c1, c2), rho = Sphere.from_dual(s_cam)
+    check(
+        "sphere from_dual center",
+        close(c0, 1.0, tol=1e-4) and close(c1, 2.0, tol=1e-4)
+        and close(c2, 3.0, tol=1e-4),
+    )
+    check("sphere from_dual radius", close(rho, 0.5, tol=1e-4))
+    pi_cam = Motor.translator((1, 2, 3)).apply(Plane((0, 1, 0), 0.0))
+    check("plane einf_coeff", close(float(pi_cam.einf_coeff()), 2.0, tol=1e-4))
 
     print(f"\nall {_ok} checks passed")
 
