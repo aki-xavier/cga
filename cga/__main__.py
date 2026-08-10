@@ -386,6 +386,40 @@ def main() -> None:
     )
     check("aa smooths silhouette", bool(mx.any(img_aa1 != img_aa2).item()))
 
+    # 有限圆柱: 端盖之外的像素是背景 (无限圆柱则整条都命中)
+    # 圆柱局部轴 Z, 旋转 90° 绕 X → 相机空间竖直条带; 上端盖之上应是背景
+    sc_fc = Scene(background=Color(0x0000FF))
+    sc_fc.add(
+        Mesh(
+            CylinderGeometry(0.3, length=1.0),
+            MeshBasicMaterial(Color(0xFF0000)),
+            motor=Motor.rotor((1, 0, 0), math.pi / 2),
+        )
+    )
+    img_fc = render_frame(sc_fc, cam0, 63, 47)
+    red_col = [
+        i for i in range(47) if img_fc[i, 31][0] > 200 and img_fc[i, 31][2] < 100
+    ]
+    check("finite cylinder visible", len(red_col) > 3)
+    check(
+        "finite cylinder capped",
+        red_col and img_fc[max(0, red_col[0] - 3), 31][:3].tolist() == [0, 0, 255],
+    )
+    # 无限圆柱对照: 同一像素位置是圆柱色 (证明 cap 检查真的在起作用)
+    sc_inf = Scene(background=Color(0x0000FF))
+    sc_inf.add(
+        Mesh(
+            CylinderGeometry(0.3),
+            MeshBasicMaterial(Color(0xFF0000)),
+            motor=Motor.rotor((1, 0, 0), math.pi / 2),
+        )
+    )
+    img_inf = render_frame(sc_inf, cam0, 63, 47)
+    check(
+        "infinite cylinder uncapped",
+        red_col and img_inf[max(0, red_col[0] - 3), 31][0] > 200,
+    )
+
     # ── CRDF 机器人描述 (内联 YAML, 无文件依赖) ─────────────────
     _CRDF2 = """
 robot:

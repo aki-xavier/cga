@@ -19,8 +19,8 @@ CGA 特色 (URDF 没有的):
     长链不积累矩阵正交性漂移 (versor 连乘保真)。
 
 范围声明 (v1):
-  - 无 mesh 引用 (任意三角网格几何不支持, blade 优先)。
-  - 惯量只支持对角张量 (ixx/iyy/izz); 非零非对角 → 明确报错。
+  - mesh 引用: v1 不支持, 转换时按策略跳过 (urdf_to_crdf(mesh_policy=...))。
+  - 惯量: 全 6 分量张量 (ixx/iyy/izz/ixy/ixz/iyz)。
   - 无 SRDF/transmission/gazebo 语义 (纯运动学描述)。
 """
 
@@ -75,13 +75,16 @@ class Geometry:
 
 @dataclass(frozen=True)
 class Inertial:
-    """link 惯量 (对角张量 v1, 质心 com 在 link frame)。"""
+    """link 惯量 (全 6 分量张量, 质心 com 在 link frame)。"""
 
     mass: float
     com: tuple[float, float, float]
     ixx: float
     iyy: float
     izz: float
+    ixy: float = 0.0
+    ixz: float = 0.0
+    iyz: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -259,16 +262,25 @@ def _inertial(d: dict, where: str) -> Inertial:
     ixx = float(i.get("ixx", 0.0))
     iyy = float(i.get("iyy", 0.0))
     izz = float(i.get("izz", 0.0))
-    for k in ("ixx", "iyy", "izz"):
-        v = float(i.get(k, 0.0))
+    ixy = float(i.get("ixy", 0.0))
+    ixz = float(i.get("ixz", 0.0))
+    iyz = float(i.get("iyz", 0.0))
+    for k, v in (("ixx", ixx), ("iyy", iyy), ("izz", izz)):
         if not isfinite(v) or v < 0:
             raise RobotError(f"{where}.inertia.{k}: must be >= 0")
-    off = [k for k in ("ixy", "ixz", "iyz") if float(i.get(k, 0.0)) != 0.0]
-    if off:
-        raise RobotError(
-            f"{where}.inertia: 非对角项 {off} 非零 —— v1 只支持对角惯量张量"
-        )
-    return Inertial(mass=mass, com=com, ixx=ixx, iyy=iyy, izz=izz)
+    for k, v in (("ixy", ixy), ("ixz", ixz), ("iyz", iyz)):
+        if not isfinite(v):
+            raise RobotError(f"{where}.inertia.{k}: must be finite")
+    return Inertial(
+        mass=mass,
+        com=com,
+        ixx=ixx,
+        iyy=iyy,
+        izz=izz,
+        ixy=ixy,
+        ixz=ixz,
+        iyz=iyz,
+    )
 
 
 def _geometry(d: dict, where: str, materials: dict[str, Material]) -> Geometry:
@@ -379,10 +391,21 @@ def _link(d: dict, where: str, materials: dict[str, Material]) -> Link:
 
 
 def load_robot(source: str | Path) -> Robot:
-    """解析 CRDF (YAML 字符串或文件路径) → Robot (含全部校验)。"""
+    """解析 CRDF (YAML 文本或文件路径) → Robot (含全部校验)。
+
+    str 默认按 YAML 文本处理; 若 str 是磁盘上存在的文件路径且不含
+    换行 (无换行的 YAML 文档无意义), 按路径读取 —— 防 str 路径脚枪。
+    """
     if isinstance(source, Path):
-        text = source.read_text(encoding="utf-8")
-        where = f"{source}"
+        p: Path | None = source
+    elif "\n" not in source and Path(source).exists():
+        # str 且无换行 (无换行的 YAML 文档无意义) 且磁盘存在 → 按路径读
+        p = Path(source)
+    else:
+        p = None
+    if p is not None:
+        text = p.read_text(encoding="utf-8")
+        where = f"{p}"
     else:
         text = source
         where = "<crdf>"

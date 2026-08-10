@@ -106,7 +106,8 @@ geometry 构造参数里; 像素级计算全部在 MLX GPU 上批量进行, Pyth
 - **变换与几何同构** —— motor 与 blade 是同一类对象, `Motor.compose` / `inverse` / `log`
   直接作用于任何图元, 没有矩阵-四元数-轴角之间的换算层。
 - **代价在别处** —— 解析求交的 float32 blade 共轭限制场景尺度 (坐标宜 ±20 内);
-  无纹理坐标概念 (v1 无纹理); 无限平面/圆柱在相机位于退化位形时需内核特殊处理 (见下节)。
+  无纹理坐标概念 (v1 无纹理); 有限圆柱经 `CylinderGeometry(length=...)`
+  带端盖, 无限圆柱/平面在相机位于退化位形时需内核特殊处理 (见下节)。
 
 ### 渲染示例: 三个优势的可视化
 
@@ -227,53 +228,50 @@ URDF 的 YAML 版: 链接树 + 关节 + 几何 (blade) + 惯量。帧语义与 U
 | **变换** | 4×4 矩阵 | Motor versor; FK = Motor 链, 长链不积累正交性漂移 |
 | **运动学** | 无内置 | `fk(q)`: revolute = `M_origin·Rot(axis,q)`, prismatic = `·Trans(axis·q)` |
 
-示例 (`models/arm_7dof.crdf.yaml` 由 `simu/models/arm_7dof.urdf` 导入,
-9 条几何, 其中 8 条 visual+collision 双角色复用):
+示例 (`models/z1_arm.crdf.yaml` 由宇树官方 URDF 导入; 视觉 mesh 跳过,
+7 条碰撞圆柱提升为双角色 blade):
 
 ```yaml
 robot:
-  name: arm_7dof
-  base: base_link
-  materials:
-    - name: dark
-      color: [0.12, 0.12, 0.14, 1.0]
+  name: z1_description
+  base: world
   links:
-    - name: base_link
+    - name: link00
       geometry:
         - blade: cylinder
-          radius: 0.1
-          length: 0.15
-          origin: {xyz: [0, 0, 0.075]}
-          material: dark
+          radius: 0.0325
+          length: 0.051
+          origin: {xyz: [0, 0, 0.0255]}
           role: [visual, collision]
-      inertial: {mass: 5.0, com: [0, 0, 0.075], inertia: {ixx: 0.0219, iyy: 0.0219, izz: 0.025}}
+      inertial: {mass: 0.472, com: [-0.0033, -0.0001, 0.025], inertia: {ixx: 0.0004, iyy: 0.0004, izz: 0.0005}}
   joints:
-    - name: j1
+    - name: joint1
       type: revolute
-      parent: base_link
-      child: link1
-      origin: {xyz: [0, 0, 0.15]}
+      parent: link00
+      child: link01
+      origin: {xyz: [0, 0, 0.0585]}
       axis: [0, 0, 1]
-      limit: {lower: -2.967, upper: 2.967, effort: 40, velocity: 2.0}
+      limit: {lower: -2.618, upper: 2.618, effort: 30, velocity: 3.1415}
 ```
 
 用法 (加载 → FK → 直接进 CGA 引擎渲染, 无网格无中间表示):
 
 ```python
-from cga.robot import load_robot, fk_list
+from cga.robot import load_robot
 from cga.urdf_io import crdf_to_urdf, urdf_to_crdf  # 双向转换 (pydrake/UrdfScene 互操作)
 
-robot = load_robot("models/arm_7dof.crdf.yaml")
-world = robot.fk_list([0.4, -0.6, 0.3, -0.8, 0.5, -0.4, 0.2])  # link → Motor
+robot = load_robot("models/z1_arm.crdf.yaml")
+world = robot.fk_list([0.0, 1.1, -1.2, 0.8, 0.4, 0.3])  # link → Motor
 ```
 
-`demo_robot.py` 渲染该描述 (臂底 z=0 恰落地; 仅根级 Z-up(URDF)→Y-up(引擎)
+`demo_robot.py` 渲染该描述 (臂底恰落地; 仅根级 Z-up(URDF)→Y-up(引擎)
 转换, 数据文件保持 URDF 语义):
 
-![CRDF 机器人渲染](docs/robot_arm.png)
+![CRDF 机器人渲染](docs/robot_z1.png)
 
-范围声明 (v1): 无 mesh 引用 (blade 优先); 惯量只支持对角张量; 无
-SRDF/transmission/gazebo 语义; URDF 的 floating/planar 关节不支持。
+范围声明 (v1): mesh 引用不建模, 导入按 `mesh_policy` 跳过或报错 (跳过时
+碰撞基本体兼任视觉); 惯量全 6 分量张量; 无 SRDF/transmission/gazebo 语义;
+URDF 的 floating/planar 关节不支持。
 
 ## 项目布局
 
@@ -291,7 +289,7 @@ cga/
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
 demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
-models/            CRDF 机器人描述文件 (arm_7dof.crdf.yaml)
+models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF)
 ```
 
 ## 质量

@@ -1,0 +1,232 @@
+robot:
+  name: z1_description
+  base: world
+  links:
+  - name: world
+  - name: link00
+    geometry:
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.051
+      origin:
+        xyz: [0.0, 0.0, 0.0255]
+      role: [visual, collision]
+    inertial:
+      mass: 0.47247481
+      com: [-0.00334984, -0.00013615, 0.02495843]
+      inertia:
+        ixx: 0.00037937
+        iyy: 0.00041521
+        izz: 0.00053066
+        ixy: -3.5e-07
+        ixz: -1.037e-05
+        iyz: -9.9e-07
+  - name: link01
+    inertial:
+      mass: 0.67332551
+      com: [2.47e-06, -0.00025198, 0.02317169]
+      inertia:
+        ixx: 0.00128328
+        iyy: 0.00071931
+        izz: 0.00083936
+        ixy: -6.0e-08
+        ixz: -4.0e-07
+        iyz: 5.0e-07
+  - name: link02
+    geometry:
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.102
+      origin:
+        xyz: [0.0, 0.0, 0.0]
+        rpy: [1.57079633, -0.0, 0.0]
+      role: [visual, collision]
+    - blade: cylinder
+      radius: 0.0225
+      length: 0.235
+      origin:
+        xyz: [-0.16249998, 0.0, 0.0]
+        rpy: [0.0, 1.57079631, 3.14159265]
+      role: [visual, collision]
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.051
+      origin:
+        xyz: [-0.34999999, 0.0, 0.0]
+        rpy: [1.57079633, -0.0, 0.0]
+      role: [visual, collision]
+    inertial:
+      mass: 1.19132258
+      com: [-0.11012601, 0.00240029, 0.00158266]
+      inertia:
+        ixx: 0.00102138
+        iyy: 0.02429457
+        izz: 0.02466114
+        ixy: 0.00062358
+        ixz: 5.13e-06
+        iyz: -2.1e-06
+  - name: link03
+    geometry:
+    - blade: cylinder
+      radius: 0.02
+      length: 0.116
+      origin:
+        xyz: [0.12799999, 0.0, 0.055]
+        rpy: [3.14159265, 1.57079631, 3.14159265]
+      role: [visual, collision]
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.059
+      origin:
+        xyz: [0.22050001, 0.0, 0.055]
+        rpy: [-0.32175055, 1.57079632, -1.57079633]
+      role: [visual, collision]
+    inertial:
+      mass: 0.83940874
+      com: [0.10609208, -0.00541815, 0.03476383]
+      inertia:
+        ixx: 0.00108061
+        iyy: 0.00954238
+        izz: 0.00886621
+        ixy: -8.669e-05
+        ixz: -0.00208102
+        iyz: -1.332e-05
+  - name: link04
+    geometry:
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.067
+      origin:
+        xyz: [0.072, 0.0, 0.0]
+      role: [visual, collision]
+    inertial:
+      mass: 0.56404563
+      com: [0.04366681, 0.00364738, -0.00170192]
+      inertia:
+        ixx: 0.00031576
+        iyy: 0.00092996
+        izz: 0.00097912
+        ixy: 8.13e-05
+        ixz: 4.091e-05
+        iyz: -5.96e-06
+  - name: link05
+    inertial:
+      mass: 0.38938492
+      com: [0.03121533, 0.0, 0.00646316]
+      inertia:
+        ixx: 0.00017605
+        iyy: 0.00055896
+        izz: 0.0005386
+        ixy: 4.0e-07
+        ixz: 5.689e-05
+        iyz: -1.3e-07
+  - name: link06
+    geometry:
+    - blade: cylinder
+      radius: 0.0325
+      length: 0.051
+      origin:
+        xyz: [0.0255, 0.0, 0.0]
+        rpy: [0.0, 1.5707963, 0.0]
+      role: [visual, collision]
+    inertial:
+      mass: 0.28875807
+      com: [0.0241569, -0.00017355, -0.00143876]
+      inertia:
+        ixx: 0.00018328
+        iyy: 0.0001475
+        izz: 0.0001468
+        ixy: 1.22e-06
+        ixz: 5.4e-07
+        iyz: 8.0e-08
+  joints:
+  - name: base_static_joint
+    type: fixed
+    parent: world
+    child: link00
+    origin:
+      xyz: [0.0, 0.0, 0.0]
+  - name: joint1
+    type: revolute
+    parent: link00
+    child: link01
+    origin:
+      xyz: [0.0, 0.0, 0.0585]
+    axis: [0.0, 0.0, 1.0]
+    limit:
+      lower: -2.6179938779914944
+      upper: 2.6179938779914944
+      effort: 30.0
+      velocity: 3.1415
+    dynamics:
+      damping: 1.0
+  - name: joint2
+    type: revolute
+    parent: link01
+    child: link02
+    origin:
+      xyz: [0.0, 0.0, 0.045]
+    axis: [0.0, 1.0, 0.0]
+    limit:
+      lower: 0.0
+      upper: 2.9670597283903604
+      effort: 60.0
+      velocity: 3.1415
+    dynamics:
+      damping: 2.0
+  - name: joint3
+    type: revolute
+    parent: link02
+    child: link03
+    origin:
+      xyz: [-0.34999999, 0.0, 0.0]
+    axis: [0.0, 1.0, 0.0]
+    limit:
+      lower: -2.8797932657906435
+      upper: 0.0
+      effort: 30.0
+      velocity: 3.1415
+    dynamics:
+      damping: 1.0
+  - name: joint4
+    type: revolute
+    parent: link03
+    child: link04
+    origin:
+      xyz: [0.21799999, 0.0, 0.057]
+    axis: [0.0, 1.0, 0.0]
+    limit:
+      lower: -1.5184364492350666
+      upper: 1.5184364492350666
+      effort: 30.0
+      velocity: 3.1415
+    dynamics:
+      damping: 1.0
+  - name: joint5
+    type: revolute
+    parent: link04
+    child: link05
+    origin:
+      xyz: [0.07, 0.0, 0.0]
+    axis: [0.0, 0.0, 1.0]
+    limit:
+      lower: -1.3439035240356338
+      upper: 1.3439035240356338
+      effort: 30.0
+      velocity: 3.1415
+    dynamics:
+      damping: 1.0
+  - name: joint6
+    type: revolute
+    parent: link05
+    child: link06
+    origin:
+      xyz: [0.0492, 0.0, 0.0]
+    axis: [1.0, 0.0, 0.0]
+    limit:
+      lower: -2.792526803190927
+      upper: 2.792526803190927
+      effort: 30.0
+      velocity: 3.1415
+    dynamics:
+      damping: 1.0

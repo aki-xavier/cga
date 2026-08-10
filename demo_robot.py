@@ -1,10 +1,10 @@
 """CRDF 渲染 demo: YAML 机器人描述 → FK → CGA 引擎直接渲染。
 
-运行: uv run python demo_robot.py [输出目录]
-输出: <out>/robot_arm.png (README 嵌入用 docs/robot_arm.png)
+运行: uv run python demo_robot.py [输出目录] [模型] [关节角...]
+输出: <out>/robot_z1.png (默认模型, README 嵌入用 docs/robot_z1.png)
 
-展示: models/arm_7dof.crdf.yaml (从 simu URDF 导入) 里的 blade 几何,
-经 Motor FK 链 (fk_list) 直接进 cga.engine —— 无网格、无中间表示。
+展示: models/z1_arm.crdf.yaml (宇树 Z1 官方 URDF 导入) 里的 blade 几何,
+经 Motor FK 链 (robot.fk_list) 直接进 cga.engine —— 无网格、无中间表示。
 两个坐标约定转换都在场景构建层, 数据文件保持 URDF 语义 (Z-up):
   1. 根级: URDF Z-up → 引擎 Y-up (WORLD_UP = Rot(X, -π/2))。
   2. 几何局部轴: engine 圆柱/圆盘局部轴 = +Z, 与 URDF 一致, 无需转换。
@@ -37,13 +37,16 @@ from cga.robot import Geometry, Robot, load_robot
 
 WORLD_UP = Motor.rotor((1.0, 0.0, 0.0), -1.5707963267948966)  # Z-up → Y-up
 
-MODEL = Path(__file__).resolve().parent / "models" / "arm_7dof.crdf.yaml"
+MODEL = Path(__file__).resolve().parent / "models" / "z1_arm.crdf.yaml"
 
 
 def _to_geometry(g: Geometry):
-    """CRDF blade → engine 几何 (局部轴约定一致, 尺寸即参数)。"""
+    """CRDF blade → engine 几何 (局部轴约定一致, 尺寸即参数)。
+
+    cylinder 带 length → 有限圆柱 (端盖); None → 无限 (demo 面板 B 用)。
+    """
     if g.blade == "cylinder":
-        return CylinderGeometry(g.radius)
+        return CylinderGeometry(g.radius, length=g.length)
     if g.blade == "box":
         assert g.size is not None
         return BoxGeometry(*g.size)
@@ -87,16 +90,19 @@ def build_scene(robot: Robot, q: list[float]) -> Scene:
 def main() -> None:
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts")
     out_dir.mkdir(exist_ok=True)
-    robot = load_robot(MODEL)
-    # 一个弯曲姿态 (关节角弧度), 演示非零位 FK
-    q = [0.4, -0.6, 0.3, -0.8, 0.5, -0.4, 0.2]
+    model = Path(sys.argv[2]) if len(sys.argv) > 2 else MODEL
+    robot = load_robot(model)
+    # 默认: Z1 工作姿态 (关节角弧度); 可传自定义关节角
+    default_q = [0.0, 1.1, -1.2, 0.8, 0.4, 0.3]
+    q = [float(v) for v in sys.argv[3:]] or default_q
     scene = build_scene(robot, q)
     camera = PerspectiveCamera(
         fov=50, aspect=4 / 3, position=(0.6, 1.25, 2.6), target=(0, 0.95, 0)
     )
     camera.look_at((0, 0.95, 0))
     img = Renderer(480, 360, aa=2).render(scene, camera)
-    p = out_dir / "robot_arm.png"
+    fname = "robot_z1.png" if model == MODEL else f"robot_{robot.name}.png"
+    p = out_dir / fname
     Image.frombytes("RGBA", (img.shape[1], img.shape[0]), frame_to_bytes(img)).save(p)
     print(f"saved {p}")
 
