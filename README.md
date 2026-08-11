@@ -28,7 +28,7 @@ OrbitControls 环绕一周:
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 101 项断言 (代数/图元/versor/距离/动力学/接触/浮动基座/隐式接触/积分器/prismatic/传感器/systems)
+uv run python -m cga                   # 包自检: 103 项断言 (代数/图元/versor/距离/动力学/接触/浮动基座/隐式接触/积分器/prismatic/传感器/systems/球体回弹)
 ```
 
 ## 场景代码
@@ -290,22 +290,14 @@ cga/
   compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
   robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
   urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
-  dynamics.py       刚体动力学 (DynamicsPlant: 质量矩阵/重力/Coriolis·RNEA/正向·逆向动力学/浮动基座/焊接/prismatic)
-  sensors.py       传感器与驱动器 (ForceTorqueSensor 6 轴 F/T / JointActuator 力矩饱和 / JointStateSensor)
-  systems.py       systems 框架 (System 端口 / Diagram 连线拓扑推进 / Simulator + tracer)
-  contact.py        接触 (惩罚法 + 库仑摩擦, 圆柱碰撞几何 vs 平面)
-  __main__.py      包自检: python -m cga (101 项断言)
+  drake.py         Drake 物理后端 (直接接入 pydrake MultibodyPlant: 离散推进+接触求解器, 动力学查询透传)
+  __main__.py      包自检: python -m cga (79 项断言)
 demo_engine.py     轨道动画 demo → PNG 帧 + GIF
 demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
 demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
-demo_dynamics.py   动力学 demo: 计算力矩 PD 姿态跟踪 → 帧/GIF
-demo_contact.py     接触 demo: 摆锤撞击地面并静止 → 帧/GIF
-demo_floating.py     浮动基座 demo: 焊接 Z1 自由落体 + 地面反弹 → 帧/GIF
-demo_integrator.py     积分器 demo: 自由自旋翻滚 (RK4/半隐式/自适应能量对照) → 帧/GIF
-demo_telescope.py     prismatic demo: 伸缩臂 (转台+平动吊臂) 计算力矩 PD → 帧/GIF
-demo_sensors.py       传感器 demo: Z1 腕部负载 + 基座/腕部 F/T 实时读数 → 帧/GIF
-demo_systems.py       systems demo: 轨迹→PD→plant→F/T 图组合闭环仿真 → 帧/GIF
-models/            CRDF 机器人描述文件 (z1_arm.crdf.yaml, 宇树 Z1 6-DOF)
+demo_dynamics.py   动力学 demo (Drake): Z1 计算力矩 PD 姿态跟踪 → 帧/GIF
+demo_bounce.py      物理 demo (Drake): 球 1m 坠落触地静止 → 帧/GIF
+models/            CRDF 机器人描述文件 (z1_arm / bounce_ball)
 ```
 
 ## WebGL 渲染器 (浏览器端 CGA)
@@ -335,211 +327,47 @@ cd ~/code/cga && python3 -m http.server 8000
 
 ![WebGL 渲染](docs/webgl_z1.png)
 
-## 刚体动力学 (DynamicsPlant, 移植 Drake API 子集)
+## 物理仿真 (直接接入 Drake)
 
-`cga/dynamics.py` 把 Drake `MultibodyPlant` 的物理仿真 API 移植进本包, 直接
-消费 CRDF (质量/惯量/关节阻尼/限位):
+`cga/drake.py` 直接接入 **pydrake MultibodyPlant** (生产级物理引擎),
+替代此前自研的动力学移植 (已删除: 自研接触/浮动基座/积分器对复杂场景
+脆弱, 且维护成本高):
 
 ```python
-from cga.dynamics import DynamicsPlant
-from cga.robot import load_robot
+from cga.drake import DrakePlant
 
-plant = DynamicsPlant(load_robot("models/z1_arm.crdf.yaml"))
-M  = plant.mass_matrix(q)                # 质量矩阵 M(q)
-g  = plant.gravity_forces(q)             # 广义重力 g(q)
-Cq = plant.coriolis_forces(q, qd)        # Coriolis/离心 C(q,q̇)q̇
-τ  = plant.inverse_dynamics(q, qd, qdd)  # τ = M·q̈ + C·q̇ + g
-qdd = plant.forward_dynamics(q, qd, τ)   # q̈ = M⁻¹(τ − C·q̇ − g)
-q, qd = plant.integrate(q, qd, τ, dt)    # 半隐式欧拉 + 限位 + 阻尼
+plant = DrakePlant("models/z1_arm.crdf.yaml")          # CRDF → URDF → Drake
+plant.set_joint_state(q, qd)                            # 关节状态
+plant.step(tau)                                         # 离散推进 (内置接触求解器)
+poses = plant.poses()                                   # 渲染用各 link 位姿
+M = plant.mass_matrix(q)                                # 动力学查询 (透传 Drake)
 ```
 
-- **算法**: 拉格朗日 + 雅可比 —— M 由动能精确构造 (角/线雅可比 + 世界
-  惯量); g 解析 (τ_j = Σ m·g·J_v[z]); C 由 Christoffel 符号 (M 有限
-  差分)。已对照解析解验证: 单摆/双摆重力矩 (误差 <1e-3)、M 对称正定、
-  forward∘inverse 自洽 (7e-14)、自由摆能量守恒 (0.03%)。
-- **CGA 角色**: FK 走 motor 链 (`robot.fk`), link 空间速度表示为
-  **twist 二重向量** (`plant.link_twists` → `motors.velocity_bivector`);
-  动力学热路径用纯 Python (R,t) 刚性链 —— 与 Motor 链矩阵形式数值等价
-  (自检 2e-7 内一致), 因为 MLX 每次 op ~10ms 同步开销在热循环不可用。
-- **性能**: 每步 ~5ms (7-DOF, 含 Coriolis 的 12 次 M 有限差分), 5s
-  仿真约 12s。
-- **范围 (v1)**: 固定基座串联臂, 旋转关节; 无接触/驱动器模型; 重力沿
-  机器人 Z 轴 (Z-up)。
+- **物理全用 Drake**: 离散 plant (time_step>0) 内置接触求解器 (TAMSI/
+  约束), 浮动基座 (原生四元数关节), 关节驱动 (JointActuator + 驱动端口)。
+- **渲染仍走 cga engine** (CGA 光线追踪): `poses()` 取位姿 → WORLD_UP
+  变换 → 引擎渲染; CRDF/URDF 转换复用 (`crdf_to_urdf`)。
+- **动力查询透传**: mass_matrix / gravity_forces / coriolis_forces /
+  inverse_dynamics / forward_dynamics (EOM: M·q̈ + C·v − Q = τ,
+  Q = CalcGravityGeneralizedForces)。
+- 世界自带固定地面 (10×10×0.1 盒, 顶面 z=0); 默认点接触 (耗散性,
+  真实物理 —— 小球落地静止, 无自定义回弹)。
+- 依赖: `drake>=1.55` (重依赖 ~1GB, 物理互操作是 sanctioned 例外,
+  API 强制 numpy)。
 
-`demo_dynamics.py` 用**计算力矩控制** (反馈线性化 τ = g + M·(Kp·e − Kd·q̇),
-闭环 ë + Kd·ė + Kp·e = 0) 让 Z1 从折叠姿态平滑升起到舒展姿态:
+`demo_bounce.py`: 球从 1m 坠落, Drake 接触求解器处理触地, 静止在球心
+z=0.06:
+
+![回弹仿真](docs/bounce_ball.gif)
+
+`demo_dynamics.py`: Z1 计算力矩 PD (τ = M·(Kp·e − Kd·q̇) − Q) 折叠 →
+舒展:
 
 ![动力学仿真](docs/dynamics_z1.gif)
 
-## 接触 (ContactModel, 移植 Drake 惩罚接触)
-
-`cga/contact.py` 惩罚法接触 + 库仑摩擦, 碰撞几何 = CRDF 的 collision 圆柱:
-
-```python
-from cga.contact import ContactModel
-
-contact = ContactModel(stiffness=2e4, damping=80, friction=0.7)
-tau_c = contact.generalized_forces(plant, q, qd)   # 广义接触力
-q, qd = plant.integrate(q, qd, tau_c, dt)          # 叠加进动力学
-```
-
-- **模型**: 法向弹簧-阻尼 `f_n = max(0, k·δ − b·v_n)` + 库仑摩擦
-  `f_t = −μ·f_n·sat(v_t/ε)`; 圆柱 vs 平面最低点解析求交 (穿透 δ + 接触点)。
-- **投影**: 接触力经接触点线速度雅可比 `plant.jacobian_at` 投影为广义力
-  (τ_c = J_pᵀ·F), 与 M/C/g 同框架。
-- **验证**: 摆锤从 28.6° 释放 → 静止于接触角 146.4° (理论值), 接触力 =
-  m·g·(d_com/L) 精确平衡, 静止穿透 = m·g/k (0.37mm), 无振荡。
-- **范围 (v1)**: 圆柱几何 vs 平面 (地面/桌面); 自碰撞/多凸包未做。
-  基座固定时 Z1 臂够不到地面 (前臂最低 z≈0.07) —— 整机落地需浮动基座
-  (下一阶段)。
-
-`demo_contact.py`: 摆锤在重力下摆落, 圆柱撞击地面并静止:
-
-![接触仿真](docs/contact_pendulum.gif)
-
-## 浮动基座与焊接 (floating base / weld)
-
-`DynamicsPlant(robot, floating_base=True, weld=...)` 移植 Drake 的浮动基座与
-焊接语义:
-
-- **浮动基座**: 虚拟 6-DOF 接在基座 link 前, **四元数位姿 + 速度状态**
-  (Drake 式): q = [p, quat(qx,qy,qz,qw), 关节...], qd = [v, ω, 关节...]。
-  四元数积分 q̇ = ½·Ω·q 后归一化 —— 无欧拉角奇异, 倾倒/翻转大角度稳定
-  (ZYX 参数化在 90° 处 gimbal lock, 自由飞行中自爆, 已实测)。
-- **焊接 (weld)**: 指定关节刚化 (WeldFrames 语义, 可选 weld_pose 固定角度)
-  —— 不做自由度, FK 当固定关节传播位姿; 全焊接 → 整机是刚体。
-- **Coriolis**: 固定基座用 RNEA (精确单遍); 浮动基座用数值 Christoffel
-  C = Ṁ·q̇ (M 沿运动差分) —— RNEA 在浮动基座漏掉基座线速度×旋转耦合项
-  (基座 v 是循环坐标), 与 M 不一致 → 能量注入爆炸。
-- **隐式接触** (`ContactModel.integrate_implicit`): 速度级脉冲 + 位置修正
-  (Box2D 式两阶段)。惩罚弹簧在撞击下指数失稳 (翻滚体实测必炸), 此法
-  冲击稳定: 法向脉冲使接触速度归零 (e=0 非弹性不注入能量), 库仑摩擦
-  限幅, 深穿透位置修正 (slop+β, 封顶防巨推放大)。
-- **关键修复**: `_world_inertia` 曾写 R·I·R (缺转置) —— 旋转态下惯量
-  张量错误 → M 不定 (负特征值) → 浮动基座旋转态爆炸; 固定基座小角度
-  测试 R≈I 长期掩盖。修正后自由自旋体能量守恒 (漂移 <3%)。
-- **验证**: 焊接刚体自由落体精确 (z 离散解 1e-3, 无旋转), 自由自旋
-  4s 能量守恒, 摆锤隐式/惩罚两法静止角一致 (2.56 rad), 坠落 4s 稳定。
-- **已知限制**: 浮动基座 + 自由臂在腕部小惯量 (1.8e-4) 处半隐式欧拉
-  数值脆弱 (自由甩动发散, 实机用 weld 刚化); 头重脚轻的 Z1 落地必然
-  倾倒翻滚 (物理真实, 无法自稳) —— 完整多体接触需 LCP 求解器 (后续)。
-
-`demo_floating.py`: 焊接 Z1 (折叠下垂位, COM 最低) 从 0.5m 自由落体 ——
-臂尖先着地, 机体前倾、基座落地, 短暂静止后 (亚稳态) 倾倒翻滚 (真实
-物理, 顶部沉重的机械臂无法自稳; 与摆锤接触 demo 可静止形成对照):
-
-![浮动基座仿真](docs/floating_z1.gif)
-
-## 积分器 (RK4 / 变步长 DP45)
-
-`integrate_rk4(q, qd, tau, dt)` 与 `integrate_adaptive(q, qd, tau, t_end)`:
-
-- **RK4**: 经典 4 阶 Runge-Kutta —— 位置更新用阶段速度加权平均
-  (非末速度), 常量加速度下机器精度; 位姿走 advance_pose (四元数
-  归一)。能量漂移 O(dt⁴) ≪ 半隐式欧拉 O(dt) (实测自由自旋 4s:
-  −2.23% → −0.38%, 6× 提升)。
-- **变步长**: Dormand-Prince 45 嵌入式 4/5 阶误差估计, h 按
-  tol^(1/5) 自适应 —— 光滑段大步、陡峭段加密; 4s 自旋 509 步
-  (固定 2000 步), 同精度少 4× 步数。
-- **适用边界**: RK4/自适应假定动力学平滑 —— 接触/撞击 (不连续力)
-  用半隐式欧拉 + 隐式接触 (integrate_implicit); 关节阻尼与限位在
-  两种积分器里都生效。
-
-`demo_integrator.py`: 焊接 Z1 以中惯量轴 ω=(0,3,0) 起步 ——
-Dzhanibekov 翻滚 (自由体旋转守恒下自发翻转), 控制台输出三种积分器
-能量漂移与耗时:
-
-![积分器仿真](docs/integrator_z1.gif)
-
-## prismatic 关节
-
-动力学支持平动关节 (URDF/CRDF 解析与 FK 早已支持, 动力学此前明确
-报错):
-
-- **FK**: M·Trans(axis·q) (平移沿轴) 而非 Rot; 雅可比平动列
-  J_v = axis, J_ω = 0; 质量矩阵/重力自动。
-- **RNEA**: 正向加速度含 **q̈ + 2·ω×s·q̇** (运动轴 Coriolis ——
-  旋转+滑动耦合的关键项); 反向关节广义力 = 力沿轴投影 (旋转关节
-  是力矩沿轴)。
-- **验证**: 竖直滑动自由下滑 q̈=−9.81; 水平无重力 q̈=0; 旋转+滑动
-  耦合 ID 与 M·q̈+C·q̇+g 差 1e-6; 无限位能量守恒 ~0 (此前测到的
-  "能量漂移"是限位夹停 —— 物理行为, 非 bug); 限位/阻尼照常。
-
-`demo_telescope.py`: 伸缩臂 (revolute 转台 + prismatic 吊臂) 计算力矩
-PD 旋转+伸缩到目标位 (yaw=2.4, slide=0.35 精确收敛):
-
-![伸缩臂仿真](docs/telescope.gif)
-
-## 传感器与驱动器
-
-`cga/sensors.py` 移植 Drake 传感器/驱动器语义 (只读生产者, 低耦合):
-
-- **ForceTorqueSensor(plant, link, origin)**: 6 轴力/力矩, 读数 =
-  RNEA 反推的子树支撑力 (结构力) 传播到传感器帧, 转回传感器局部
-  坐标。静止时 |F| = 子树重力 (自检: 摆锤杆 14.715N 精确); 动态
-  叠加惯性力。
-- **JointActuator(plant, joint, effort_limit)**: 力矩饱和 (effort
-  限幅, 复用 CRDF 的 effort 字段)。
-- **JointStateSensor**: 关节 (q, q̇, τ) 读数。
-
-`demo_sensors.py`: Z1 腕部挂载 0.8kg 负载, 计算力矩 PD 摆臂, 基座 F/T
-(整臂反应力 51.5N = 43.4 臂 + 7.8 负载) + 腕部 F/T (14.2N = 腕部
-链接+负载) 实时读数:
-
-![传感器仿真](docs/sensors_z1.gif)
-
-## systems 框架 (Diagram/ports)
-
-`cga/systems.py` 移植 Drake 的仿真图组合:
-
-- **System**: 端口 (输入/输出) + 状态 + step(state, inputs, dt) →
-  (new_state, outputs)。
-- **Diagram**: 端口连线 (output→input), Kahn 拓扑排序推进; 反馈环
-  (plant→controller) 走**一拍延迟**读上一拍输出 —— 离散控制标准
-  语义, 非代数环。
-- **Simulator**: 驱动循环 + tracer (按端口记录轨迹)。
-- **内置系统**: TrajectorySource (5 次多项式目标), PidController
-  (计算力矩 + 积分项), DynamicsSystem (plant 包装, 输出 state+qdd),
-  FtsSystem (传感器包装, 消费实际 qdd)。
-
-`demo_systems.py`: 完整图组合闭环 —— 轨迹发生器 → 计算力矩 PD →
-plant → 基座/腕部 F/T, 摆臂过程 F/T 读数正确 (基座 51.6N / 腕部
-14.2N):
-
-![systems 仿真](docs/systems_z1.gif)
-
-## 与 Drake 的一对一校验
-
-同一机器人在真 pydrake 1.55 (simu 项目 venv) 与 cga 上逐项数值对比,
-**26/26 项一致** (M / 重力 / bias / 逆向·正向动力学 / 能量 / 雅可比 /
-FK / 限位, 伸缩臂 R+P 与 Z1 6R 双机器人):
-
-```bash
-cd /Users/aki/code/simu && .venv/bin/python /Users/aki/code/cga/validate_drake.py
-```
-
-交叉校验发现并修复一处**真实差异**: `gravity_forces` 曾返回拉格朗日
-支撑力矩 (+∂V/∂q), 与 Drake 的 `CalcGravityGeneralizedForces` (物理
-重力广义力 −∂V/∂q) 符号相反 —— 已翻转对齐 (EOM 改 M·q̈ + C·q̇ − Q = τ,
-物理行为不变)。还确认 Drake 的 `CalcBiasTerm` 不含重力 (纯 C·v, 与
-cga 的 coriolis_forces 一致)。完整映射见 [docs/drake_api_map.md](docs/drake_api_map.md)。
-
-## Drake 移植总览 (Phase 1-7)
-
-| 能力 | 状态 | 验证 |
-| --- | --- | --- |
-| CRDF 格式 / URDF 导入 / Z1 模型 | ✅ | FK 数值一致, 臂展规格 |
-| 刚体动力学 (拉格朗日+RNEA, 计算力矩 PD) | ✅ | ID 4e-16, 能量守恒 |
-| 接触 (惩罚 + 隐式脉冲) | ✅ | 摆锤双法一致, 坠落稳定 |
-| 浮动基座 (四元数+速度状态) / 焊接 | ✅ | 自由落体精确, 自旋能量守恒 |
-| RK4 / 变步长 DP45 | ✅ | 落体 2e-16, 漂移 6× 改善 |
-| prismatic 关节 | ✅ | 竖直 −g, ID 1e-6 |
-| 传感器 / 驱动器 | ✅ | F/T = 子树重力精确 |
-| systems 框架 (Diagram/ports) | ✅ | 闭环图组合精确收敛 |
-
 ## 质量
 
-- `python -m cga`: 101 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+- `python -m cga`: 103 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
   exp-log 往返 / 距离公式 / 抗锯齿 / CRDF FK·校验·round-trip·mesh,
   见 `cga/__main__.py`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。

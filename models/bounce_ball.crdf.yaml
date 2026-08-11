@@ -1,0 +1,26 @@
+# 回弹小球 (Drake 物理后端 demo): 球体碰撞, 接触由 Drake 内置求解器处理
+# 浮动基座 → 自由落体 → 地面反弹 (Drake 点接触 + 耗散) → 静止
+robot:
+  name: bounce
+  base: base
+  materials:
+    - name: orange
+      color: [0.95, 0.35, 0.1, 1.0]
+  links:
+    - name: base
+    - name: body
+      inertial:
+        mass: 0.5
+        com: [0, 0, 0]
+        inertia: {ixx: 0.0012, iyy: 0.0012, izz: 0.0012}
+      geometry:
+        - blade: sphere
+          radius: 0.06
+          origin: {xyz: [0, 0, 0]}
+          role: [visual, collision]
+          material: orange
+  joints:
+    - name: w1
+      type: fixed
+      parent: base
+      child: body

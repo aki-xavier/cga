@@ -6,6 +6,7 @@ readme = "README.md"
 authors = [{ name = "aki", email = "aki.petit@icloud.com" }]
 requires-python = ">=3.14"
 dependencies = [
+    "drake>=1.55.0",
     "mlx>=0.32.0",
     "pillow>=12.3.0",
     "pyyaml>=6.0.3",
