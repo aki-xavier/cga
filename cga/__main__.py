@@ -7,6 +7,7 @@ meet 接受直接形式输入。
 """
 
 import math
+from pathlib import Path
 
 import mlx.core as mx
 
@@ -24,6 +25,8 @@ from cga import (
 )
 from cga.robot import RobotError, load_robot
 from cga.urdf_io import crdf_to_urdf, urdf_to_crdf
+
+MODEL_CRDF = Path(__file__).resolve().parent.parent / "models" / "z1_arm.crdf.yaml"
 
 _ok = 0
 
@@ -551,6 +554,347 @@ robot:
 """
         ),
     )
+
+    # ── 刚体动力学 (DynamicsPlant, 移植 Drake MultibodyPlant 子集) ──
+    from cga.dynamics import DynamicsPlant
+
+    _DYN_PEND = """
+robot:
+  name: pend
+  base: base
+  links:
+    - name: base
+    - name: bob
+      inertial:
+        mass: 2.0
+        com: [0, 0, 0.5]
+        inertia: {ixx: 0.01, iyy: 0.01, izz: 0.01}
+  joints:
+    - name: j1
+      type: revolute
+      parent: base
+      child: bob
+      origin: {xyz: [0, 0, 0]}
+      axis: [0, 1, 0]
+"""
+    pend = DynamicsPlant(load_robot(_DYN_PEND))
+    check(
+        "dyn pendulum gravity",
+        close(
+            pend.gravity_forces([0.7])[0],
+            -2.0 * 9.81 * 0.5 * math.sin(0.7),
+            tol=1e-3,
+        ),
+    )
+    # 自由单摆必须下落 (抓 g 的全局符号 bug: 曾导致摆反向上摆)
+    check("dyn pendulum falls", pend.forward_dynamics([0.5], [0.0], [0.0])[0] > 0.0)
+
+    _DYN_DOUBLE = """
+robot:
+  name: dbl
+  base: base
+  links:
+    - name: base
+    - name: l1
+      inertial:
+        mass: 1.0
+        com: [0, 0, 0.2]
+        inertia: {ixx: 0.01, iyy: 0.01, izz: 0.01}
+    - name: l2
+      inertial:
+        mass: 0.5
+        com: [0, 0, 0.15]
+        inertia: {ixx: 0.005, iyy: 0.005, izz: 0.005}
+  joints:
+    - name: j1
+      type: revolute
+      parent: base
+      child: l1
+      origin: {xyz: [0, 0, 0]}
+      axis: [0, 1, 0]
+    - name: j2
+      type: revolute
+      parent: l1
+      child: l2
+      origin: {xyz: [0, 0, 0.4]}
+      axis: [0, 1, 0]
+"""
+    dbl = DynamicsPlant(load_robot(_DYN_DOUBLE))
+    g = dbl.gravity_forces([0.3, 0.2])
+    t1 = -(
+        9.81 * (1.0 * 0.2 + 0.5 * 0.4) * math.sin(0.3)
+        + 9.81 * 0.5 * 0.15 * math.sin(0.5)
+    )
+    t2 = -9.81 * 0.5 * 0.15 * math.sin(0.5)
+    check("dyn double gravity", close(g[0], t1, tol=1e-3) and close(g[1], t2, tol=1e-3))
+
+    z1d = DynamicsPlant(load_robot(MODEL_CRDF))
+    qdyn = [0.3, 0.2, -0.1, 0.1, -0.2, 0.3]
+    Mm = z1d.mass_matrix(qdyn)
+    check(
+        "dyn mass matrix symmetric",
+        close(
+            max(
+                abs(Mm[i][j] - Mm[j][i]) for i in range(6) for j in range(6)
+            ),
+            0.0,
+            tol=1e-6,
+        ),
+    )
+    # 刚性 FK 与 Motor FK 一致 (动力学热路径 = 等价矩阵形式)
+    w_rig = z1d.rigid_fk(qdyn)
+    w_mot = z1d.robot.fk_list(qdyn)
+    dmax = 0.0
+    for lnk in z1d.links:
+        Rm, t = w_rig[lnk.name]
+        m = w_mot[lnk.name].to_matrix()
+        for i in range(3):
+            for j in range(3):
+                dmax = max(dmax, abs(Rm[i][j] - m[i][j]))
+            dmax = max(dmax, abs(t[i] - m[i][3]))
+    check("dyn rigid fk == motor fk", close(dmax, 0.0, tol=1e-5))
+    # forward ∘ inverse == qdd (动力学自洽)
+    qdd_ref = [0.5, 0.1, -0.3, 0.2, 0.4, -0.2]
+    tau = z1d.inverse_dynamics(
+        qdyn, [0.3, -0.2, 0.1, 0.4, -0.1, 0.2], qdd_ref
+    )
+    qdd_rt = z1d.forward_dynamics(
+        qdyn, [0.3, -0.2, 0.1, 0.4, -0.1, 0.2], tau
+    )
+    check(
+        "dyn forward∘inverse",
+        close(max(abs(a - b) for a, b in zip(qdd_ref, qdd_rt)), 0.0, tol=1e-6),
+    )
+
+    # ── 浮动基座 + 焊接 (Drake floating-base / WeldFrames) ─────
+    zf = DynamicsPlant(load_robot(MODEL_CRDF), floating_base=True)
+    check("float nq", zf.nq == 12)
+    # 全焊接: 整机 = 刚体 (nq=6), 自由落体精确 (基座 z = 1 − ½gt², 无旋转)
+    zw = DynamicsPlant(
+        load_robot(MODEL_CRDF),
+        floating_base=True,
+        weld=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+    )
+    check("weld rigid nq", zw.nq == 6)
+    qw, qdw = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [0.0] * 6
+    for _ in range(500):
+        qw, qdw = zw.integrate(qw, qdw, [0.0] * 6, 1e-3)
+    # 半隐式欧拉离散解: z = 1 − g·dt²·Σk = 1 − 9.81e-6·(500·501/2), vz = −g·t
+    z_discrete = 1.0 - 9.81e-6 * (500 * 501 / 2)
+    check(
+        "weld rigid fall z",
+        close(qw[2], z_discrete, tol=1e-3)
+        and close(qdw[2], -9.81 * 0.5, tol=1e-3),
+    )
+    check(
+        "weld rigid no rotation",
+        max(abs(v) for v in qdw[3:6]) < 1e-3,
+    )
+    # 注: 浮动基座 + 自由臂在腕部小惯量 (1.8e-4) 处半隐式欧拉数值脆弱
+    # (自由臂甩动发散) —— 实机场景用 weld 刚化或需要 LCP 接触求解器。
+
+    # ── 接触 (ContactModel, 惩罚法 + 库仑摩擦) ─────────────────
+    from cga.contact import ContactModel
+
+    _DYN_PEND_C = """
+robot:
+  name: pnd
+  base: base
+  links:
+    - name: base
+    - name: rod
+      inertial:
+        mass: 1.5
+        com: [0, 0, 0.3]
+        inertia: {ixx: 0.05, iyy: 0.05, izz: 0.01}
+      geometry:
+        - blade: cylinder
+          radius: 0.06
+          length: 0.12
+          origin: {xyz: [0, 0, 0.54]}
+          role: [collision]
+  joints:
+    - name: j1
+      type: revolute
+      parent: base
+      child: rod
+      origin: {xyz: [0, 0, 0.5]}
+      axis: [0, 1, 0]
+"""
+    pc = DynamicsPlant(load_robot(_DYN_PEND_C))
+    cm = ContactModel()
+    qc, qdc = [0.5], [0.0]
+    for _ in range(2000):  # 4s: 摆落下并静止在接触角
+        qc, qdc = pc.integrate(qc, qdc, cm.generalized_forces(pc, qc, qdc), 2e-3)
+    q_touch = math.acos(-0.5 / 0.6)
+    fn = cm.forces(pc, qc, qdc)[0][2]
+    check("contact settle angle", close(qc[0], q_touch, tol=1e-2))
+    check(
+        "contact force equilibrium",
+        close(fn, 1.5 * 9.81 * 0.3 / 0.6, tol=1e-1),
+    )
+
+    # ── systems 框架 (Diagram/ports: 轨迹→PD→plant→F/T 图组合) ─
+    from cga.sensors import ForceTorqueSensor
+    from cga.systems import (
+        Diagram,
+        DynamicsSystem,
+        FtsSystem,
+        PidController,
+        Simulator,
+        TrajectorySource,
+    )
+
+    _diag = Diagram()
+    _i_traj = _diag.add(TrajectorySource([0.1], [0.9], 1.0))
+    _i_pid = _diag.add(PidController(pc, kp=100.0, kd=20.0))
+    _i_plant = _diag.add(DynamicsSystem(pc, q=[0.1], qd=[0.0]))
+    _i_fts = _diag.add(FtsSystem(ForceTorqueSensor(pc, "rod")))
+    _diag.connect(_i_traj, "q_des", _i_pid, "q_des")
+    _diag.connect(_i_plant, "state", _i_pid, "state")
+    _diag.connect(_i_pid, "tau", _i_plant, "tau")
+    _diag.connect(_i_plant, "state", _i_fts, "state")
+    _diag.connect(_i_plant, "qdd", _i_fts, "qdd")
+    _sim = Simulator(_diag, dt=2e-3, trace_ports=[(_i_fts, "fts"), (_i_plant, "state")])
+    _traces = _sim.advance_to(3.0)
+    _q_end = _traces[f"{_i_plant}:state"][-1][0][0]
+    _f_end = _traces[f"{_i_fts}:fts"][-1][0]
+    _fm = (_f_end[0] ** 2 + _f_end[1] ** 2 + _f_end[2] ** 2) ** 0.5
+    check("diagram closed loop target", close(_q_end, 0.9, tol=1e-2))
+    check("diagram fts = weight", close(_fm, 1.5 * 9.81, tol=1e-2))
+
+    # ── 传感器/驱动器 (sensors.py: F/T / 驱动器 / 关节状态) ────
+    from cga.sensors import ForceTorqueSensor, JointActuator, JointStateSensor
+
+    fts_rod = ForceTorqueSensor(pc, "rod", name="rod_fts")
+    f_rest, _ = fts_rod.read([0.9], [0.0], [0.0])
+    fmag = (f_rest[0] ** 2 + f_rest[1] ** 2 + f_rest[2] ** 2) ** 0.5
+    check("fts magnitude = subtree weight", close(fmag, 1.5 * 9.81, tol=1e-3))
+    act = JointActuator(pc, "j1", effort_limit=5.0)
+    check("actuator saturation", close(act.saturate([10.0])[0], 5.0, tol=1e-9))
+    sts = JointStateSensor(pc, "j1")
+    check("joint state sensor", sts.read([0.7], [1.2], [3.0]) == (0.7, 1.2, 3.0))
+
+    # ── prismatic 关节 (动力学: FK 平移 + 雅可比平动列 + RNEA) ─
+    _PRISM_V = """
+robot:
+  name: pv
+  base: base
+  links:
+    - name: base
+    - name: mass
+      inertial:
+        {mass: 2.0, com: [0, 0, 0.1], inertia: {ixx: 0.01, iyy: 0.01, izz: 0.01}}
+  joints:
+    - name: s1
+      type: prismatic
+      parent: base
+      child: mass
+      axis: [0, 0, 1]
+"""
+    _PRISM_H = _PRISM_V.replace("axis: [0, 0, 1]", "axis: [1, 0, 0]")
+    pv = DynamicsPlant(load_robot(_PRISM_V))
+    check(
+        "prismatic vertical fall",
+        close(pv.forward_dynamics([0.0], [0.0], [0.0])[0], -9.81, tol=1e-3),
+    )
+    ph = DynamicsPlant(load_robot(_PRISM_H))
+    check(
+        "prismatic horizontal no gravity",
+        close(ph.forward_dynamics([0.0], [0.0], [0.0])[0], 0.0, tol=1e-6),
+    )
+    _PRISM_TEL = """
+robot:
+  name: tel
+  base: base
+  links:
+    - name: base
+    - name: turret
+      inertial:
+        {mass: 3.0, com: [0, 0, 0.15], inertia: {ixx: 0.05, iyy: 0.05, izz: 0.04}}
+    - name: boom
+      inertial:
+        {mass: 1.5, com: [0.2, 0, 0.3], inertia: {ixx: 0.01, iyy: 0.02, izz: 0.02}}
+  joints:
+    - name: yaw
+      type: revolute
+      parent: base
+      child: turret
+      origin: {xyz: [0, 0, 0]}
+      axis: [0, 0, 1]
+    - name: slide
+      type: prismatic
+      parent: turret
+      child: boom
+      origin: {xyz: [0, 0, 0.3]}
+      axis: [1, 0, 0]
+"""
+    ptel = DynamicsPlant(load_robot(_PRISM_TEL))
+    qa_, qda_ = [0.3, 0.1], [2.0, 0.8]
+    Mt = ptel.mass_matrix(qa_)
+    Ct = ptel.coriolis_forces(qa_, qda_)
+    gt = ptel.gravity_forces(qa_)
+    idt = ptel.inverse_dynamics(qa_, qda_, [1.5, -0.5])
+    check(
+        "prismatic ID consistent",
+        max(
+            abs(
+                idt[i]
+                - (Mt[i][0] * 1.5 + Mt[i][1] * (-0.5) + Ct[i] + gt[i])
+            )
+            for i in range(2)
+        )
+        < 1e-6,
+    )
+    et0 = ptel.kinetic_energy(qa_, qda_) + ptel.potential_energy(qa_)
+    qe_, qde_ = list(qa_), list(qda_)
+    for _ in range(500):
+        qe_, qde_ = ptel.integrate_rk4(qe_, qde_, [0.0] * 2, 1e-3)
+    et1 = ptel.kinetic_energy(qe_, qde_) + ptel.potential_energy(qe_)
+    check("prismatic energy", abs(et1 - et0) / et0 < 0.01)
+
+    # ── 积分器 (RK4 / 变步长 DP45) ───────────────────────────
+    q_r, qd_r = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [0.0] * 6
+    for _ in range(50):  # 0.5s @ dt=1e-2
+        q_r, qd_r = zw.integrate_rk4(q_r, qd_r, [0.0] * 6, 1e-2)
+    z_free = 1.0 - 0.5 * 9.81 * 0.25
+    check("rk4 free fall exact", close(q_r[2], z_free, tol=1e-6))
+    q_a, qd_a = zw.integrate_adaptive(
+        [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [0.0] * 6, [0.0] * 6, 1.0
+    )
+    check("adaptive free fall", close(q_a[2], 1.0 - 4.905, tol=1e-3))
+
+    # ── 隐式接触 (integrate_implicit: 速度脉冲 + 位置修正) ─────
+    # 摆锤隐式法静止角 = 惩罚法相同 (回归)
+    qp, qdp = [0.5], [0.0]
+    for _ in range(3000):
+        qp, qdp = cm.integrate_implicit(pc, qp, qdp, [0.0], 2e-3)
+    check("implicit pendulum settle", close(qp[0], q_touch, tol=0.02))
+    # 焊接刚体坠落 4s: 隐式接触稳定 (惩罚法撞击发散)
+    zd = DynamicsPlant(
+        load_robot(MODEL_CRDF),
+        floating_base=True,
+        weld=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+    )
+    qd_, qdd_ = [0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0], [0.0] * 6
+    drop_ok = True
+    for _ in range(2000):
+        qd_, qdd_ = cm.integrate_implicit(zd, qd_, qdd_, [0.0] * 6, 2e-3)
+        if not all(math.isfinite(v) for v in qd_):
+            drop_ok = False
+            break
+    check("implicit drop stable", drop_ok and max(abs(v) for v in qdd_) < 1e6)
+    # 自由自旋体: 能量守恒 (惯性张量旋转 R·I·Rᵀ 正确性)
+    qs, qds = [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0, 3.0, 0.0]
+    e0 = zd.kinetic_energy(qs, qds) + zd.potential_energy(qs)
+    spin_ok = True
+    for _ in range(1000):
+        qs, qds = zd.integrate(qs, qds, [0.0] * 6, 2e-3)
+        if not all(math.isfinite(v) for v in qs):
+            spin_ok = False
+            break
+    e1 = zd.kinetic_energy(qs, qds) + zd.potential_energy(qs)
+    check("float spin energy", spin_ok and abs(e1 - e0) / e0 < 0.1)
 
     # ── OOP 封装: 对偶球/平面提取走公开访问器 (motor 共轭后类型降级) ──
     s_cam = Motor.translator((1, 2, 3)).apply(Sphere((0, 0, 0), 0.5))

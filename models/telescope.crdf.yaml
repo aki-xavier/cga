@@ -1,0 +1,59 @@
+# 伸缩臂 (prismatic 关节 demo): 转台 (revolute yaw) + 平动吊臂 (prismatic)
+# 动态测试: 竖直滑动自由下滑 q̈=−g / 水平无重力作用 / ID 自洽 / 能量守恒
+robot:
+  name: telescope
+  base: base
+  materials:
+    - name: dark
+      color: [0.15, 0.17, 0.2, 1.0]
+    - name: white
+      color: [0.92, 0.93, 0.95, 1.0]
+  links:
+    - name: base
+      geometry:
+        - blade: cylinder
+          radius: 0.06
+          length: 0.12
+          origin: {xyz: [0, 0, 0.06]}
+          role: [visual, collision]
+          material: dark
+    - name: turret
+      inertial:
+        mass: 2.5
+        com: [0, 0, 0.18]
+        inertia: {ixx: 0.03, iyy: 0.03, izz: 0.02}
+      geometry:
+        - blade: cylinder
+          radius: 0.05
+          length: 0.36
+          origin: {xyz: [0, 0, 0.18]}
+          role: [visual, collision]
+          material: white
+    - name: boom
+      inertial:
+        mass: 1.2
+        com: [0.2, 0, 0.36]
+        inertia: {ixx: 0.01, iyy: 0.02, izz: 0.01}
+      geometry:
+        - blade: cylinder
+          radius: 0.025
+          length: 0.4
+          origin: {xyz: [0.2, 0, 0.36]}
+          role: [visual, collision]
+          material: dark
+  joints:
+    - name: yaw
+      type: revolute
+      parent: base
+      child: turret
+      origin: {xyz: [0, 0, 0]}
+      axis: [0, 0, 1]
+      limit: {lower: -3.14, upper: 3.14}
+    - name: slide
+      type: prismatic
+      parent: turret
+      child: boom
+      origin: {xyz: [0, 0, 0.36]}
+      axis: [1, 0, 0]
+      limit: {lower: 0, upper: 0.4}
+      damping: 0.5
