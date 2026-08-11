@@ -297,10 +297,12 @@ class DynamicsPlant:
         return v
 
     def gravity_forces(self, q: list[float]) -> list[float]:
-        """广义重力 g(q): τ_j = Σ_i m_i·g·J_v_ij[z] (解析, 用 M 同款雅可比)。
+        """重力广义力 Q(q) —— 对齐 Drake CalcGravityGeneralizedForces。
 
-        重力对 link i 的广义力 = J_v_ijᵀ·(0,0,m_i·g) = m_i·g·J_v_ij[z];
-        J_v_ij 在子树内非零, 零额外 FK (与 mass_matrix 共用一次 FK)。"""
+        物理重力广义力 = −∂V/∂q = −Σ m·g·J_v[z]。EOM 形式:
+        M·q̈ + C·q̇ − Q = τ (forward_dynamics 里是 M⁻¹(τ − C + Q))。
+        曾返回 +∂V/∂q (拉格朗日支撑力矩), 与 Drake 符号相反 ——
+        由 pydrake 1.55 交叉校验发现并修复。"""
         kin = self.jacobians(q)
         n = self.nq
         g = [0.0] * n
@@ -309,7 +311,7 @@ class DynamicsPlant:
             for jj in range(n):
                 row = jv[jj]
                 if row is not None:
-                    g[jj] += lnk.mass * GRAVITY * row[2]
+                    g[jj] -= lnk.mass * GRAVITY * row[2]
         return g
 
     # ── Coriolis/离心 (RNEA, 精确单遍) ──────────────────────────
@@ -326,9 +328,8 @@ class DynamicsPlant:
         """
         n = self.nq
         if not self.floating:
-            tau, _ = self._rne_id(q, qd, [0.0] * n)
-            g = self.gravity_forces(q)
-            return [tau[i] - g[i] for i in range(n)]
+            tau, _ = self._rne_id(q, qd, [0.0] * n, gravity=False)
+            return tau  # 纯 Coriolis (RNEA 无重力等效加速度)
         h = 1e-4
         qp = self.advance_pose(q, qd, h)
         qm = self.advance_pose(q, qd, -h)
@@ -353,7 +354,11 @@ class DynamicsPlant:
         return self._jidx[name], self._jidxq[name]
 
     def _rne_id(
-        self, q: list[float], qd: list[float], qdd: list[float]
+        self,
+        q: list[float],
+        qd: list[float],
+        qdd: list[float],
+        gravity: bool = True,
     ) -> tuple[list[float], dict]:
         """递归牛顿-欧拉逆向动力学: τ = M·q̈ + C·q̇ + g (世界坐标)。
 
@@ -395,8 +400,8 @@ class DynamicsPlant:
         w = {base: w0}
         wd = {base: (0.0, 0.0, 0.0)}  # α_0 = 0 (q̈_base = 0)
         # 基座线加速度 = 重力等效 (0,0,+g): 基座以 g 向上加速 ≡ 重力向下
-        # (标准 RNEA 技巧, 不显式加重力外力; 符号验证: 摆锤得平衡力矩)
-        a = {base: (0.0, 0.0, GRAVITY)}
+        # (标准 RNEA 技巧, 不显式加重力外力); gravity=False 时纯 Coriolis
+        a = {base: (0.0, 0.0, GRAVITY) if gravity else (0.0, 0.0, 0.0)}
         # 正向: 速度/加速度传播
         ac = {}
         if base in mass:
@@ -495,19 +500,21 @@ class DynamicsPlant:
     # ── Drake 风格 API ──────────────────────────────────────────
 
     def inverse_dynamics(self, q, qd, qdd) -> list[float]:
-        """τ = M·q̈ + C·q̇ + g。"""
+        """τ = M·q̈ + C·q̇ − Q (Q = gravity_forces, 对齐 Drake
+        CalcInverseDynamics)。"""
         M = self.mass_matrix(q)
         c = self.coriolis_forces(q, qd)
         g = self.gravity_forces(q)
         n = self.nq
-        return [sum(M[i][j] * qdd[j] for j in range(n)) + c[i] + g[i] for i in range(n)]
+        return [sum(M[i][j] * qdd[j] for j in range(n)) + c[i] - g[i] for i in range(n)]
 
     def forward_dynamics(self, q, qd, tau) -> list[float]:
-        """q̈ = M⁻¹(τ − C·q̇ − g)。"""
+        """q̈ = M⁻¹(τ − C·q̇ + Q), Q = gravity_forces (对齐 Drake
+        CalcForwardDynamics 的 EOM: M·q̈ + C·q̇ − Q = τ)。"""
         n = self.nq
         c = self.coriolis_forces(q, qd)
         g = self.gravity_forces(q)
-        rhs = [tau[i] - c[i] - g[i] for i in range(n)]
+        rhs = [tau[i] - c[i] + g[i] for i in range(n)]
         M = self.mass_matrix(q)
         return solve_linear(M, rhs)
 

@@ -582,7 +582,7 @@ robot:
         "dyn pendulum gravity",
         close(
             pend.gravity_forces([0.7])[0],
-            -2.0 * 9.81 * 0.5 * math.sin(0.7),
+            2.0 * 9.81 * 0.5 * math.sin(0.7),  # 物理重力广义力 (Drake 约定)
             tol=1e-3,
         ),
     )
@@ -621,11 +621,11 @@ robot:
 """
     dbl = DynamicsPlant(load_robot(_DYN_DOUBLE))
     g = dbl.gravity_forces([0.3, 0.2])
-    t1 = -(
+    t1 = (
         9.81 * (1.0 * 0.2 + 0.5 * 0.4) * math.sin(0.3)
         + 9.81 * 0.5 * 0.15 * math.sin(0.5)
     )
-    t2 = -9.81 * 0.5 * 0.15 * math.sin(0.5)
+    t2 = 9.81 * 0.5 * 0.15 * math.sin(0.5)
     check("dyn double gravity", close(g[0], t1, tol=1e-3) and close(g[1], t2, tol=1e-3))
 
     z1d = DynamicsPlant(load_robot(MODEL_CRDF))

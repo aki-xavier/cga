@@ -46,7 +46,7 @@ def simulate(plant: DynamicsPlant) -> list[list[float]]:
         M = plant.mass_matrix(q)
         e = [q_des[i] - q[i] for i in range(n)]
         acc = [KP * e[i] - KD * qd[i] for i in range(n)]
-        tau = [g[i] + sum(M[i][j] * acc[j] for j in range(n)) for i in range(n)]
+        tau = [sum(M[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
         q, qd = plant.integrate(q, qd, tau, DT)
         step += 1
     frames.append(list(q))

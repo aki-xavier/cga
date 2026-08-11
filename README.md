@@ -508,6 +508,22 @@ plant → 基座/腕部 F/T, 摆臂过程 F/T 读数正确 (基座 51.6N / 腕�
 
 ![systems 仿真](docs/systems_z1.gif)
 
+## 与 Drake 的一对一校验
+
+同一机器人在真 pydrake 1.55 (simu 项目 venv) 与 cga 上逐项数值对比,
+**26/26 项一致** (M / 重力 / bias / 逆向·正向动力学 / 能量 / 雅可比 /
+FK / 限位, 伸缩臂 R+P 与 Z1 6R 双机器人):
+
+```bash
+cd /Users/aki/code/simu && .venv/bin/python /Users/aki/code/cga/validate_drake.py
+```
+
+交叉校验发现并修复一处**真实差异**: `gravity_forces` 曾返回拉格朗日
+支撑力矩 (+∂V/∂q), 与 Drake 的 `CalcGravityGeneralizedForces` (物理
+重力广义力 −∂V/∂q) 符号相反 —— 已翻转对齐 (EOM 改 M·q̈ + C·q̇ − Q = τ,
+物理行为不变)。还确认 Drake 的 `CalcBiasTerm` 不含重力 (纯 C·v, 与
+cga 的 coriolis_forces 一致)。完整映射见 [docs/drake_api_map.md](docs/drake_api_map.md)。
+
 ## Drake 移植总览 (Phase 1-7)
 
 | 能力 | 状态 | 验证 |

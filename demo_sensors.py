@@ -95,7 +95,7 @@ def main() -> None:
             Mm = plant.mass_matrix(q)
             e = [q_des[i] - q[i] for i in range(n)]
             acc = [KP * e[i] - KD * qd[i] for i in range(n)]
-            tau = [g[i] + sum(Mm[i][j] * acc[j] for j in range(n)) for i in range(n)]
+            tau = [sum(Mm[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
             qdd = plant.forward_dynamics(q, qd, tau)
             f_b, _ = fts_base.read(q, qd, qdd)
             f_w, _ = fts_wrist.read(q, qd, qdd)
@@ -106,7 +106,7 @@ def main() -> None:
             Mm = plant.mass_matrix(q)
             e = [q_des[i] - q[i] for i in range(n)]
             acc = [KP * e[i] - KD * qd[i] for i in range(n)]
-            tau = [g[i] + sum(Mm[i][j] * acc[j] for j in range(n)) for i in range(n)]
+            tau = [sum(Mm[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
         q, qd = plant.integrate(q, qd, tau, DT)
         step += 1
     frames.append(list(q))

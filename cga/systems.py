@@ -129,12 +129,12 @@ class PidController(System):
             e_int = [0.0] * n
         else:
             e_int = state
-        g = self.plant.gravity_forces(q)
+        g = self.plant.gravity_forces(q)  # 物理重力广义力 Q
         M = self.plant.mass_matrix(q)
         e = [q_des[i] - q[i] for i in range(n)]
         e_int = [e_int[i] + e[i] * dt for i in range(n)]
         acc = [self.kp * e[i] + self.ki * e_int[i] - self.kd * qd[i] for i in range(n)]
-        tau = [g[i] + sum(M[i][j] * acc[j] for j in range(n)) for i in range(n)]
+        tau = [sum(M[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
         return e_int, {"tau": tau}
 
 
