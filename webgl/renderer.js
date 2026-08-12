@@ -19,7 +19,7 @@ uniform float u_fx, u_fy, u_cx, u_cy;
 uniform int u_count;
 uniform int u_type[${MAX_PRIMS}];
 uniform vec4 u_p[${MAX_PRIMS * 3}];   // 每图元 12 floats (3×vec4)
-uniform vec3 u_color[${MAX_PRIMS}];
+uniform vec4 u_color[${MAX_PRIMS}];  // rgb + alpha (a<1 = 半透明)
 uniform vec3 u_bg, u_lightDir, u_lightPos, u_ambient;
 uniform float u_lightInt, u_pointInt;
 out vec4 fragColor;
@@ -121,6 +121,30 @@ float rayCircle(vec3 o, vec3 d, vec3 c, vec3 n, float r, out vec3 nn) {
   return t;
 }
 
+// Blinn-Phong 明暗 (不透明与半透明命中共用)
+vec3 shade(vec3 base, vec3 n, vec3 p, vec3 v) {
+  vec3 diff = base * 0.9;          // roughness 0.45 → k=0.55, 漫反射 0.9
+  vec3 spec = vec3(0.1) + base * 0.1;
+  float ndv = max(dot(n, v), 0.0);
+  float expo = 64.0;
+  vec3 outC = u_ambient * diff;
+  // 平行光
+  float nl = max(dot(n, u_lightDir), 0.0);
+  vec3 h = normalize(u_lightDir + v);
+  float sp = pow(max(dot(n, h), 0.0), expo);
+  outC += u_lightInt * (diff * nl + spec * sp * ndv);
+  // 点光
+  vec3 lv = u_lightPos - p;
+  float dist2 = dot(lv, lv);
+  vec3 ld = lv / sqrt(dist2);
+  float atten = u_pointInt / (1.0 + dist2 / 8.0);
+  float nl2 = max(dot(n, ld), 0.0);
+  vec3 h2 = normalize(ld + v);
+  float sp2 = pow(max(dot(n, h2), 0.0), expo);
+  outC += atten * (diff * nl2 + spec * sp2 * ndv);
+  return outC;
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy;
   // gl_FragCoord.y 从底部起算, 而相机空间 Y 向下、图像行从顶部起算 →
@@ -129,6 +153,12 @@ void main() {
   vec3 o = vec3(0.0);
   float tmin = 1e30;
   vec3 n = vec3(0.0), col = u_bg;
+  // 半透明命中缓存: alpha<1 的命中逐个收集, 渲染后按 t 排序 front-to-back 合成
+  // ponytail: 只取每图元前表面 (近根), 不合成背面 —— 玻璃球类薄壁近似
+  float hitT[${MAX_PRIMS}];
+  vec3 hitN[${MAX_PRIMS}];
+  vec4 hitC[${MAX_PRIMS}];
+  int nHit = 0;
   for (int i = 0; i < ${MAX_PRIMS}; i++) {
     if (i >= u_count) break;
     vec4 a = u_p[i * 3], b = u_p[i * 3 + 1], cc = u_p[i * 3 + 2];
@@ -142,33 +172,37 @@ void main() {
       tn = rayBox(o, d, a.xyz, b.xyz, cc.xyz, az, vec3(a.w, b.w, cc.w), nn);
     }
     else if (u_type[i] == 4) tn = rayCircle(o, d, a.xyz, b.xyz, a.w, nn);
-    if (tn > 0.0 && tn < tmin) { tmin = tn; n = nn; col = u_color[i]; }
+    if (tn > 0.0) {
+      vec4 ci = u_color[i];
+      if (ci.a < 0.999) {
+        hitT[nHit] = tn; hitN[nHit] = nn; hitC[nHit] = ci; nHit++;
+      } else if (tn < tmin) { tmin = tn; n = nn; col = ci.rgb; }
+    }
   }
-  if (tmin < 1e29) {
-    vec3 v = -d;
-    vec3 p = o + tmin * d;
-    vec3 diff = col * 0.9;           // roughness 0.45 → k=0.55, 漫反射 0.9
-    vec3 spec = vec3(0.1) + col * 0.1;
-    float ndv = max(dot(n, v), 0.0);
-    float expo = 64.0;
-    vec3 outC = u_ambient * diff;
-    // 平行光
-    float nl = max(dot(n, u_lightDir), 0.0);
-    vec3 h = normalize(u_lightDir + v);
-    float sp = pow(max(dot(n, h), 0.0), expo);
-    outC += u_lightInt * (diff * nl + spec * sp * ndv);
-    // 点光
-    vec3 lv = u_lightPos - p;
-    float dist2 = dot(lv, lv);
-    vec3 ld = lv / sqrt(dist2);
-    float atten = u_pointInt / (1.0 + dist2 / 8.0);
-    float nl2 = max(dot(n, ld), 0.0);
-    vec3 h2 = normalize(ld + v);
-    float sp2 = pow(max(dot(n, h2), 0.0), expo);
-    outC += atten * (diff * nl2 + spec * sp2 * ndv);
-    col = outC;
+  // 不透明底 (最近不透明面, 无则背景)
+  vec3 base = (tmin < 1e29) ? shade(col, n, o + tmin * d, -d) : u_bg;
+  if (nHit > 0) {
+    // 插入排序: t 升序 (nHit ≤ MAX_PRIMS, 每像素一次)
+    for (int s = 1; s < nHit; s++) {
+      float tk = hitT[s]; vec3 nk = hitN[s]; vec4 ck = hitC[s];
+      int e = s - 1;
+      while (e >= 0 && hitT[e] > tk) {
+        hitT[e + 1] = hitT[e]; hitN[e + 1] = hitN[e]; hitC[e + 1] = hitC[e]; e--;
+      }
+      hitT[e + 1] = tk; hitN[e + 1] = nk; hitC[e + 1] = ck;
+    }
+    // front-to-back "over" 合成; 排在不透明底之后的命中被遮挡
+    float trans = 1.0;
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < nHit; k++) {
+      if (hitT[k] >= tmin) break;
+      float al = hitC[k].a;
+      acc += trans * al * shade(hitC[k].rgb, hitN[k], o + hitT[k] * d, -d);
+      trans *= 1.0 - al;
+    }
+    base = acc + trans * base;
   }
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(base, 1.0);
 }`;
 
 export class CgaRenderer {
@@ -247,8 +281,8 @@ export class CgaRenderer {
   _primitives(camRT) {
     const type = new Int32Array(MAX_PRIMS);
     const p = new Float32Array(MAX_PRIMS * 12);
-    const color = new Float32Array(MAX_PRIMS * 3);
-    const mats = new Map(this.model.materials.map((m) => [m.name, m.color.slice(0, 3)]));
+    const color = new Float32Array(MAX_PRIMS * 4);
+    const mats = new Map(this.model.materials.map((m) => [m.name, m.color]));
     const world = fk(this.model, this.q);
     let n = 0;
     for (const link of this.model.links) {
@@ -264,7 +298,8 @@ export class CgaRenderer {
         const base = n * 12;
         type[n] = cp.type;
         for (let k = 0; k < 12; k++) p[base + k] = cp.data[k];
-        color[n * 3] = c[0]; color[n * 3 + 1] = c[1]; color[n * 3 + 2] = c[2];
+        color[n * 4] = c[0]; color[n * 4 + 1] = c[1]; color[n * 4 + 2] = c[2];
+        color[n * 4 + 3] = c[3] ?? 1.0;
         n++;
       }
     }
@@ -297,7 +332,7 @@ export class CgaRenderer {
     gl.uniform1i(u("u_count"), prims.count);
     gl.uniform1iv(u("u_type"), prims.type);
     gl.uniform4fv(u("u_p"), prims.p);
-    gl.uniform3fv(u("u_color"), prims.color);
+    gl.uniform4fv(u("u_color"), prims.color);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 

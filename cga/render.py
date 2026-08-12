@@ -22,6 +22,11 @@
 
 着色不装物理: 管线无 albedo, 用 region 色盘平涂 + 固定方向
 Lambert 几何明暗; rgb 只作可视化, 不作光学声明。
+
+半透明: RenderPrimitive.alpha < 1 时, 每像素把全部命中按深度升序
+front-to-back "over" 合成 (不透明面 alpha=1 之后透射率归零, 遮挡
+自动成立)。只取每图元前表面 (薄壳近似, 不合成背面)。depth 语义
+不变: 始终最近表面, 不论透明与否。
 """
 
 from collections.abc import Sequence
@@ -47,6 +52,7 @@ class RenderPrimitive(NamedTuple):
     kind: str  # "plane" / "sphere"
     blade: Multivector  # 米制 Plane/Sphere blade
     region: int = 0  # 区域 id (掩码模式查表用)
+    alpha: float = 1.0  # <1 = 半透明 (front-to-back 合成, 只取前表面)
 
 
 class RenderResult(NamedTuple):
@@ -99,6 +105,11 @@ def render_scene(
     fx, fy, cx, cy = K
     assert fx > 0 and fy > 0, f"无效焦距 {K}"
     H, W = shape
+    if not prims:
+        return RenderResult(
+            mx.zeros((H, W), dtype=mx.float32),
+            mx.zeros((H, W, 3), dtype=mx.uint8),
+        )
     yy, xx = mx.meshgrid(
         mx.arange(H, dtype=mx.float32), mx.arange(W, dtype=mx.float32),
         indexing="ij",
@@ -113,7 +124,9 @@ def render_scene(
     light = mx.array(_LIGHT, dtype=mx.float32)
     light = light / mx.linalg.norm(light)
     best = mx.full((H, W), float("inf"), dtype=mx.float32)
-    best_rgb = mx.zeros((H, W, 3), dtype=mx.uint8)
+    hits_t: list[mx.array] = []
+    hits_rgb: list[mx.array] = []
+    hits_a: list[mx.array] = []
     for p, b in zip(prims, cams, strict=True):
         if regions is None:
             sel = mx.ones((H, W), dtype=mx.bool_)
@@ -164,17 +177,30 @@ def render_scene(
             )
         t = mx.where((t > near) & (t < far), t, float("inf"))
         t = mx.where(sel, t, float("inf"))
-        take = t < best
-        best = mx.where(take, t, best)
+        best = mx.minimum(best, t)
         # region 色盘 + Lambert 明暗
         col = mx.array(_PALETTE[p.region % len(_PALETTE)], dtype=mx.float32)
         sh = mx.maximum(mx.sum(nrm * light, axis=-1), 0.0)
-        rgb_p = (col[None, None, :] * (0.35 + 0.65 * sh[..., None]))
-        best_rgb = mx.where(
-            take[..., None], rgb_p.astype(mx.uint8), best_rgb
-        )
+        rgb_p = col[None, None, :] * (0.35 + 0.65 * sh[..., None])
+        # 无效命中 alpha=0 (不参与合成; 垃圾 rgb 归零防 0×inf=NaN)
+        valid = (t < float("inf"))[..., None]
+        hits_t.append(t)
+        hits_rgb.append(mx.where(valid, rgb_p, 0.0))
+        hits_a.append(mx.where(valid[..., 0], p.alpha, 0.0))
+    # 每像素按深度升序, front-to-back "over" 合成:
+    # 不透明面 (alpha=1) 之后透射率归零 → 被遮挡命中自动消隐
+    ts = mx.stack(hits_t)
+    order = mx.argsort(ts, axis=0)
+    rgbs = mx.take_along_axis(mx.stack(hits_rgb), order[..., None], axis=0)
+    alphas = mx.take_along_axis(mx.stack(hits_a), order, axis=0)
+    acc = mx.zeros((H, W, 3), dtype=mx.float32)
+    trans = mx.ones((H, W), dtype=mx.float32)
+    for i in range(len(prims)):
+        a_i = alphas[i]
+        acc = acc + (trans * a_i)[..., None] * rgbs[i]
+        trans = trans * (1.0 - a_i)
     depth = mx.where(best < far, best, 0.0)
-    return RenderResult(depth, best_rgb)
+    return RenderResult(depth, acc.astype(mx.uint8))
 
 
 
@@ -259,5 +285,36 @@ if __name__ == "__main__":
     assert float(out4.depth[48, 10]) == 2.0, float(out4.depth[48, 10])
     print("  ok  masked clip: 无图元区域深度 0 / 图元区域 2.0")
     _selftest_cylinder()
-    print("cga.render: 6 项自检 ✓")
+
+    # 半透明: 球 (z=2, r=0.5) 在墙 (z=4) 前, alpha 扫描
+    wall = RenderPrimitive("plane", plane_far, 1)
+    ball = RenderPrimitive("sphere", sphere_near, 2)
+    rgb_wall = render_scene([wall], K, (H, W)).rgb[48, 64]
+    rgb_ball = render_scene([ball, wall], K, (H, W)).rgb[48, 64]
+    # alpha=0 → 与纯墙渲染逐位一致; alpha=1 → 与不透明球一致
+    g0 = render_scene(
+        [RenderPrimitive("sphere", sphere_near, 2, alpha=0.0), wall], K, (H, W)
+    )
+    assert g0.rgb[48, 64].tolist() == rgb_wall.tolist(), g0.rgb[48, 64].tolist()
+    g1 = render_scene(
+        [RenderPrimitive("sphere", sphere_near, 2, alpha=1.0), wall], K, (H, W)
+    )
+    assert g1.rgb[48, 64].tolist() == rgb_ball.tolist(), g1.rgb[48, 64].tolist()
+    # alpha=0.5 → 中心像素通道级介于两端点之间 (±2 容 uint8 截断)
+    g5 = render_scene(
+        [RenderPrimitive("sphere", sphere_near, 2, alpha=0.5), wall], K, (H, W)
+    )
+    px = g5.rgb[48, 64].astype(mx.float32)
+    lo = mx.minimum(rgb_wall.astype(mx.float32), rgb_ball.astype(mx.float32)) - 2
+    hi = mx.maximum(rgb_wall.astype(mx.float32), rgb_ball.astype(mx.float32)) + 2
+    assert bool(mx.all((px >= lo) & (px <= hi))), (
+        px.tolist(), rgb_wall.tolist(), rgb_ball.tolist(),
+    )
+    # 深度语义不变: 最近表面 (半透明也取前表面 1.5)
+    assert abs(float(g5.depth[48, 64]) - 1.5) < 1e-3, float(g5.depth[48, 64])
+    # 空场景: 全零 (旧行为保持)
+    out_e = render_scene([], K, (H, W))
+    assert float(mx.max(out_e.depth)) == 0.0 and int(mx.max(out_e.rgb)) == 0
+    print("  ok  alpha: 端点退化 / 0.5 混合 / 最近表面深度 / 空场景")
+    print("cga.render: 7 项自检 ✓")
 
