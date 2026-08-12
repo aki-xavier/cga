@@ -3,7 +3,8 @@
 运行: uv run python demo_engine.py [帧数] [输出目录]
 输出: <out>/frame_%03d.png + <out>/orbit.gif
 
-场景: 地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘, 平行光 + 点光 + 环境光。
+场景: 地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘 + 半透明玻璃球,
+平行光 + 点光 + 环境光。
 """
 
 import math
@@ -68,6 +69,12 @@ def build_scene() -> Scene:
             position=(-2.4, 2.2, 0.8),
             rotation_axis=(1, 0, 0),
             rotation_angle=-0.4,
+        ),
+        # 半透明玻璃球: 悬浮前景, 轨道全程与红球/绿盒交叠验证合成
+        Mesh(
+            SphereGeometry(0.8),
+            MeshStandardMaterial(Color(0xAAD4FF), roughness=0.08, opacity=0.4),
+            position=(0.4, 1.5, 2.6),
         ),
         DirectionalLight(intensity=0.38, direction=(0.4, 1.0, 0.35)),  # 主光
         PointLight(intensity=0.7, position=(0, 4, 3.5)),  # 顶面点缀

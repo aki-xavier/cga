@@ -442,7 +442,12 @@ class CircleGeometry(_Geometry):
 
 
 class Material:
-    """材质基类: 着色走多态 shade (子类实现), 渲染循环零 isinstance。"""
+    """材质基类: 着色走多态 shade (子类实现), 渲染循环零 isinstance。
+
+    opacity: <1 = 半透明 (front-to-back "over" 合成, 见 Renderer.render)。
+    """
+
+    opacity = 1.0
 
     def shade(
         self,
@@ -458,8 +463,9 @@ class Material:
 class MeshBasicMaterial(Material):
     """不接光照, 直接输出颜色 (three.js MeshBasicMaterial)。"""
 
-    def __init__(self, color: Color | int = 0xFFFFFF):
+    def __init__(self, color: Color | int = 0xFFFFFF, opacity: float = 1.0):
         self.color = Color(color) if isinstance(color, int) else color
+        self.opacity = float(min(1.0, max(0.0, opacity)))
 
     def shade(
         self,
@@ -489,11 +495,13 @@ class MeshStandardMaterial(Material):
         roughness: float = 0.5,
         metalness: float = 0.0,
         emissive: Color | int = 0x000000,
+        opacity: float = 1.0,
     ):
         self.color = Color(color) if isinstance(color, int) else color
         self.roughness = float(min(1.0, max(0.0, roughness)))
         self.metalness = float(min(1.0, max(0.0, metalness)))
         self.emissive = Color(emissive) if isinstance(emissive, int) else emissive
+        self.opacity = float(min(1.0, max(0.0, opacity)))
 
     def shade(
         self,
@@ -776,18 +784,32 @@ class Renderer:
                 ambient = light
             else:
                 lit.append(light.to_camera(camera.motor))
-        acc = mx.broadcast_to(mx.zeros(3, dtype=mx.float32), (N, 3))
-        miss = mx.full((N,), float("inf"), dtype=mx.float32)
+        # 逐图元收集全部命中 (无效命中 alpha=0, rgb 归零防 NaN 污染合成)
+        hits_t, hits_c, hits_a = [], [], []
         for obj in scene.objects:
             wm = camera.motor.compose(obj.motor())  # 世界→相机 · 局部→世界
             params = obj.geometry.to_camera(wm)
             t, n, mask = obj.geometry.intersect(params, o, self._rays)
-            hit = mx.logical_and(mask, t < miss)
             p = o + t[:, None] * self._rays
             col = obj.material.shade(p, n, self._rays, lit, ambient)
-            acc = mx.where(hit[:, None], col, acc)
-            miss = mx.where(hit, t, miss)
-        rgb = mx.where(mx.isfinite(miss)[:, None], acc, bg)
+            hits_t.append(mx.where(mask, t, float("inf")))
+            hits_c.append(mx.where(mask[:, None], col, 0.0))
+            hits_a.append(mx.where(mask, obj.material.opacity, 0.0))
+        if hits_t:
+            # 每像素按深度升序 front-to-back "over" 合成 (与 render.py 同数学):
+            # 不透明面 (alpha=1) 之后透射率归零 → 遮挡自动成立, 无需特判
+            order = mx.argsort(mx.stack(hits_t), axis=0)
+            rgbs = mx.take_along_axis(mx.stack(hits_c), order[..., None], axis=0)
+            alphas = mx.take_along_axis(mx.stack(hits_a), order, axis=0)
+            acc = mx.zeros((N, 3), dtype=mx.float32)
+            trans = mx.ones((N, 1), dtype=mx.float32)
+            for i in range(len(hits_t)):
+                a_i = alphas[i][:, None]
+                acc = acc + trans * a_i * rgbs[i]
+                trans = trans * (1.0 - a_i)
+            rgb = acc + trans * bg  # 剩余透射率透出背景
+        else:
+            rgb = bg
         S = self.aa * self.aa
         if S > 1:
             # 超采样平均: (aa²·N, 3) → 每像素 aa² 条样本取均值
