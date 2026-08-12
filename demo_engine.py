@@ -70,10 +70,13 @@ def build_scene() -> Scene:
             rotation_axis=(1, 0, 0),
             rotation_angle=-0.4,
         ),
-        # 半透明玻璃球: 悬浮前景, 轨道全程与红球/绿盒交叠验证合成
+        # 折射玻璃球: 悬浮前景, 轨道全程与红球/绿盒交叠展示透镜弯折
+        # 与边缘 Fresnel 增亮 (opacity≈0 纯玻璃, 本体色只占 8%)
         Mesh(
             SphereGeometry(0.8),
-            MeshStandardMaterial(Color(0xAAD4FF), roughness=0.08, opacity=0.4),
+            MeshStandardMaterial(
+                Color(0xAAD4FF), roughness=0.05, opacity=0.08, ior=1.5
+            ),
             position=(0.4, 1.5, 2.6),
         ),
         DirectionalLight(intensity=0.38, direction=(0.4, 1.0, 0.35)),  # 主光

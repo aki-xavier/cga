@@ -444,10 +444,13 @@ class CircleGeometry(_Geometry):
 class Material:
     """材质基类: 着色走多态 shade (子类实现), 渲染循环零 isinstance。
 
-    opacity: <1 = 半透明 (front-to-back "over" 合成, 见 Renderer.render)。
+    opacity: <1 = 半透明; ior: 折射率 (仅 opacity<1 时生效)。
+    ior=1 → 无弯折无 Fresnel 反射, 退化为纯 alpha 混合;
+    opacity=0 & ior>1 → 纯净玻璃 (只有 Fresnel 反射 + 折射)。
     """
 
     opacity = 1.0
+    ior = 1.5
 
     def shade(
         self,
@@ -496,12 +499,14 @@ class MeshStandardMaterial(Material):
         metalness: float = 0.0,
         emissive: Color | int = 0x000000,
         opacity: float = 1.0,
+        ior: float = 1.5,
     ):
         self.color = Color(color) if isinstance(color, int) else color
         self.roughness = float(min(1.0, max(0.0, roughness)))
         self.metalness = float(min(1.0, max(0.0, metalness)))
         self.emissive = Color(emissive) if isinstance(emissive, int) else emissive
         self.opacity = float(min(1.0, max(0.0, opacity)))
+        self.ior = float(max(1.0, ior))
 
     def shade(
         self,
@@ -728,17 +733,24 @@ class Renderer:
 
     render(scene, camera) -> (H, W, 4) uint8 RGBA (GPU→CPU 每帧回传)。
     每帧: 全部图元共轭进相机空间 (CPU, 图元数 ~10 可忽略) → 批量求交
-    (MLX GPU, 全像素向量化) → Blinn-Phong 着色 → sRGB 近似输出。
+    (MLX GPU, 全像素向量化) → Blinn-Phong 着色。透明面走批量 Whitted
+    递归 (Fresnel 分裂反射/折射两束, max_depth 截断)。
     """
 
-    def __init__(self, width: int = 640, height: int = 480, aa: int = 1):
+    def __init__(
+        self, width: int = 640, height: int = 480, aa: int = 1, max_depth: int = 3
+    ):
         """超采样抗锯齿: aa=1 每像素 1 条射线 (像素中心, 原行为);
-        aa=N → 每像素 N×N 条分层亚像素射线取平均 (SSAA, 射线一次批量)。"""
+        aa=N → 每像素 N×N 条分层亚像素射线取平均 (SSAA, 射线一次批量)。
+        max_depth: 反射/折射递归层数 (仅场景含透明体时才有开销)。"""
         if aa < 1:
             raise ValueError(f"aa must be >= 1, got {aa}")
+        if max_depth < 0:
+            raise ValueError(f"max_depth must be >= 0, got {max_depth}")
         self.width = int(width)
         self.height = int(height)
         self.aa = int(aa)
+        self.max_depth = int(max_depth)
         self._cam = None
         self._rays = None  # (aa²·N, 3) 单位方向, N = H·W, 按相机内参惰性构建
 
@@ -784,32 +796,8 @@ class Renderer:
                 ambient = light
             else:
                 lit.append(light.to_camera(camera.motor))
-        # 逐图元收集全部命中 (无效命中 alpha=0, rgb 归零防 NaN 污染合成)
-        hits_t, hits_c, hits_a = [], [], []
-        for obj in scene.objects:
-            wm = camera.motor.compose(obj.motor())  # 世界→相机 · 局部→世界
-            params = obj.geometry.to_camera(wm)
-            t, n, mask = obj.geometry.intersect(params, o, self._rays)
-            p = o + t[:, None] * self._rays
-            col = obj.material.shade(p, n, self._rays, lit, ambient)
-            hits_t.append(mx.where(mask, t, float("inf")))
-            hits_c.append(mx.where(mask[:, None], col, 0.0))
-            hits_a.append(mx.where(mask, obj.material.opacity, 0.0))
-        if hits_t:
-            # 每像素按深度升序 front-to-back "over" 合成 (与 render.py 同数学):
-            # 不透明面 (alpha=1) 之后透射率归零 → 遮挡自动成立, 无需特判
-            order = mx.argsort(mx.stack(hits_t), axis=0)
-            rgbs = mx.take_along_axis(mx.stack(hits_c), order[..., None], axis=0)
-            alphas = mx.take_along_axis(mx.stack(hits_a), order, axis=0)
-            acc = mx.zeros((N, 3), dtype=mx.float32)
-            trans = mx.ones((N, 1), dtype=mx.float32)
-            for i in range(len(hits_t)):
-                a_i = alphas[i][:, None]
-                acc = acc + trans * a_i * rgbs[i]
-                trans = trans * (1.0 - a_i)
-            rgb = acc + trans * bg  # 剩余透射率透出背景
-        else:
-            rgb = bg
+        in_medium = mx.zeros((N,), dtype=mx.bool_)
+        rgb = self._trace(scene, camera, o, self._rays, lit, ambient, bg, in_medium, 0)
         S = self.aa * self.aa
         if S > 1:
             # 超采样平均: (aa²·N, 3) → 每像素 aa² 条样本取均值
@@ -819,6 +807,109 @@ class Renderer:
         rgba = mx.concatenate([rgb, mx.ones((N // S, 1), dtype=mx.float32)], axis=-1)
         rgba = mx.clip(rgba * 255.0, 0.0, 255.0).astype(mx.uint8)
         return mx.reshape(rgba, (self.height, self.width, 4))
+    def _nearest(
+        self,
+        scene: Scene,
+        camera: PerspectiveCamera,
+        o: mx.array,
+        d: mx.array,
+        lit: Sequence,
+        ambient: AmbientLight | None,
+    ) -> tuple[mx.array, mx.array, mx.array, mx.array, mx.array, mx.array]:
+        """一束射线 vs 场景全部图元 → 每像素最近命中 + 局部着色。
+
+        返回 (hit, t, n, col, opacity, ior); 未命中像素为占位值 (调用方掩掉)。
+        """
+        N = o.shape[0]
+        hit = mx.zeros((N,), dtype=mx.bool_)
+        best_t = mx.full((N,), float("inf"), dtype=mx.float32)
+        best_n = mx.zeros((N, 3), dtype=mx.float32)
+        col = mx.zeros((N, 3), dtype=mx.float32)
+        op = mx.ones((N,), dtype=mx.float32)
+        ior = mx.full((N,), 1.5, dtype=mx.float32)
+        for obj in scene.objects:
+            wm = camera.motor.compose(obj.motor())  # 世界→相机 · 局部→世界
+            params = obj.geometry.to_camera(wm)
+            t, n_i, mask = obj.geometry.intersect(params, o, d)
+            nearer = mx.logical_and(mask, t < best_t)
+            p = o + t[:, None] * d
+            col_i = obj.material.shade(p, n_i, d, lit, ambient)
+            best_t = mx.where(nearer, t, best_t)
+            best_n = mx.where(nearer[:, None], n_i, best_n)
+            col = mx.where(nearer[:, None], col_i, col)
+            op = mx.where(nearer, obj.material.opacity, op)
+            ior = mx.where(nearer, obj.material.ior, ior)
+            hit = mx.logical_or(hit, nearer)
+        return hit, best_t, best_n, col, op, ior
+
+    def _trace(
+        self,
+        scene: Scene,
+        camera: PerspectiveCamera,
+        o: mx.array,
+        d: mx.array,
+        lit: Sequence,
+        ambient: AmbientLight | None,
+        bg: mx.array,
+        in_medium: mx.array,
+        depth: int,
+    ) -> mx.array:
+        """一束射线 (N,3) 的批量 Whitted 追踪 → (N,3) 线性颜色。
+
+        透明命中按精确非偏振 Fresnel F 分裂: F·反射 + (1−F)·(α·本体色 +
+        (1−α)·折射)。ior=1 时 F≡0、折射方向不变 → 精确退化为原 alpha
+        front-to-back 混合 (旧行为是 F=0 特例)。全反射 (TIR) 时 F=1。
+        (不用 Schlick 近似: R0=0 时 (1−cos)⁵ 项不归零, ior=1 退化不精确。)
+        ponytail: 介质追踪 = 每像素一个 in_medium 位 (假设透明体互不
+        重叠、嵌在空气中); 嵌套介质需每像素折射率栈。
+        """
+        hit, t, n, local, op, ior = self._nearest(scene, camera, o, d, lit, ambient)
+        cos_i = -mx.sum(d * n, axis=-1, keepdims=True)
+        n = mx.where(cos_i < 0.0, -n, n)  # 防御: 法向一律翻向射线起点侧
+        cos_i = mx.abs(cos_i)
+        base = mx.where(hit[:, None], local, bg)
+        if depth >= self.max_depth:
+            return base
+        need = mx.logical_and(hit, op < 1.0)
+        if not mx.any(need).item():
+            return base
+        eta = mx.where(in_medium[:, None], ior[:, None], 1.0 / ior[:, None])
+        k = 1.0 - eta * eta * (1.0 - cos_i * cos_i)
+        cos_t = mx.sqrt(mx.maximum(k, 0.0))  # 透射角 (TIR 时占位, F 覆写为 1)
+        g = 1.0 / eta  # n2/n1
+        # 精确非偏振 Fresnel (s/p 偏振平均)
+        rs = (cos_i - g * cos_t) / mx.maximum(cos_i + g * cos_t, 1e-12)
+        rp = (cos_t - g * cos_i) / mx.maximum(cos_t + g * cos_i, 1e-12)
+        fres = 0.5 * (rs * rs + rp * rp)
+        fres = mx.where(k <= 0.0, mx.ones_like(fres), fres)  # TIR → 全反射
+        p = o + t[:, None] * d
+        eps = 1e-3  # 自相交偏移
+        d_r = d + 2.0 * cos_i * n
+        d_t = eta * d + (eta * cos_i - cos_t) * n
+        # 分支剪枝: 整束权重可忽略时跳过递归 (省一被子树求交)
+        w_r = mx.max(mx.where(need, fres[:, 0], 0.0)).item()
+        w_t = ((1.0 - fres) * (1.0 - op[:, None]))[:, 0]
+        w_t = mx.max(mx.where(need, w_t, 0.0)).item()
+        refl = (
+            self._trace(
+                scene, camera, p + eps * n, d_r, lit, ambient, bg,
+                in_medium, depth + 1,
+            )
+            if w_r > 1e-3
+            else mx.zeros_like(base)
+        )
+        refr = (
+            self._trace(
+                scene, camera, p - eps * n, d_t, lit, ambient, bg,
+                mx.logical_xor(in_medium, need), depth + 1,
+            )
+            if w_t > 1e-3
+            else mx.zeros_like(base)
+        )
+        glass = fres * refl + (1.0 - fres) * (
+            op[:, None] * local + (1.0 - op[:, None]) * refr
+        )
+        return mx.where(need[:, None], glass, base)
 
 
 def render_frame(
