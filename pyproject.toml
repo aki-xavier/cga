@@ -6,14 +6,12 @@ readme = "README.md"
 authors = [{ name = "aki", email = "aki.petit@icloud.com" }]
 requires-python = ">=3.14"
 dependencies = [
-    "drake>=1.55.0",
     "mlx>=0.32.0",
     "pillow>=12.3.0",
-    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]
-cga = "cga.__main__:main"
+cga = "cga.__main__:SelfTest.main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
@@ -51,3 +49,8 @@ reportUnknownLambdaType = false
 reportMissingParameterType = false
 reportArgumentType = false
 reportMissingTypeArgument = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

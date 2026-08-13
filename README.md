@@ -9,7 +9,7 @@ versor 共轭, 渲染就是对 blade 的 GPU 批量求交。
 ## 渲染结果
 
 `demo_engine.py` 的轨道动画 (90 帧, ~30ms/帧, 360×270, `aa=2` 超采样抗锯齿):
-地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘, 平行光 + 点光 + 正面补光 + 环境光,
+地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘 + 折射玻璃球 (Fresnel/Beer), 平行光 + 点光 + 正面补光 + 环境光 (硬阴影),
 OrbitControls 环绕一周:
 
 ![轨道渲染 demo](docs/orbit.gif)
@@ -28,7 +28,7 @@ OrbitControls 环绕一周:
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 79 项断言 (代数/图元/versor/距离/动力学/接触/浮动基座/隐式接触/积分器/prismatic/传感器/systems/球体回弹)
+uv run pytest                          # 测试套件 (tests/: 代数/图元/versor/引擎/逆渲染定量)
 ```
 
 ## 场景代码
@@ -213,163 +213,26 @@ Motor 是 SE(3) 的 versor 表示, 本包已有 `exp` / `log` / `velocity_bivect
 `X_base = M_tool·X` 无机制差异 —— 多坐标系链式变换、手眼标定、双相机几何
 收敛到一个表示, 减少跨库转换 bug。
 
-### CRDF — CGA 机器人描述格式
-
-URDF 的 YAML 版: 链接树 + 关节 + 几何 (blade) + 惯量。帧语义与 URDF
-完全一致 (joint.origin = 父 frame → joint frame, axis 在 joint frame,
-几何/质心 origin 在 link frame, 单位 SI), 但可读性、去重和代数表达
-更好:
-
-| 维度 | URDF (XML) | CRDF (YAML) |
-| --- | --- | --- |
-| **语法** | XML 标签嵌套, 一个链接几十行 | YAML 映射, 一个链接几行; 注释随便写 |
-| **origin** | `xyz + rpy` 字符串 | `xyz + rpy` (URDF 兼容) 或 `motor: {axis, angle, t}` (CGA 签名原样) |
-| **几何** | mesh 文件引用或基本体, visual/collision 分写两遍 | blade 图元 (cylinder/box/sphere/plane/circle), `role: [visual, collision]` 一份复用 |
-| **变换** | 4×4 矩阵 | Motor versor; FK = Motor 链, 长链不积累正交性漂移 |
-| **运动学** | 无内置 | `fk(q)`: revolute = `M_origin·Rot(axis,q)`, prismatic = `·Trans(axis·q)` |
-
-示例 (`models/z1_arm.crdf.yaml` 由宇树官方 URDF 导入; 视觉 mesh 跳过,
-7 条碰撞圆柱提升为双角色 blade):
-
-```yaml
-robot:
-  name: z1_description
-  base: world
-  links:
-    - name: link00
-      geometry:
-        - blade: cylinder
-          radius: 0.0325
-          length: 0.051
-          origin: {xyz: [0, 0, 0.0255]}
-          role: [visual, collision]
-      inertial: {mass: 0.472, com: [-0.0033, -0.0001, 0.025], inertia: {ixx: 0.0004, iyy: 0.0004, izz: 0.0005}}
-  joints:
-    - name: joint1
-      type: revolute
-      parent: link00
-      child: link01
-      origin: {xyz: [0, 0, 0.0585]}
-      axis: [0, 0, 1]
-      limit: {lower: -2.618, upper: 2.618, effort: 30, velocity: 3.1415}
-```
-
-用法 (加载 → FK → 直接进 CGA 引擎渲染, 无网格无中间表示):
-
-```python
-from cga.robot import RobotLoader
-from cga.urdf_io import UrdfConverter  # 双向转换 (pydrake/UrdfScene 互操作)
-
-robot = RobotLoader.load("models/z1_arm.crdf.yaml")
-world = robot.fk_list([0.0, 1.1, -1.2, 0.8, 0.4, 0.3])  # link → Motor
-```
-
-`demo_robot.py` 渲染该描述 (臂底恰落地; 仅根级 Z-up(URDF)→Y-up(引擎)
-转换, 数据文件保持 URDF 语义):
-
-![CRDF 机器人渲染](docs/robot_z1.png)
-
-范围声明 (v1): mesh 不建模 —— 导入时**忽略** (`mesh_policy='skip'`, 默认;
-某 link 的 visual 全被跳过时, 其 collision 基本体提升为 `[visual, collision]`
-保证渲染不空)。可选 `keep` (保留 `blade: mesh, file, scale` 文件引用,
-opaque 字符串可含 `package://` URI, interop round-trip 无损, 引擎不渲染)
-或 `error` (严格模式, 遇 mesh 报错)。
-
-惯量全 6 分量张量; 无 SRDF/transmission/gazebo 语义; URDF 的
-floating/planar 关节不支持。
-
 ## 项目布局
 
 ```text
 cga/
-  multivector.py   32 分量多重向量, 代数运算 (gp/ip/op/dual/meet/norm/...)
-  algebra.py       图元类与距离 (直接/对偶两种形式)
+  multivector.py   32 分量多重向量, 代数运算 (gp/ip/op/dual/meet/norm/...);
+                   积表/掩码/基向量全是类属性
+  algebra/         图元类与距离 (point/line/plane/sphere/cylinder/circle, 每类一文件)
   motors.py        Motor: 刚体变换 versor, exp/log/插值/速度提取
-  engine.py        three.js 风格渲染引擎 (MLX 批量光线追踪)
-  render.py        逆渲染: SceneModel → 2D 深度/颜色 (反投影工具)
-  compare_clifford.py  已删除 (2026-08): clifford/numpy 依赖移除, 数值验证见 git 历史
-  robot.py          CRDF 机器人描述: YAML 解析 + 校验 + Motor FK
-  urdf_io.py        URDF ⇄ CRDF 双向转换 (pydrake/UrdfScene 互操作)
-  drake.py         Drake 物理后端 (直接接入 pydrake MultibodyPlant: 离散推进+接触求解器, 动力学查询透传)
-  __main__.py      包自检: python -m cga (79 项断言)
-demo_engine.py     轨道动画 demo → PNG 帧 + GIF
-demo_advantage.py   优势渲染 demo → 无多边形/无限几何/motor 插值三张独立图
-demo_robot.py      CRDF 渲染 demo: YAML 机器人描述 → FK → 引擎渲染
-demo_dynamics.py   动力学 demo (Drake): Z1 计算力矩 PD 姿态跟踪 → 帧/GIF
-demo_bounce.py      物理 demo (Drake): 球 1m 坠落触地静止 → 帧/GIF
-models/            CRDF 机器人描述文件 (z1_arm / bounce_ball)
+  engine/          three.js 风格渲染引擎 (MLX 批量光线追踪, 每类一文件):
+                   scene/mesh/camera/renderer + 5 种几何 + 材质 + 灯光
+  render/          逆渲染: 图元场景 → 2D 深度/颜色 (PrimitiveRenderer)
+tests/           pytest 测试套件 (checks.py 共享断言 + test_* 每类一文件)
+demo_engine.py     轨道动画 demo (OrbitDemo) → PNG 帧 + GIF
+demo_advantage.py  优势渲染 demo (AdvantageDemo) → 三张独立图
 ```
-
-## WebGL 渲染器 (浏览器端 CGA)
-
-`webgl/` 把同一个 CGA 代数跑进浏览器 —— 浏览器**直接解析 CRDF 的
-`.yaml` 文件**, 无需任何转换/导出步骤:
-
-- **原生 CGA** (`cga.js`): 基 blade = bitmask, 几何积用递归恒等式
-  (向量·blade = 左收缩 + 楔积; (a∧W)·B = a·(W·B) − (a⌋W)·B), 度量
-  e1-3²=1、e0²=e∞²=0、m(e0,e∞)=−1 —— 已对照 Python 端 32×32 基乘积表
-  逐项验证 (0/1024 不匹配), 无需导出乘法表。
-- **YAML 解析** (`yaml.js`): 覆盖 CRDF 子集 (块映射/同缩进序列/流式
-  集合/注释); `model.js` 镜像 `cga/robot.py` 载入语义 (origin 的
-  xyz+rpy / motor 两种写法 → Motor versor)。
-- **渲染**: WebGL2 片段着色器逐像素解析求交 (球/平面/有限圆柱/盒/圆盘,
-  与 `cga.engine` 同族数学) + Blinn-Phong; 每帧 FK (versor 乘积) →
-  link motor · 几何 origin → (R,t) → 世界→相机刚体变换 → uniform 数组。
-- **交互**: 关节滑块 (FK 实时), 轨道相机 (拖拽旋转/滚轮缩放, 根级
-  Z-up→Y-up 与 demo_robot 一致)。
-- **验证**: `webgl/verify.js` 用 headless Chromium 检查 console 错误 +
-  像素读回 + 滑块联动 (需本机有 playwright/chromium)。
-
-```bash
-cd ~/code/cga && python3 -m http.server 8000
-# 打开 http://localhost:8000/webgl/  (页面直接 fetch ../models/z1_arm.crdf.yaml)
-```
-
-![WebGL 渲染](docs/webgl_z1.png)
-
-## 物理仿真 (直接接入 Drake)
-
-`cga/drake.py` 直接接入 **pydrake MultibodyPlant** (生产级物理引擎),
-替代此前自研的动力学移植 (已删除: 自研接触/浮动基座/积分器对复杂场景
-脆弱, 且维护成本高):
-
-```python
-from cga.drake import DrakePlant
-
-plant = DrakePlant("models/z1_arm.crdf.yaml")          # CRDF → URDF → Drake
-plant.set_joint_state(q, qd)                            # 关节状态
-plant.step(tau)                                         # 离散推进 (内置接触求解器)
-poses = plant.poses()                                   # 渲染用各 link 位姿
-M = plant.mass_matrix(q)                                # 动力学查询 (透传 Drake)
-```
-
-- **物理全用 Drake**: 离散 plant (time_step>0) 内置接触求解器 (TAMSI/
-  约束), 浮动基座 (原生四元数关节), 关节驱动 (JointActuator + 驱动端口)。
-- **渲染仍走 cga engine** (CGA 光线追踪): `poses()` 取位姿 → WORLD_UP
-  变换 → 引擎渲染; CRDF/URDF 转换复用 (`UrdfConverter.crdf_to_urdf`)。
-- **动力查询透传**: mass_matrix / gravity_forces / coriolis_forces /
-  inverse_dynamics / forward_dynamics (EOM: M·q̈ + C·v − Q = τ,
-  Q = CalcGravityGeneralizedForces)。
-- 世界自带固定地面 (10×10×0.1 盒, 顶面 z=0); 默认点接触 (耗散性,
-  真实物理 —— 小球落地静止, 无自定义回弹)。
-- 依赖: `drake>=1.55` (重依赖 ~1GB, 物理互操作是 sanctioned 例外,
-  API 强制 numpy)。
-
-`demo_bounce.py`: 球从 1m 坠落, Drake 接触求解器处理触地, 静止在球心
-z=0.06:
-
-![回弹仿真](docs/bounce_ball.gif)
-
-`demo_dynamics.py`: Z1 计算力矩 PD (τ = M·(Kp·e − Kd·q̇) − Q) 折叠 →
-舒展:
-
-![动力学仿真](docs/dynamics_z1.gif)
 
 ## 质量
 
-- `python -m cga`: 103 项自检全过 (代数恒等式 / 图元关联判据 / versor 往返 /
-  exp-log 往返 / 距离公式 / 抗锯齿 / CRDF FK·校验·round-trip·mesh,
-  见 `cga/__main__.py`)。
+- `uv run pytest`: 50 项测试全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+  exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染与 Whitted 管线定量, 见 `tests/`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 
 ## License
