@@ -31,6 +31,30 @@ uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.
 uv run pytest                          # 测试套件 (tests/: 代数/图元/versor/引擎/逆渲染定量)
 ```
 
+## CGS 场景语言 (OpenSCAD 风格)
+
+`examples/orbit.cgs` (与上面的 Python 场景逐位等价, tests 有金样断言):
+
+```text
+material(color=0xB0B0B0, roughness=0.7) plane(n=[0, 1, 0], d=0);
+translate([0, 1, 0])
+  material(color=0xC0392B, roughness=0.25, metalness=0.25) sphere(r=1);
+
+directional_light(direction=[0.4, 1.0, 0.35], intensity=0.38);
+camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
+```
+
+修饰符 (`translate`/`rotate`/`material`) 对紧随的语句或 `{}` 块生效,
+可嵌套; 图元: sphere/plane/cylinder/box/circle。渲染:
+
+```bash
+uv run python -m cga.scene_lang examples/orbit.cgs orbit.png 640 480 2
+```
+
+支持变量/表达式/数学函数/for+range/module/if-else/echo;
+完整语法见 `cga/scene_lang/__init__.py` 文档头 (无 CSG 布尔/scale, 见范围声明)。
+阵列示例: `examples/grid.cgs` (module + for 的 3×3 球阵)。
+
 ## 场景代码
 
 ```python
@@ -224,6 +248,7 @@ cga/
   engine/          three.js 风格渲染引擎 (MLX 批量光线追踪, 每类一文件):
                    scene/mesh/camera/renderer + 5 种几何 + 材质 + 灯光
   render/          逆渲染: 图元场景 → 2D 深度/颜色 (PrimitiveRenderer)
+  scene_lang/      CGS 场景语言 (OpenSCAD 风格, Lexer + SceneLoader)
 tests/           pytest 测试套件 (checks.py 共享断言 + test_* 每类一文件)
 demo_engine.py     轨道动画 demo (OrbitDemo) → PNG 帧 + GIF
 demo_advantage.py  优势渲染 demo (AdvantageDemo) → 三张独立图

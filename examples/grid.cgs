@@ -1,0 +1,20 @@
+// 3×3 球阵列: module + for + range (v2 特性示例)
+background(color=0x87CEEB);
+camera(fov=50, position=[3, 4, 7], target=[1.2, 0.4, 1.2]);
+
+module bead(x, z, r=0.35) {
+  translate([x, r, z])
+    material(color=0xC0392B, roughness=0.3, metalness=0.2)
+    sphere(r=r);
+}
+
+material(color=0xB0B0B0, roughness=0.7) plane(n=[0, 1, 0], d=0);
+
+for (i = [0:2]) {
+  for (j = [0:2]) {
+    bead(i * 1.2, j * 1.2);
+  }
+}
+
+directional_light(direction=[0.4, 1.0, 0.35], intensity=0.5);
+ambient_light(intensity=0.35);

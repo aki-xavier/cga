@@ -1,0 +1,28 @@
+// 轨道 demo 场景 (与 demo_engine.py 的 OrbitDemo.build_scene 同构,
+// tests/test_scene_lang.py 有逐位等价断言)
+background(color=0x87CEEB);
+camera(fov=50, aspect=1.3333333333333333, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
+
+// 半光泽地面
+material(color=0xB0B0B0, roughness=0.7) plane(n=[0, 1, 0], d=0);
+
+translate([0, 1, 0])
+  material(color=0xC0392B, roughness=0.25, metalness=0.25) sphere(r=1);
+translate([-2.2, 0.6, 0.5])
+  material(color=0x2980B9, roughness=0.15, metalness=0.35) sphere(r=0.6);
+translate([2.2, 0.7, -0.5])
+  material(color=0xD4AC0D, roughness=0.4, metalness=0.3) cylinder(r=0.7);
+translate([0.8, 0.45, 1.8])
+  material(color=0x27AE60, roughness=0.6) box(s=[0.9, 0.9, 0.9]);
+translate([-2.4, 2.2, 0.8]) rotate(axis=[1, 0, 0], angle=-0.4)
+  material(color=0x8E44AD, roughness=0.3) circle(r=0.9);
+
+// 折射玻璃球: Fresnel 边缘增亮 + Beer 吸收
+translate([0.4, 1.5, 2.6])
+  material(color=0xAAD4FF, roughness=0.05, opacity=0.08, ior=1.5, absorption=0.2)
+  sphere(r=0.8);
+
+directional_light(direction=[0.4, 1.0, 0.35], intensity=0.38);  // 主光
+point_light(position=[0, 4, 3.5], intensity=0.7);               // 顶面点缀
+directional_light(direction=[0, 0.35, 0.9], intensity=0.18);    // 正面补光
+ambient_light(intensity=0.34);  // 环境底光
