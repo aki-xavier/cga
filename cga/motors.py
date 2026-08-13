@@ -14,14 +14,11 @@
 """
 
 import math
-from typing import TypeVar
 
 import mlx.core as mx
 
-from cga.algebra import E0, EINF, Point
-from cga.multivector import NUM_COMPONENTS, Multivector
-
-MV = TypeVar("MV", bound=Multivector)
+from cga.algebra import Point
+from cga.multivector import Multivector
 
 
 class Motor(Multivector):
@@ -31,11 +28,11 @@ class Motor(Multivector):
 
     def gp(self, other: Multivector) -> Motor:
         """Type-preserving geometric product: motor·X is a Motor."""
-        return Motor._wrap(Multivector.gp(self, other))
+        return Motor.wrap(Multivector.gp(self, other))
 
     def reverse(self) -> Motor:
         """Type-preserving reverse: a motor's reverse is a Motor."""
-        return Motor._wrap(Multivector.reverse(self))
+        return Motor.wrap(Multivector.reverse(self))
 
     def __init__(
         self,
@@ -56,7 +53,7 @@ class Motor(Multivector):
         super().__init__(tr.gp(ro).values)  # M = T · R
 
     @classmethod
-    def _wrap(cls, mv: Multivector) -> Motor:
+    def wrap(cls, mv: Multivector) -> Motor:
         """把已有 multivector 标记为 Motor (不重算, 内部用)。"""
         self = cls.__new__(cls)
         self.values = mv.values
@@ -67,7 +64,7 @@ class Motor(Multivector):
     @classmethod
     def identity(cls) -> Motor:
         """恒等 motor (无旋转无平移)。"""
-        return cls._wrap(Multivector.scalar(1.0))
+        return cls.wrap(Multivector.scalar(1.0))
 
     @classmethod
     def rotor(cls, axis: tuple[float, float, float], angle: float) -> Motor:
@@ -84,12 +81,12 @@ class Motor(Multivector):
         s = math.cos(half_angle)
         sf = math.sin(half_angle)
 
-        vals = mx.zeros(NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
         vals[0] = s  # cos(θ/2)
         vals[6] = -sf * az  # e12: -nz
         vals[7] = sf * ay  # e13: +ny  (since -ny*e31 = +ny*e13)
         vals[10] = -sf * ax  # e23: -nx
-        return cls._wrap(Multivector(vals))
+        return cls.wrap(Multivector(vals))
 
     @classmethod
     def from_quaternion(cls, q: tuple[float, float, float, float]) -> Motor:
@@ -107,15 +104,15 @@ class Motor(Multivector):
         """平移 displacement 的 translator: T = 1 − (t ∧ e∞)/2。"""
         tx, ty, tz = displacement
         tv = Multivector.vector(tx, ty, tz)
-        return cls._wrap(Multivector.scalar(1.0) - tv.op(EINF) * 0.5)
+        return cls.wrap(Multivector.scalar(1.0) - tv.op(Multivector.EINF) * 0.5)
 
     @classmethod
     def from_matrix(cls, R, t) -> Motor:
         """由 3x3 旋转矩阵与平移向量构造: M = T(t)·R,
         保证 Motor.from_matrix(R, t).to_matrix() == [R|t]。"""
         tv = tuple(float(x) for x in mx.array(t, dtype=mx.float32))
-        return cls._wrap(
-            cls.translator(tv).gp(cls.from_quaternion(cls._matrix_to_quaternion(R)))
+        return cls.wrap(
+            cls.translator(tv).gp(cls.from_quaternion(cls.matrix_to_quaternion(R)))
         )
 
     @classmethod
@@ -145,7 +142,7 @@ class Motor(Multivector):
             if v_norm < 1e-12:
                 return cls.identity()
             # 纯平移: Bv 幂零, 级数截断
-            return cls._wrap(Multivector.scalar(1.0) - Bv)
+            return cls.wrap(Multivector.scalar(1.0) - Bv)
         if v_norm < 1e-12:
             # 纯旋转 (过原点)
             axis = (w_bar / theta).tolist()
@@ -174,7 +171,7 @@ class Motor(Multivector):
 
     # ── 作用与提取 ────────────────────────────────────────────────
 
-    def apply(self, obj: MV) -> MV:
+    def apply[T: Multivector](self, obj: T) -> T:
         """O' = M·O·M̃ (M̃ = M.reverse())。versor 作用保持图元类型
         (变换后的点仍是点, 线仍是线), 图元子类输入返回同类。"""
         out = self.gp(obj).gp(self.reverse())
@@ -267,7 +264,7 @@ class Motor(Multivector):
 
         motor M 对共形点的作用: p' = M·p·M̃。
         """
-        origin_t = self.apply(E0)
+        origin_t = self.apply(Multivector.E0)
         tx = float(origin_t.values[1])
         ty = float(origin_t.values[2])
         tz = float(origin_t.values[3])
@@ -297,17 +294,17 @@ class Motor(Multivector):
 
     def interpolate(self, other: Multivector, t: float) -> Motor:
         """self → other 的插值: M(t) = self · exp(t · log(self⁻¹·other))。"""
-        delta = Motor._wrap(self.reverse().gp(other))
-        return Motor._wrap(self.gp(Motor.exp(delta.log(), t)))
+        delta = Motor.wrap(self.reverse().gp(other))
+        return Motor.wrap(self.gp(Motor.exp(delta.log(), t)))
 
     def inverse(self) -> Motor:
         """逆 motor。motor 是单位 versor, M⁻¹ = M̃ (reverse), 对任意
         M·M⁻¹ = identity 成立 (sandwich 作用)。"""
-        return Motor._wrap(self.reverse())
+        return Motor.wrap(self.reverse())
 
     def compose(self, other: Motor) -> Motor:
         """复合: self ∘ other = self·other (先 other 后 self 的变换)。"""
-        return Motor._wrap(self.gp(other))
+        return Motor.wrap(self.gp(other))
 
     # ── 速度二重向量 (twist) ──────────────────────────────────────
 
@@ -323,7 +320,7 @@ class Motor(Multivector):
         wx, wy, wz = angular
         vx_val, vy_val, vz_val = linear
 
-        vals = mx.zeros(NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
         # 角速度部分 (二重向量):
         vals[6] = wz  # e12
         vals[7] = -wy  # e13 (from ωy*e31 = -ωy*e13)
@@ -334,7 +331,7 @@ class Motor(Multivector):
         # Type-preserving: a bivector wrapped as Motor so chained
         # .exp()/.gp() on twist quantities keeps working (Motor is a
         # Multivector, so this is downward compatible).
-        return Motor._wrap(rot + tv.op(EINF))
+        return Motor.wrap(rot + tv.op(Multivector.EINF))
 
     @staticmethod
     def extract_velocity(
@@ -351,7 +348,7 @@ class Motor(Multivector):
         """
         if dt <= 0:
             raise ValueError(f"dt must be > 0, got {dt}")
-        delta = Motor._wrap(M_previous.reverse().gp(M_current))
+        delta = Motor.wrap(M_previous.reverse().gp(M_current))
         V = delta.log() * (2.0 / dt)
 
         vals = V.values
@@ -368,7 +365,7 @@ class Motor(Multivector):
     # ── 内部助手 ──────────────────────────────────────────────────
 
     @staticmethod
-    def _matrix_to_quaternion(matrix) -> tuple[float, float, float, float]:
+    def matrix_to_quaternion(matrix) -> tuple[float, float, float, float]:
         """3x3 旋转矩阵 → (w, x, y, z) 四元数。"""
         m = mx.array(matrix, dtype=mx.float32)
         if m.ndim == 1 and m.size == 9:

@@ -7,7 +7,8 @@
 
 OOP 表面:
   - Multivector: 32 分量多重向量, 代数运算全是方法
-    (gp/ip/op/reverse/dual/meet/norm/...)。
+    (gp/ip/op/reverse/dual/meet/norm/...); 基向量/积表等常量是
+    类属性 (Multivector.E0 / Multivector.GP_TABLE / ...)。
   - 图元类: Point / PointPair / Line (直接形式, 关联判据 p.op(X) = 0),
     Plane / Sphere / Circle (对偶形式, 关联判据 p.ip(X) = 0)。
   - Motor: 刚体变换 versor, O' = M.apply(O); exp/log/插值/速度提取
@@ -15,11 +16,6 @@ OOP 表面:
 """
 
 from cga.algebra import (
-    E0,
-    E1,
-    E2,
-    E3,
-    EINF,
     Circle,
     Cylinder,
     Line,
@@ -30,14 +26,9 @@ from cga.algebra import (
 )
 from cga.motors import Motor
 from cga.multivector import Multivector
-from cga.render import RenderPrimitive, RenderResult, render_scene
+from cga.render import PrimitiveRenderer, RenderPrimitive, RenderResult
 
 __all__ = [
-    "E0",
-    "E1",
-    "E2",
-    "E3",
-    "EINF",
     "Circle",
     "Cylinder",
     "Line",
@@ -46,8 +37,8 @@ __all__ = [
     "Plane",
     "Point",
     "PointPair",
+    "PrimitiveRenderer",
     "RenderPrimitive",
     "RenderResult",
     "Sphere",
-    "render_scene",
 ]

@@ -15,53 +15,60 @@ from pathlib import Path
 from PIL import Image
 
 from cga.drake import DrakePlant
-from cga.engine import PerspectiveCamera, Renderer, frame_to_bytes
-from cga.robot import load_robot
-from demo_robot import MODEL, build_scene
-
-KP, KD = 50.0, 12.0
-DT = 2e-3
-T_END = 4.0
+from cga.engine import PerspectiveCamera, Renderer
+from cga.robot import RobotLoader
+from demo_robot import RobotDemo
 
 
-def main() -> None:
-    out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts")
-    out_dir.mkdir(exist_ok=True)
-    robot = load_robot(MODEL)
-    plant = DrakePlant(robot, dt=DT)
-    n = plant.plant.num_positions()
-    q = [0.0, 0.3, -0.4, 0.2, 0.0, 0.0]
-    q_des = [0.3, 2.0944, -2.0944, 0.4, 0.3, 0.5]
-    qd = [0.0] * n
-    plant.set_joint_state(q, qd)
+class DynamicsDemo:
+    """计算力矩 PD 控制 (折叠 → 舒展) → GIF。"""
 
-    camera = PerspectiveCamera(
-        fov=50, aspect=4 / 3, position=(0.9, 0.3, 1.6), target=(0.15, 0.4, 0)
-    )
-    camera.look_at((0.15, 0.4, 0))
-    renderer = Renderer(480, 360, aa=2)
-    imgs = []
-    step = 0
-    while plant.time() <= T_END + 1e-9:
-        if step % 100 == 0:
-            img = renderer.render(build_scene(robot, q), camera)
-            imgs.append(Image.frombytes("RGBA", (480, 360), frame_to_bytes(img)))
-            imgs[-1].save(out_dir / f"dynamics_z1_{len(imgs)-1:03d}.png")
-        q, qd = plant.joint_state()
-        g = plant.gravity_forces(q)
-        M = plant.mass_matrix(q)
-        e = [q_des[i] - q[i] for i in range(n)]
-        acc = [KP * e[i] - KD * qd[i] for i in range(n)]
-        tau = [sum(M[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
-        plant.step(tau)
-        step += 1
-    q, _ = plant.joint_state()
-    print(f"末态 q = {[round(x, 3) for x in q]}")
-    print(f"目标 q = {q_des}")
-    gif = out_dir / "dynamics_z1.gif"
-    imgs[0].save(gif, save_all=True, append_images=imgs[1:], duration=100, loop=0)
-    print(f"saved {gif} ({len(imgs)} 帧)")
+    KP, KD = 50.0, 12.0
+    DT = 2e-3
+    T_END = 4.0
+
+    @staticmethod
+    def main() -> None:
+        out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts")
+        out_dir.mkdir(exist_ok=True)
+        robot = RobotLoader.load(RobotDemo.MODEL)
+        plant = DrakePlant(robot, dt=DynamicsDemo.DT)
+        n = plant.plant.num_positions()
+        q = [0.0, 0.3, -0.4, 0.2, 0.0, 0.0]
+        q_des = [0.3, 2.0944, -2.0944, 0.4, 0.3, 0.5]
+        qd = [0.0] * n
+        plant.set_joint_state(q, qd)
+
+        camera = PerspectiveCamera(
+            fov=50, aspect=4 / 3, position=(0.9, 0.3, 1.6), target=(0.15, 0.4, 0)
+        )
+        camera.look_at((0.15, 0.4, 0))
+        renderer = Renderer(480, 360, aa=2)
+        imgs = []
+        step = 0
+        kp, kd = DynamicsDemo.KP, DynamicsDemo.KD
+        while plant.time() <= DynamicsDemo.T_END + 1e-9:
+            if step % 100 == 0:
+                img = renderer.render(RobotDemo.build_scene(robot, q), camera)
+                imgs.append(
+                    Image.frombytes("RGBA", (480, 360), Renderer.frame_to_bytes(img))
+                )
+                imgs[-1].save(out_dir / f"dynamics_z1_{len(imgs) - 1:03d}.png")
+            q, qd = plant.joint_state()
+            g = plant.gravity_forces(q)
+            M = plant.mass_matrix(q)
+            e = [q_des[i] - q[i] for i in range(n)]
+            acc = [kp * e[i] - kd * qd[i] for i in range(n)]
+            tau = [sum(M[i][j] * acc[j] for j in range(n)) - g[i] for i in range(n)]
+            plant.step(tau)
+            step += 1
+        q, _ = plant.joint_state()
+        print(f"末态 q = {[round(x, 3) for x in q]}")
+        print(f"目标 q = {q_des}")
+        gif = out_dir / "dynamics_z1.gif"
+        imgs[0].save(gif, save_all=True, append_images=imgs[1:], duration=100, loop=0)
+        print(f"saved {gif} ({len(imgs)} 帧)")
 
 
 if __name__ == "__main__":
-    main()
+    DynamicsDemo.main()

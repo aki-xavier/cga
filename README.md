@@ -28,7 +28,7 @@ OrbitControls 环绕一周:
 
 ```bash
 uv run python demo_engine.py 90        # 渲染轨道动画 → artifacts/orbit.gif
-uv run python -m cga                   # 包自检: 103 项断言 (代数/图元/versor/距离/动力学/接触/浮动基座/隐式接触/积分器/prismatic/传感器/systems/球体回弹)
+uv run python -m cga                   # 包自检: 79 项断言 (代数/图元/versor/距离/动力学/接触/浮动基座/隐式接触/积分器/prismatic/传感器/systems/球体回弹)
 ```
 
 ## 场景代码
@@ -257,10 +257,10 @@ robot:
 用法 (加载 → FK → 直接进 CGA 引擎渲染, 无网格无中间表示):
 
 ```python
-from cga.robot import load_robot
-from cga.urdf_io import crdf_to_urdf, urdf_to_crdf  # 双向转换 (pydrake/UrdfScene 互操作)
+from cga.robot import RobotLoader
+from cga.urdf_io import UrdfConverter  # 双向转换 (pydrake/UrdfScene 互操作)
 
-robot = load_robot("models/z1_arm.crdf.yaml")
+robot = RobotLoader.load("models/z1_arm.crdf.yaml")
 world = robot.fk_list([0.0, 1.1, -1.2, 0.8, 0.4, 0.3])  # link → Motor
 ```
 
@@ -346,7 +346,7 @@ M = plant.mass_matrix(q)                                # 动力学查询 (透�
 - **物理全用 Drake**: 离散 plant (time_step>0) 内置接触求解器 (TAMSI/
   约束), 浮动基座 (原生四元数关节), 关节驱动 (JointActuator + 驱动端口)。
 - **渲染仍走 cga engine** (CGA 光线追踪): `poses()` 取位姿 → WORLD_UP
-  变换 → 引擎渲染; CRDF/URDF 转换复用 (`crdf_to_urdf`)。
+  变换 → 引擎渲染; CRDF/URDF 转换复用 (`UrdfConverter.crdf_to_urdf`)。
 - **动力查询透传**: mass_matrix / gravity_forces / coriolis_forces /
   inverse_dynamics / forward_dynamics (EOM: M·q̈ + C·v − Q = τ,
   Q = CalcGravityGeneralizedForces)。

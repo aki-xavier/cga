@@ -28,8 +28,8 @@ from pydrake.multibody.tree import (
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import DiagramBuilder
 
-from cga.robot import Robot, load_robot
-from cga.urdf_io import crdf_to_urdf
+from cga.robot import Robot, RobotLoader
+from cga.urdf_io import UrdfConverter
 
 
 class DrakePlant:
@@ -47,14 +47,14 @@ class DrakePlant:
         ground: bool = True,  # 世界加固定地面 (10×10×0.1, 顶面 z=0)
     ):
         self.robot = (
-            load_robot(robot) if isinstance(robot, (str, Path)) else robot
+            RobotLoader.load(robot) if isinstance(robot, (str, Path)) else robot
         )
         self.dt = dt
         builder = DiagramBuilder()
         self.plant, self.scene_graph = AddMultibodyPlantSceneGraph(
             builder, time_step=dt
         )
-        urdf = crdf_to_urdf(self.robot)
+        urdf = UrdfConverter.crdf_to_urdf(self.robot)
         Parser(self.plant).AddModelsFromString(urdf, "robot.urdf")
         # cga 语义: robot.base 世界固定; floating_base=True 时基座浮动
         if not floating_base:
@@ -82,7 +82,7 @@ class DrakePlant:
                 friction_coefficients=(friction, friction)
             )
         if ground:
-            self._add_ground(friction or 0.7)
+            self.add_ground(friction or 0.7)
         self.plant.Finalize()
         self.diagram = builder.Build()
         self.sim = Simulator(self.diagram)
@@ -98,7 +98,7 @@ class DrakePlant:
         # 驱动端口 (tau 按 CRDF 关节序)
         self.actuation_port = self.plant.get_actuation_input_port()
 
-    def _add_ground(self, mu: float) -> None:
+    def add_ground(self, mu: float) -> None:
         """固定地面: 10×10×0.1 盒, 顶面 z=0 (cga 的 planes 概念 → 真实几何)。"""
         inst = self.plant.AddModelInstance("ground")
         body = self.plant.AddRigidBody("ground_body", inst)
@@ -181,7 +181,7 @@ class DrakePlant:
 
     # ── 动力学查询 (透传 Drake) ────────────────────────────────
 
-    def _context_with(self, q: list, qd: list | None = None):
+    def context_with(self, q: list, qd: list | None = None):
         ctx = self.plant.CreateDefaultContext()
         for n, val in zip(self._joints, q, strict=True):
             self._joints[n].set_angle(ctx, float(val))
@@ -191,22 +191,22 @@ class DrakePlant:
         return ctx
 
     def mass_matrix(self, q: list) -> list[list[float]]:
-        return self.plant.CalcMassMatrix(self._context_with(q)).tolist()
+        return self.plant.CalcMassMatrix(self.context_with(q)).tolist()
 
     def gravity_forces(self, q: list) -> list[float]:
         return self.plant.CalcGravityGeneralizedForces(
-            self._context_with(q)
+            self.context_with(q)
         ).tolist()
 
     def coriolis_forces(self, q: list, qd: list) -> list[float]:
         return self.plant.CalcBiasTerm(
-            self._context_with(q, qd)
+            self.context_with(q, qd)
         ).tolist()
 
     def inverse_dynamics(self, q, qd, qdd) -> list[float]:
         """τ = M·q̈ + C·v − Q (含重力 —— Drake 的 ID(空 forces) 不含,
         需显式减 Q 才对齐 EOM: M·q̈ + C·v − Q = τ)。"""
-        ctx = self._context_with(q, qd)
+        ctx = self.context_with(q, qd)
         id_ = self.plant.CalcInverseDynamics(
             ctx, np.array(qdd), MultibodyForces(self.plant)
         )
@@ -215,7 +215,7 @@ class DrakePlant:
 
     def forward_dynamics(self, q, qd, tau) -> list[float]:
         """q̈ = M⁻¹(τ − C·v + Q) (EOM: M·q̈ + C·v − Q = τ)。"""
-        ctx = self._context_with(q, qd)
+        ctx = self.context_with(q, qd)
         M = self.plant.CalcMassMatrix(ctx)
         bias = self.plant.CalcBiasTerm(ctx)
         g = self.plant.CalcGravityGeneralizedForces(ctx)
@@ -225,7 +225,7 @@ class DrakePlant:
         return np.linalg.solve(M, tau_vec - bias + g).tolist()
 
     def kinetic_energy(self, q, qd) -> float:
-        return float(self.plant.CalcKineticEnergy(self._context_with(q, qd)))
+        return float(self.plant.CalcKineticEnergy(self.context_with(q, qd)))
 
     def potential_energy(self, q) -> float:
-        return float(self.plant.CalcPotentialEnergy(self._context_with(q)))
+        return float(self.plant.CalcPotentialEnergy(self.context_with(q)))

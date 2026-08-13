@@ -26,70 +26,76 @@ from cga.engine import (
     Renderer,
     Scene,
     SphereGeometry,
-    frame_to_bytes,
 )
 from cga.motors import Motor
-from demo_robot import WORLD_UP
-
-MODEL = Path(__file__).resolve().parent / "models" / "bounce_ball.crdf.yaml"
-DT = 2e-3
-T_END = 2.0
+from cga.robot import RobotLoader
+from demo_robot import RobotDemo
 
 
-def build_scene(robot, plant: DrakePlant) -> Scene:
-    """球 + 地面 (球位姿来自 Drake 状态, WORLD_UP 转渲染系)。"""
-    scene = Scene()
-    scene.add(
-        Mesh(
-            PlaneGeometry((0, 1, 0), 0.0),
-            MeshStandardMaterial(Color(0x9AA0A6), roughness=0.8),
-        ),
-        DirectionalLight(intensity=0.65, direction=(0.4, 1.0, 0.35)),
-        PointLight(intensity=0.6, position=(0, 3.5, 2.8)),
-        AmbientLight(intensity=0.52),
-    )
-    R, t = plant.poses()["body"]
-    m_link = WORLD_UP.gp(Motor.from_matrix(R, t))
-    for g in robot.link("body").geometry:
-        if "visual" not in g.role:
-            continue
+class BounceDemo:
+    """自由落体小球 + 接触回弹 (离散 plant) → GIF。"""
+
+    MODEL = Path(__file__).resolve().parent / "models" / "bounce_ball.crdf.yaml"
+    DT = 2e-3
+    T_END = 2.0
+
+    @staticmethod
+    def build_scene(robot, plant: DrakePlant) -> Scene:
+        """球 + 地面 (球位姿来自 Drake 状态, WORLD_UP 转渲染系)。"""
+        scene = Scene()
         scene.add(
             Mesh(
-                SphereGeometry(g.radius),
-                MeshStandardMaterial(Color(0.95, 0.35, 0.1), roughness=0.35),
-                motor=m_link.gp(g.origin),
-            )
+                PlaneGeometry((0, 1, 0), 0.0),
+                MeshStandardMaterial(Color(0x9AA0A6), roughness=0.8),
+            ),
+            DirectionalLight(intensity=0.65, direction=(0.4, 1.0, 0.35)),
+            PointLight(intensity=0.6, position=(0, 3.5, 2.8)),
+            AmbientLight(intensity=0.52),
         )
-    return scene
+        R, t = plant.poses()["body"]
+        m_link = RobotDemo.WORLD_UP.gp(Motor.from_matrix(R, t))
+        for g in robot.link("body").geometry:
+            if "visual" not in g.role:
+                continue
+            scene.add(
+                Mesh(
+                    SphereGeometry(g.radius),
+                    MeshStandardMaterial(Color(0.95, 0.35, 0.1), roughness=0.35),
+                    motor=m_link.gp(g.origin),
+                )
+            )
+        return scene
 
+    @staticmethod
+    def main() -> None:
+        out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts")
+        out_dir.mkdir(exist_ok=True)
+        robot = RobotLoader.load(BounceDemo.MODEL)
+        plant = DrakePlant(robot, floating_base=True, dt=BounceDemo.DT)
+        plant.set_base_pose((0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 0.0))
+        plant.set_base_twist((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 
-def main() -> None:
-    out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "artifacts")
-    out_dir.mkdir(exist_ok=True)
-    robot = __import__("cga.robot", fromlist=["load_robot"]).load_robot(MODEL)
-    plant = DrakePlant(robot, floating_base=True, dt=DT)
-    plant.set_base_pose((0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 0.0))
-    plant.set_base_twist((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-
-    camera = PerspectiveCamera(
-        fov=50, aspect=4 / 3, position=(0.9, 0.6, 1.8), target=(0, 0.35, 0)
-    )
-    camera.look_at((0, 0.35, 0))
-    renderer = Renderer(480, 360, aa=2)
-    imgs = []
-    step = 0
-    while plant.time() <= T_END + 1e-9:
-        if step % 50 == 0:
-            img = renderer.render(build_scene(robot, plant), camera)
-            imgs.append(Image.frombytes("RGBA", (480, 360), frame_to_bytes(img)))
-            imgs[-1].save(out_dir / f"bounce_ball_{len(imgs)-1:03d}.png")
-        plant.step()
-        step += 1
-    gif = out_dir / "bounce_ball.gif"
-    imgs[0].save(gif, save_all=True, append_images=imgs[1:], duration=80, loop=0)
-    z = plant.poses()["body"][1][2]
-    print(f"saved {gif} ({len(imgs)} 帧), 末态球心 z = {z:.4f}")
+        camera = PerspectiveCamera(
+            fov=50, aspect=4 / 3, position=(0.9, 0.6, 1.8), target=(0, 0.35, 0)
+        )
+        camera.look_at((0, 0.35, 0))
+        renderer = Renderer(480, 360, aa=2)
+        imgs = []
+        step = 0
+        while plant.time() <= BounceDemo.T_END + 1e-9:
+            if step % 50 == 0:
+                img = renderer.render(BounceDemo.build_scene(robot, plant), camera)
+                imgs.append(
+                    Image.frombytes("RGBA", (480, 360), Renderer.frame_to_bytes(img))
+                )
+                imgs[-1].save(out_dir / f"bounce_ball_{len(imgs) - 1:03d}.png")
+            plant.step()
+            step += 1
+        gif = out_dir / "bounce_ball.gif"
+        imgs[0].save(gif, save_all=True, append_images=imgs[1:], duration=80, loop=0)
+        z = plant.poses()["body"][1][2]
+        print(f"saved {gif} ({len(imgs)} 帧), 末态球心 z = {z:.4f}")
 
 
 if __name__ == "__main__":
-    main()
+    BounceDemo.main()
