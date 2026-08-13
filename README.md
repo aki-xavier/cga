@@ -55,6 +55,19 @@ uv run python -m cga.scene_lang examples/orbit.cgs orbit.png 640 480 2
 完整语法见 `cga/scene_lang/__init__.py` 文档头 (无 CSG 布尔/scale, 见范围声明)。
 阵列示例: `examples/grid.cgs` (module + for 的 3×3 球阵)。
 
+### 实时预览编辑器 (Rust/GPUI)
+
+`editor/` 是 OpenSCAD 风格的桌面编辑器 (gpui-component): 左侧代码编辑,
+右侧实时预览 (编辑防抖 300ms → 常驻渲染服务 → PNG), 解析错误上状态栏。
+
+```bash
+cd editor && cargo run    # 首次构建较久; 渲染服务自动拉起
+```
+
+架构: 编辑器 (Rust) ↔ HTTP ↔ `cga.scene_lang.render_server` (Python/MLX
+常驻进程, 避免冷启动)。需要 Xcode 的 metal 工具链:
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run`。
+
 ## 场景代码
 
 ```python
@@ -248,8 +261,9 @@ cga/
   engine/          three.js 风格渲染引擎 (MLX 批量光线追踪, 每类一文件):
                    scene/mesh/camera/renderer + 5 种几何 + 材质 + 灯光
   render/          逆渲染: 图元场景 → 2D 深度/颜色 (PrimitiveRenderer)
-  scene_lang/      CGS 场景语言 (OpenSCAD 风格, Lexer + SceneLoader)
+  scene_lang/      CGS 场景语言 (OpenSCAD 风格, Lexer + SceneLoader + 渲染服务)
 tests/           pytest 测试套件 (checks.py 共享断言 + test_* 每类一文件)
+editor/            cgs-editor (Rust/GPUI): .cgs 实时预览编辑器 (左代码右渲染)
 demo_engine.py     轨道动画 demo (OrbitDemo) → PNG 帧 + GIF
 demo_advantage.py  优势渲染 demo (AdvantageDemo) → 三张独立图
 ```

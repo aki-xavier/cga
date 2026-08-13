@@ -73,7 +73,6 @@ docs/_build/
 
 # PyBuilder
 .pybuilder/
-target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -219,3 +218,5 @@ __marimo__/
 .DS_Store
 # demo 渲染输出
 /artifacts/
+# Rust (editor/)
+target/
