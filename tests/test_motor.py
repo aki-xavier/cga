@@ -66,9 +66,7 @@ class TestMotor(Checks):
         m_rt = Motor.from_matrix(r3, (t4[0][3], t4[1][3], t4[2][3]))
         r4 = m_rt.to_matrix()
         assert all(
-            self.close(r4[i][j], r3[i][j], tol=2e-3)
-            for i in range(3)
-            for j in range(3)
+            self.close(r4[i][j], r3[i][j], tol=2e-3) for i in range(3) for j in range(3)
         )
         assert all(self.close(r4[i][3], t4[i][3], tol=2e-3) for i in range(3))
 
@@ -92,9 +90,7 @@ class TestMotor(Checks):
         assert self.close(Motor.exp(b90, 0.5).apply(p2).dist(r45.apply(p2)), 0)
         # 负 scale = 逆
         r_neg45 = Motor.rotor((0, 0, 1), -math.pi / 4)
-        assert self.close(
-            Motor.exp(b90, -0.5).apply(p2).dist(r_neg45.apply(p2)), 0
-        )
+        assert self.close(Motor.exp(b90, -0.5).apply(p2).dist(r_neg45.apply(p2)), 0)
 
     def test_interpolate_midpoint(self):
         r90 = Motor.rotor((0, 0, 1), math.pi / 2)

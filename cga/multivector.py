@@ -429,9 +429,10 @@ class Multivector:
     def gp(self, other: Multivector) -> Multivector:
         """几何积。result[k] = Σ GP_MASK[i,j,k]·self_i·other_j,
         用预计算的稀疏非零 (i,j) 对索引。"""
-        prod = self.values[Multivector.GP_NONZERO_I] * other.values[
-            Multivector.GP_NONZERO_J
-        ]
+        prod = (
+            self.values[Multivector.GP_NONZERO_I]
+            * other.values[Multivector.GP_NONZERO_J]
+        )
         mask_rows = Multivector.GP_MASK[
             Multivector.GP_NONZERO_I, Multivector.GP_NONZERO_J, :
         ]  # (N, 32)
@@ -620,9 +621,7 @@ Multivector.GP_TABLE = Multivector.build_gp_table()
 ) = Multivector.build_gp_dense()
 Multivector.GRADE_MASKS = Multivector.build_grade_masks()
 # 两种对合的符号掩码
-Multivector.REVERSE_MASK = Multivector.grade_signs(
-    lambda g: (-1) ** (g * (g - 1) // 2)
-)
+Multivector.REVERSE_MASK = Multivector.grade_signs(lambda g: (-1) ** (g * (g - 1) // 2))
 Multivector.INVOLUTION_MASK = Multivector.grade_signs(lambda g: -1 if g % 2 else 1)
 (
     Multivector.GP_MASK,

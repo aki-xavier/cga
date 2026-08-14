@@ -1,6 +1,5 @@
 """CGS v2 自检: 变量/表达式/数学函数/for+range/module/if-else/echo/union。"""
 
-
 import pytest
 
 from cga.engine import SphereGeometry
@@ -23,8 +22,7 @@ class TestSceneLangV2(Checks):
 
     def test_unary_minus_and_vector_arith(self):
         scene, _cam = SceneLoader.load(
-            "base = [1, 2, 3];\n"
-            "translate([-1, 0, 0] + base * 2) sphere(r=0.5);"
+            "base = [1, 2, 3];\ntranslate([-1, 0, 0] + base * 2) sphere(r=0.5);"
         )
         # [-1,0,0] + [2,4,6] = [1,4,6]
         m = scene.objects[0].motor().to_matrix()
@@ -65,8 +63,7 @@ class TestSceneLangV2(Checks):
     def test_module_inherits_caller_transform(self):
         # module 调用点的 motor 上下文正常传入
         scene, _cam = SceneLoader.load(
-            "module ball() { sphere(r=1); }\n"
-            "translate([3, 0, 0]) ball();"
+            "module ball() { sphere(r=1); }\ntranslate([3, 0, 0]) ball();"
         )
         assert self.close(scene.objects[0].motor().to_matrix()[0][3], 3.0)
 

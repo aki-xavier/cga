@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use gpui::{Context, HighlightStyle, SharedString, Window, rgb};
+use gpui::{rgb, Context, HighlightStyle, SharedString, Window};
 use gpui_component::input::{
     FoldRange, HighlightStyleResolver, InputBaseState, InputEdit, InputHighlighter, Rope,
 };
@@ -135,7 +135,12 @@ fn tokenize(text: &str) -> Vec<(Range<usize>, &'static str)> {
         // 两字符运算符
         if i + 1 < n {
             let two = &text[i..i + 2];
-            if two == "==" || two == "!=" || two == "<=" || two == ">=" || two == "&&" || two == "||"
+            if two == "=="
+                || two == "!="
+                || two == "<="
+                || two == ">="
+                || two == "&&"
+                || two == "||"
             {
                 out.push((i..i + 2, "operator"));
                 i += 2;

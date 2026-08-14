@@ -80,7 +80,11 @@ fn tokenize(text: &str) -> Vec<T> {
                 }
             }
             let value = text[s..i].parse::<f64>().unwrap_or(0.0);
-            toks.push(T { k: K::Num(value), s, e: i });
+            toks.push(T {
+                k: K::Num(value),
+                s,
+                e: i,
+            });
             continue;
         }
         if c.is_ascii_alphabetic() || c == b'_' {
@@ -95,10 +99,7 @@ fn tokenize(text: &str) -> Vec<T> {
             });
             continue;
         }
-        if matches!(
-            c,
-            b'(' | b')' | b'[' | b']' | b',' | b'=' | b';' | b':'
-        ) {
+        if matches!(c, b'(' | b')' | b'[' | b']' | b',' | b'=' | b';' | b':') {
             toks.push(T {
                 k: K::Sym(c as char),
                 s: i,
@@ -357,7 +358,12 @@ mod tests {
         let labels: Vec<_> = ps.iter().map(|p| p.label.as_str()).collect();
         assert_eq!(
             labels,
-            vec!["translate.t[0]", "translate.t[1]", "translate.t[2]", "sphere.r"]
+            vec![
+                "translate.t[0]",
+                "translate.t[1]",
+                "translate.t[2]",
+                "sphere.r"
+            ]
         );
     }
 
@@ -376,7 +382,8 @@ mod tests {
 
     #[test]
     fn material_named_args() {
-        let ps = extract_params("material(color=0xB0B0B0, roughness=0.7, metalness=0.25) sphere(r=1);");
+        let ps =
+            extract_params("material(color=0xB0B0B0, roughness=0.7, metalness=0.25) sphere(r=1);");
         let labels: Vec<_> = ps.iter().map(|p| p.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -392,4 +399,3 @@ mod tests {
         assert_eq!(format_number(-0.0), "0");
     }
 }
-

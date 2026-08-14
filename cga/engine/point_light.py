@@ -25,15 +25,11 @@ class PointLight(LightBase):
         return PointLight(self.color, self.intensity, pos_cam)
 
     def far(self, p: mx.array) -> mx.array | None:
-        lv = (
-            mx.broadcast_to(mx.array(self.position, dtype=mx.float32), p.shape) - p
-        )
+        lv = mx.broadcast_to(mx.array(self.position, dtype=mx.float32), p.shape) - p
         return mx.sqrt(mx.sum(lv * lv, axis=-1))
 
     def direction_at(self, p: mx.array) -> tuple[mx.array, float]:
         """方向 = 位置→命中点, 距离平方衰减。"""
-        lv = (
-            mx.broadcast_to(mx.array(self.position, dtype=mx.float32), p.shape) - p
-        )
+        lv = mx.broadcast_to(mx.array(self.position, dtype=mx.float32), p.shape) - p
         dist2 = mx.sum(lv * lv, axis=-1, keepdims=True)
         return lv / mx.sqrt(dist2), self.intensity / (1.0 + dist2 / 8.0)

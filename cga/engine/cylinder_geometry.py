@@ -70,14 +70,17 @@ class CylinderGeometry(GeometryBase):
         cap_t = mx.stack(
             [(h - o_par[:, 0]) / denom, (-h - o_par[:, 0]) / denom], axis=-1
         )  # (N,2)
-        cap_ok = mx.broadcast_to(
-            (mx.abs(denom) > 1e-9)[:, None], (o.shape[0], 2)
-        )
+        cap_ok = mx.broadcast_to((mx.abs(denom) > 1e-9)[:, None], (o.shape[0], 2))
         cap_ok = mx.logical_and(cap_ok, cap_t > 1e-6)  # (N,2)
         p_cap = o[:, None, :] + cap_t[:, :, None] * d[:, None, :]  # (N,2,3)
-        lat = p_cap - q[None, None, :] - mx.sum(
-            (p_cap - q[None, None, :]) * u[None, None, :], axis=-1, keepdims=True
-        ) * u[None, None, :]
+        lat = (
+            p_cap
+            - q[None, None, :]
+            - mx.sum(
+                (p_cap - q[None, None, :]) * u[None, None, :], axis=-1, keepdims=True
+            )
+            * u[None, None, :]
+        )
         cap_ok = mx.logical_and(cap_ok, mx.sum(lat * lat, axis=-1) <= r * r)
         n_cap = -mx.sign(denom)[:, None] * u[None, :]  # 两个端盖同一出射法向 (N,3)
         n_cap = mx.stack([n_cap, n_cap], axis=1)  # (N,2,3)
@@ -87,9 +90,7 @@ class CylinderGeometry(GeometryBase):
         t_eff = mx.where(ok_all, t_all, mx.full_like(t_all, float("inf")))
         t_min = mx.min(t_eff, axis=-1)
         idx = mx.argmin(t_eff, axis=-1)
-        n_all = mx.stack(
-            [n, n_cap[:, 0, :], n_cap[:, 1, :]], axis=1
-        )  # (N,3,3)
+        n_all = mx.stack([n, n_cap[:, 0, :], n_cap[:, 1, :]], axis=1)  # (N,3,3)
         n_fin = mx.take_along_axis(
             n_all, mx.broadcast_to(idx[:, None, None], (n.shape[0], 1, 3)), axis=1
         )[:, 0, :]

@@ -44,9 +44,18 @@ class PrimitiveRenderer:
 
     # 区域色盘 (12 色, 区分相邻区域即可, 非语义色)
     PALETTE: ClassVar[list[tuple[int, int, int]]] = [
-        (244, 67, 54), (33, 150, 243), (76, 175, 80), (255, 193, 7),
-        (156, 39, 176), (0, 188, 212), (255, 87, 34), (139, 195, 74),
-        (63, 81, 181), (255, 235, 59), (0, 150, 136), (233, 30, 99),
+        (244, 67, 54),
+        (33, 150, 243),
+        (76, 175, 80),
+        (255, 193, 7),
+        (156, 39, 176),
+        (0, 188, 212),
+        (255, 87, 34),
+        (139, 195, 74),
+        (63, 81, 181),
+        (255, 235, 59),
+        (0, 150, 136),
+        (233, 30, 99),
     ]
     LIGHT: ClassVar[tuple[float, float, float]] = (0.3, 0.6, 1.0)  # 固定方向光
 
@@ -105,16 +114,13 @@ class PrimitiveRenderer:
                 mx.zeros((H, W, 3), dtype=mx.uint8),
             )
         yy, xx = mx.meshgrid(
-            mx.arange(H, dtype=mx.float32), mx.arange(W, dtype=mx.float32),
+            mx.arange(H, dtype=mx.float32),
+            mx.arange(W, dtype=mx.float32),
             indexing="ij",
         )
         # 光线方向 (H,W,3), d_z = 1 → 命中参数 t 即相机深度 Z
-        dirs = mx.stack(
-            [(xx - cx) / fx, (yy - cy) / fy, mx.ones_like(xx)], axis=-1
-        )
-        cams = [
-            motor.apply(p.blade) if motor is not None else p.blade for p in prims
-        ]
+        dirs = mx.stack([(xx - cx) / fx, (yy - cy) / fy, mx.ones_like(xx)], axis=-1)
+        cams = [motor.apply(p.blade) if motor is not None else p.blade for p in prims]
         light = mx.array(PrimitiveRenderer.LIGHT, dtype=mx.float32)
         light = light / mx.linalg.norm(light)
         best = mx.full((H, W), float("inf"), dtype=mx.float32)
@@ -128,9 +134,7 @@ class PrimitiveRenderer:
                 sel = regions == p.region
             if p.kind == "plane":
                 n, d = PrimitiveRenderer.plane_params(b)
-                denom = mx.where(
-                    mx.abs(dirs @ n) > 1e-8, dirs @ n, float("inf")
-                )
+                denom = mx.where(mx.abs(dirs @ n) > 1e-8, dirs @ n, float("inf"))
                 t = d / denom
                 nrm = mx.broadcast_to(n, (H, W, 3))
             elif p.kind == "cylinder":
@@ -263,7 +267,8 @@ class PrimitiveRenderer:
                 RenderPrimitive("sphere", sphere_near, 2),
                 RenderPrimitive("plane", plane_far, 1),
             ],
-            K, (H, W),
+            K,
+            (H, W),
         )
         assert abs(float(out2.depth[48, 64]) - 1.5) < 1e-3, float(out2.depth[48, 64])
         assert abs(float(out2.depth[5, 5]) - 4.0) < 1e-3, float(out2.depth[5, 5])
@@ -272,9 +277,7 @@ class PrimitiveRenderer:
         # motor: 世界→相机 = 对场景 blades 共轭; translator(−1·z) 把
         # 场景后移 1m (相机前进 1m) → 平面 4.0→3.0
         m = Motor.translator((0.0, 0.0, -1.0))
-        out3 = render(
-            [RenderPrimitive("plane", plane_far, 1)], K, (H, W), motor=m
-        )
+        out3 = render([RenderPrimitive("plane", plane_far, 1)], K, (H, W), motor=m)
         assert abs(float(out3.depth[48, 64]) - 3.0) < 1e-3, float(out3.depth[48, 64])
         print("  ok  motor: 相机前进 1m → 平面 4.0→3.0")
 
@@ -308,7 +311,9 @@ class PrimitiveRenderer:
         lo = mx.minimum(rgb_wall.astype(mx.float32), rgb_ball.astype(mx.float32)) - 2
         hi = mx.maximum(rgb_wall.astype(mx.float32), rgb_ball.astype(mx.float32)) + 2
         assert bool(mx.all((px >= lo) & (px <= hi))), (
-            px.tolist(), rgb_wall.tolist(), rgb_ball.tolist(),
+            px.tolist(),
+            rgb_wall.tolist(),
+            rgb_ball.tolist(),
         )
         # 深度语义不变: 最近表面 (半透明也取前表面 1.5)
         assert abs(float(g5.depth[48, 64]) - 1.5) < 1e-3, float(g5.depth[48, 64])

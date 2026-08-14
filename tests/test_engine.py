@@ -108,9 +108,7 @@ class TestEngine(Checks):
             )
         )
         img = Renderer.render_frame(sc, self.cam0(), 63, 47)
-        red_col = [
-            i for i in range(47) if img[i, 31][0] > 200 and img[i, 31][2] < 100
-        ]
+        red_col = [i for i in range(47) if img[i, 31][0] > 200 and img[i, 31][2] < 100]
         assert len(red_col) > 3
         assert img[max(0, red_col[0] - 3), 31][:3].tolist() == [0, 0, 255]
 

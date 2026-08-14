@@ -104,6 +104,7 @@ class Renderer:
         rgba = mx.concatenate([rgb, mx.ones((N // S, 1), dtype=mx.float32)], axis=-1)
         rgba = mx.clip(rgba * 255.0 + 0.5, 0.0, 255.0).astype(mx.uint8)
         return mx.reshape(rgba, (self.height, self.width, 4))
+
     def nearest(
         self,
         scene: Scene,
@@ -222,8 +223,16 @@ class Renderer:
                 w_t = mx.max(mx.where(need, w_t, 0.0)).item()
                 refl = (
                     self.trace(
-                        scene, camera, p + eps * n, d_r, lit, ambient, bg,
-                        in_medium, sigma, depth + 1,
+                        scene,
+                        camera,
+                        p + eps * n,
+                        d_r,
+                        lit,
+                        ambient,
+                        bg,
+                        in_medium,
+                        sigma,
+                        depth + 1,
                     )
                     if w_r > 1e-3
                     else mx.zeros_like(result)
@@ -233,8 +242,16 @@ class Renderer:
                 sig_next = mx.where(entering, abso, mx.where(need, 0.0, sigma))
                 refr = (
                     self.trace(
-                        scene, camera, p - eps * n, d_t, lit, ambient, bg,
-                        mx.logical_xor(in_medium, need), sig_next, depth + 1,
+                        scene,
+                        camera,
+                        p - eps * n,
+                        d_t,
+                        lit,
+                        ambient,
+                        bg,
+                        mx.logical_xor(in_medium, need),
+                        sig_next,
+                        depth + 1,
                     )
                     if w_t > 1e-3
                     else mx.zeros_like(result)

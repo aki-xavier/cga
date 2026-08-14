@@ -75,9 +75,7 @@ class TestPrimitives(Checks):
 
     def test_far_from_origin_dist(self):
         # float32 conformal 内积会灾难性抵消 → 0, 距离走 float64 欧氏公式
-        assert self.close(
-            Point(1000, 0, 0).dist(Point(1001, 0, 0)), 1.0, tol=1e-2
-        )
+        assert self.close(Point(1000, 0, 0).dist(Point(1001, 0, 0)), 1.0, tol=1e-2)
 
     def test_cylinder_distances(self):
         cy = Cylinder((0.0, 0.0, 2.0), (0.0, 1.0, 0.0), 1.0)  # 轴 ∥ Y 过 (0,0,2)

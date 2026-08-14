@@ -41,8 +41,12 @@ class TestSceneLang(Checks):
         )
         kinds = [type(o.geometry) for o in scene.objects]
         assert kinds == [
-            SphereGeometry, PlaneGeometry, CylinderGeometry,
-            CylinderGeometry, BoxGeometry, CircleGeometry,
+            SphereGeometry,
+            PlaneGeometry,
+            CylinderGeometry,
+            CylinderGeometry,
+            BoxGeometry,
+            CircleGeometry,
         ]
         cy_inf, cy_fin = scene.objects[2].geometry, scene.objects[3].geometry
         assert isinstance(cy_inf, CylinderGeometry) and cy_inf.half is None
@@ -66,8 +70,7 @@ class TestSceneLang(Checks):
     def test_nested_block_scoping(self):
         # 块内平移/材质不外泄: 第二球在原点、默认材质
         scene, _cam = SceneLoader.load(
-            "material(color=0xFF0000) { translate([1, 0, 0]) sphere(r=1); }"
-            "sphere(r=1);"
+            "material(color=0xFF0000) { translate([1, 0, 0]) sphere(r=1); }sphere(r=1);"
         )
         first, second = scene.objects
         assert self.close(first.motor().to_matrix()[0][3], 1.0)
@@ -101,7 +104,9 @@ class TestSceneLang(Checks):
             "camera(fov=40, aspect=1.0, position=[0, 0, 5], target=[0, 0, 0]);"
         )
         assert [type(light) for light in scene.lights] == [
-            DirectionalLight, PointLight, AmbientLight,
+            DirectionalLight,
+            PointLight,
+            AmbientLight,
         ]
         assert self.close(scene.background.r, 0x10 / 255)
         assert isinstance(cam, PerspectiveCamera)

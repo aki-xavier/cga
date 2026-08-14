@@ -19,7 +19,7 @@ use gpui_component::{button::*, *};
 mod highlight;
 mod params;
 
-use highlight::{CgsHighlighter, CgsHighlightStyles};
+use highlight::{CgsHighlightStyles, CgsHighlighter};
 use params::{extract_params, format_number, replace_range, RawParam};
 
 const SERVER: &str = "http://127.0.0.1:8123";
@@ -86,7 +86,12 @@ fn render_via_server(text: &str) -> Result<Vec<u8>, String> {
 fn server_healthy() -> bool {
     ureq::get(format!("{SERVER}/health"))
         .call()
-        .map(|mut r| r.body_mut().read_to_string().map(|s| s == "ok").unwrap_or(false))
+        .map(|mut r| {
+            r.body_mut()
+                .read_to_string()
+                .map(|s| s == "ok")
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 
@@ -100,7 +105,13 @@ fn ensure_server() {
         .expect("editor/ 应有父目录")
         .to_path_buf();
     let _ = std::process::Command::new("uv")
-        .args(["run", "python", "-m", "cga.scene_lang.render_server", "8123"])
+        .args([
+            "run",
+            "python",
+            "-m",
+            "cga.scene_lang.render_server",
+            "8123",
+        ])
         .current_dir(&repo)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -142,7 +153,12 @@ impl CgsEditor {
             })
             .await;
             this.update(cx, |this, cx| {
-                this.status = if ok { "就绪" } else { "渲染服务启动失败" }.into();
+                this.status = if ok {
+                    "就绪"
+                } else {
+                    "渲染服务启动失败"
+                }
+                .into();
                 this.status_ok = ok;
                 this.schedule_render(cx);
                 this.refresh_params(cx);
@@ -160,7 +176,10 @@ impl CgsEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let title = path.as_ref().map(|p| title_of(p)).unwrap_or_else(|| "未命名".to_string());
+        let title = path
+            .as_ref()
+            .map(|p| title_of(p))
+            .unwrap_or_else(|| "未命名".to_string());
         let editor = cx.new(|cx| {
             EditorState::new("cgs", window, cx)
                 .line_number(true)
@@ -222,8 +241,7 @@ impl CgsEditor {
                 }
                 match result {
                     Ok(png) => {
-                        this.preview =
-                            Some(Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                        this.preview = Some(Arc::new(Image::from_bytes(ImageFormat::Png, png)));
                         this.status =
                             format!("已渲染 ({:.0}ms)", elapsed.as_millis() as f64).into();
                         this.status_ok = true;
@@ -435,17 +453,17 @@ impl CgsEditor {
                     cx.notify();
                 },
             )))
-            .child(
-                Button::new("open")
-                    .label("打开…")
-                    .on_click(cx.listener(|this, _ev, window, cx| {
-                        this.open_dialog(window, cx);
-                    })),
-            )
-            .child(div().flex_1())
-            .child(Button::new("save").label("保存").on_click(cx.listener(
-                |this, _ev, window, cx| this.save_active(window, cx),
+            .child(Button::new("open").label("打开…").on_click(cx.listener(
+                |this, _ev, window, cx| {
+                    this.open_dialog(window, cx);
+                },
             )))
+            .child(div().flex_1())
+            .child(
+                Button::new("save")
+                    .label("保存")
+                    .on_click(cx.listener(|this, _ev, window, cx| this.save_active(window, cx))),
+            )
     }
 
     fn tab_element(&self, i: usize, doc: &Document, cx: &mut Context<Self>) -> impl IntoElement {
@@ -509,7 +527,12 @@ impl CgsEditor {
                     .h_flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_sm().text_color(rgb(0x9aa0ac)).child(p.raw.label.clone()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0x9aa0ac))
+                            .child(p.raw.label.clone()),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -562,7 +585,8 @@ impl Render for CgsEditor {
             let offset = editor.read(cx).base_state().read(cx).scroll_offset();
             editor.update(cx, |e, cx| {
                 e.set_value(text, window, cx);
-                e.base_state().update(cx, |s, cx| s.set_scroll_offset(offset, cx));
+                e.base_state()
+                    .update(cx, |s, cx| s.set_scroll_offset(offset, cx));
             });
             self.schedule_render(cx);
         }

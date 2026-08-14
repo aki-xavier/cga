@@ -45,40 +45,73 @@ class SceneLoader:
         # 修饰符
         "translate": (["t"], {}),
         "rotate": (["axis", "angle"], {}),
-        "material": ([], {
-            "color": None, "roughness": None, "metalness": None,
-            "emissive": None, "opacity": None, "ior": None,
-            "absorption": None, "unlit": None,
-        }),
+        "material": (
+            [],
+            {
+                "color": None,
+                "roughness": None,
+                "metalness": None,
+                "emissive": None,
+                "opacity": None,
+                "ior": None,
+                "absorption": None,
+                "unlit": None,
+            },
+        ),
         # 灯光
         "directional_light": (["direction"], {"intensity": 1.0, "color": 0xFFFFFF}),
         "point_light": (["position"], {"intensity": 1.0, "color": 0xFFFFFF}),
         "ambient_light": ([], {"intensity": 0.3, "color": 0xFFFFFF}),
         # 场景设置
         "background": (["color"], {}),
-        "camera": ([], {
-            "fov": 50.0, "aspect": 16.0 / 9.0,
-            "position": (0.0, 0.0, 5.0), "target": (0.0, 0.0, 0.0),
-        }),
+        "camera": (
+            [],
+            {
+                "fov": 50.0,
+                "aspect": 16.0 / 9.0,
+                "position": (0.0, 0.0, 5.0),
+                "target": (0.0, 0.0, 0.0),
+            },
+        ),
     }
     MODIFIERS: ClassVar[tuple[str, ...]] = ("translate", "rotate", "material")
 
     # 表达式里的数学函数 (OpenSCAD 内建子集)
     FUNCTIONS: ClassVar[dict] = {
-        "abs": abs, "sign": lambda x: (x > 0) - (x < 0),
-        "sin": math.sin, "cos": math.cos, "tan": math.tan,
-        "asin": math.asin, "acos": math.acos, "atan": math.atan,
-        "atan2": math.atan2, "sqrt": math.sqrt, "exp": math.exp,
-        "ln": math.log, "log": math.log10,
-        "floor": math.floor, "ceil": math.ceil, "round": round,
-        "pow": pow, "min": min, "max": max,
+        "abs": abs,
+        "sign": lambda x: (x > 0) - (x < 0),
+        "sin": math.sin,
+        "cos": math.cos,
+        "tan": math.tan,
+        "asin": math.asin,
+        "acos": math.acos,
+        "atan": math.atan,
+        "atan2": math.atan2,
+        "sqrt": math.sqrt,
+        "exp": math.exp,
+        "ln": math.log,
+        "log": math.log10,
+        "floor": math.floor,
+        "ceil": math.ceil,
+        "round": round,
+        "pow": pow,
+        "min": min,
+        "max": max,
     }
     PRECEDENCE: ClassVar[dict[str, int]] = {
-        "||": 1, "&&": 2,
-        "==": 3, "!=": 3,
-        "<": 4, "<=": 4, ">": 4, ">=": 4,
-        "+": 5, "-": 5,
-        "*": 6, "/": 6, "%": 6,
+        "||": 1,
+        "&&": 2,
+        "==": 3,
+        "!=": 3,
+        "<": 4,
+        "<=": 4,
+        ">": 4,
+        ">=": 4,
+        "+": 5,
+        "-": 5,
+        "*": 6,
+        "/": 6,
+        "%": 6,
     }
 
     def __init__(self, tokens: list[tuple[str, object, int]]):
@@ -491,9 +524,7 @@ class SceneLoader:
         for pname, default in params:
             if pname not in scope:
                 if default is None:
-                    raise ValueError(
-                        f"CGS 第{line}行: module {name} 缺参数 {pname!r}"
-                    )
+                    raise ValueError(f"CGS 第{line}行: module {name} 缺参数 {pname!r}")
                 scope[pname] = self.eval_tokens(default, scope)
         self.run_tokens(body, motor, mat, scope)
 
