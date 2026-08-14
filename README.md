@@ -60,6 +60,14 @@ uv run python -m cga.scene_lang examples/orbit.cgs orbit.png 640 480 2
 `editor/` 是 OpenSCAD 风格的桌面编辑器 (gpui-component): 左侧代码编辑,
 右侧实时预览 (编辑防抖 300ms → 常驻渲染服务 → PNG), 解析错误上状态栏。
 
+- **多文件标签页**: 顶部标签栏, 启动自动打开 `examples/*.cgs`, 支持
+  新建 / 打开 (系统对话框, 多选) / 保存 (未命名走另存为) / 关闭切换。
+- **CGS 语法高亮**: 手写词法分析器 (关键字 / 图元 / 修饰符 / 函数 /
+  数字与色值 / 注释 / 运算符), One-Dark 配色 + 大括号折叠。
+- **拖拽调参**: 右侧参数面板把每个数值字面量 (如 `sphere.r`、
+  `translate.t[1]`、`for.i.start`) 映射为滑块, 拖动直写回源文本并
+  实时重渲染; 色值不纳入拖拽。
+
 ```bash
 cd editor && cargo run    # 首次构建较久; 渲染服务自动拉起
 ```
