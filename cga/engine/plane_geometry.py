@@ -32,3 +32,14 @@ class PlaneGeometry(GeometryBase):
         mask = mx.logical_and(mx.abs(denom) > 1e-9, t > 1e-6)
         n_rep = mx.broadcast_to(n, o.shape)
         return t, mx.where(mask[:, None], n_rep, mx.zeros_like(n_rep)), mask
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线: 只算 (t, mask), 与 intersect 逐位一致。"""
+        n = mx.array(params[0], dtype=mx.float32)
+        dist = params[1]
+        denom = mx.sum(n * d, axis=-1)
+        t = (dist - mx.sum(n * o, axis=-1)) / denom
+        mask = mx.logical_and(mx.abs(denom) > 1e-9, t > 1e-6)
+        return t, mask

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import mlx.core as mx
 
 from cga.engine.ambient_light import AmbientLight
+from cga.engine.material import Material
 
 if TYPE_CHECKING:
     from cga.engine.perspective_camera import PerspectiveCamera
@@ -113,8 +114,13 @@ class Renderer:
         d: mx.array,
         lit: Sequence,
         ambient: AmbientLight | None,
+        primary: bool = False,
     ) -> tuple[mx.array, mx.array, mx.array, mx.array, mx.array, mx.array, mx.array]:
         """一束射线 vs 场景全部图元 → 每像素最近命中 + 局部着色。
+
+        primary=True 仅当射线是相机主射线 (原点在相机、方向 d_z>0): 此时可
+        对相机空间 AABB 做保守后方剔除。阴影/递归射线 origin/direction 任意,
+        不适用。
 
         返回 (hit, t, n, col, opacity, ior, absorption); 未命中像素为占位值。
 
@@ -123,27 +129,45 @@ class Renderer:
         最后共享命中点逐材质着色、按最近图元索引选取。
         """
         N = o.shape[0]
-        hit = mx.zeros((N,), dtype=mx.bool_)
         best_t = mx.full((N,), float("inf"), dtype=mx.float32)
         best_n = mx.zeros((N, 3), dtype=mx.float32)
         best_idx = mx.zeros((N,), dtype=mx.int32)
-        op = mx.ones((N,), dtype=mx.float32)
-        ior = mx.full((N,), 1.5, dtype=mx.float32)
-        abso = mx.zeros((N,), dtype=mx.float32)
+        objs = scene.objects
+        # 逐对象标量 (opacity/ior/absorption) 预先堆叠, 循环后按最近对象
+        # gather —— 避免循环内每对象 3 次全帧 where (对象多时是主要开销)。
+        if objs:
+            opacity = mx.stack(
+                [mx.array(obj.material.opacity, dtype=mx.float32) for obj in objs]
+            )
+            iors = mx.stack(
+                [mx.array(obj.material.ior, dtype=mx.float32) for obj in objs]
+            )
+            absos = mx.stack(
+                [mx.array(obj.material.absorption, dtype=mx.float32) for obj in objs]
+            )
         params_list = []
-        for i, obj in enumerate(scene.objects):
+        for i, obj in enumerate(objs):
             wm = camera.motor.compose(obj.motor())  # 世界→相机 · 局部→世界
             params = obj.geometry.to_camera(wm)
             params_list.append(params)
+            if primary:
+                bnd = obj.geometry.bounds_camera(params)
+                if bnd is not None and bnd[1][2] <= 1e-6:
+                    continue  # AABB 整体在相机后 → 主射线 (d_z>0) 不可能命中
             t, n_i, mask = obj.geometry.intersect(params, o, d)
             nearer = mx.logical_and(mask, t < best_t)
             best_t = mx.where(nearer, t, best_t)
             best_n = mx.where(nearer[:, None], n_i, best_n)
             best_idx = mx.where(nearer, i, best_idx)
-            op = mx.where(nearer, obj.material.opacity, op)
-            ior = mx.where(nearer, obj.material.ior, ior)
-            abso = mx.where(nearer, obj.material.absorption, abso)
-            hit = mx.logical_or(hit, nearer)
+        hit = mx.isfinite(best_t)  # 命中像素 t 有限; 未命中保持 inf
+        if objs:
+            op = mx.take(opacity, best_idx, axis=0)
+            ior = mx.take(iors, best_idx, axis=0)
+            abso = mx.take(absos, best_idx, axis=0)
+        else:
+            op = mx.ones((N,), dtype=mx.float32)
+            ior = mx.full((N,), 1.5, dtype=mx.float32)
+            abso = mx.zeros((N,), dtype=mx.float32)
         cos_i = -mx.sum(d * best_n, axis=-1, keepdims=True)
         best_n = mx.where(cos_i < 0.0, -best_n, best_n)  # 法向翻向射线起点侧
         p = o + best_t[:, None] * d
@@ -155,18 +179,33 @@ class Renderer:
             far = light.far(p)
             v = mx.ones((N,), dtype=mx.float32)
             for obj, params in zip(scene.objects, params_list):
-                _t, _n, m = obj.geometry.intersect(params, p_s, ld)
+                _t, m = obj.geometry.intersect_shadow(params, p_s, ld)
                 occ = m if far is None else mx.logical_and(m, _t < far)
                 v = v * mx.where(occ, 1.0 - obj.material.opacity, 1.0)
             vis.append(v)
         if scene.objects:
-            cols = mx.stack(
-                [
-                    obj.material.shade(p, best_n, d, lit, ambient, vis)
-                    for obj in scene.objects
-                ]
+            # 逐对象标量参数 → 按最近对象 gather 成逐像素参数, 只着色一次。
+            # (旧实现: 每个对象在每像素都 shade 一遍再挑选, O(O×L×N) 且
+            #  中间张量 (O,N,3) 在对象多时吃满显存带宽。)
+            params = [obj.material.shade_params() for obj in scene.objects]
+            emissive = mx.stack([prm[0] for prm in params])  # (O,3)
+            diff = mx.stack([prm[1] for prm in params])  # (O,3)
+            spec = mx.stack([prm[2] for prm in params])  # (O,3)
+            expo = mx.stack(
+                [mx.array(prm[3], dtype=mx.float32) for prm in params]
+            )  # (O,)
+            col = Material.shade_batched(
+                mx.take(emissive, best_idx, axis=0),  # (N,3)
+                mx.take(diff, best_idx, axis=0),
+                mx.take(spec, best_idx, axis=0),
+                mx.take(expo, best_idx, axis=0)[:, None],  # (N,1)
+                p,
+                best_n,
+                d,
+                lit,
+                ambient,
+                vis,
             )
-            col = mx.take_along_axis(cols, best_idx[None, :, None], axis=0)[0]
         else:
             col = mx.zeros((N, 3), dtype=mx.float32)
         return hit, best_t, best_n, col, op, ior, abso
@@ -195,7 +234,7 @@ class Renderer:
         透明体互不重叠、嵌在空气中); 嵌套介质需每像素折射率栈。
         """
         hit, t, n, local, op, ior, abso = self.nearest(
-            scene, camera, o, d, lit, ambient
+            scene, camera, o, d, lit, ambient, primary=(depth == 0)
         )
         cos_i = -mx.sum(d * n, axis=-1, keepdims=True)
         n = mx.where(cos_i < 0.0, -n, n)  # 防御: 法向一律翻向射线起点侧
@@ -203,63 +242,85 @@ class Renderer:
         result = mx.where(hit[:, None], local, bg)
         if depth < self.max_depth:
             need = mx.logical_and(hit, op < 1.0)
-            if mx.any(need).item():
-                eta = mx.where(in_medium[:, None], ior[:, None], 1.0 / ior[:, None])
-                k = 1.0 - eta * eta * (1.0 - cos_i * cos_i)
-                cos_t = mx.sqrt(mx.maximum(k, 0.0))  # TIR 时占位, F 覆写为 1
-                g = 1.0 / eta  # n2/n1
-                # 精确非偏振 Fresnel (s/p 偏振平均)
-                rs = (cos_i - g * cos_t) / mx.maximum(cos_i + g * cos_t, 1e-12)
-                rp = (cos_t - g * cos_i) / mx.maximum(cos_t + g * cos_i, 1e-12)
-                fres = 0.5 * (rs * rs + rp * rp)
-                fres = mx.where(k <= 0.0, mx.ones_like(fres), fres)  # TIR → 全反射
-                p = o + t[:, None] * d
-                eps = 1e-3  # 自相交偏移
-                d_r = d + 2.0 * cos_i * n
-                d_t = eta * d + (eta * cos_i - cos_t) * n
-                # 分支剪枝: 整束权重可忽略时跳过递归 (省一被子树求交)
-                w_r = mx.max(mx.where(need, fres[:, 0], 0.0)).item()
-                w_t = ((1.0 - fres) * (1.0 - op[:, None]))[:, 0]
-                w_t = mx.max(mx.where(need, w_t, 0.0)).item()
+            eta = mx.where(in_medium[:, None], ior[:, None], 1.0 / ior[:, None])
+            k = 1.0 - eta * eta * (1.0 - cos_i * cos_i)
+            cos_t = mx.sqrt(mx.maximum(k, 0.0))  # TIR 时占位, F 覆写为 1
+            g = 1.0 / eta  # n2/n1
+            # 精确非偏振 Fresnel (s/p 偏振平均)
+            rs = (cos_i - g * cos_t) / mx.maximum(cos_i + g * cos_t, 1e-12)
+            rp = (cos_t - g * cos_i) / mx.maximum(cos_t + g * cos_i, 1e-12)
+            fres = 0.5 * (rs * rs + rp * rp)
+            fres = mx.where(k <= 0.0, mx.ones_like(fres), fres)  # TIR → 全反射
+            eps = 1e-3  # 自相交偏移
+            d_r = d + 2.0 * cos_i * n
+            d_t = eta * d + (eta * cos_i - cos_t) * n
+            # 分支剪枝: 整束权重可忽略时跳过递归。单次同步取
+            # (需要递归的像素数, 反射/折射最大权重) 供 Python 分支。
+            m_arr = mx.sum(need).astype(mx.float32)
+            w_r = mx.max(mx.where(need, fres[:, 0], 0.0))
+            w_t = ((1.0 - fres) * (1.0 - op[:, None]))[:, 0]
+            w_t = mx.max(mx.where(need, w_t, 0.0))
+            m_count, w_r_v, w_t_v = mx.stack([m_arr, w_r, w_t]).tolist()
+            m_count = int(m_count)
+            if m_count > 0:
+                # 只把 need 的透明子集射线压进紧凑数组递归 —— 避免对整帧
+                # 重复 nearest/阴影/着色 (旧实现玻璃场景 ≈ 3× 全帧)。
+                # 射线计算逐像素独立, 子集与全帧结果逐位一致。
+                # MLX 无 nonzero/argwhere/布尔索引, 用 argsort 取 need 的扁平索引。
+                idx = mx.argsort(mx.where(need, 0, 1).astype(mx.int32))[:m_count]
+                o_c = o[idx]
+                d_c = d[idx]
+                n_c = n[idx]
+                t_c = t[idx]
+                p_c = o_c + t_c[:, None] * d_c
+                local_c = local[idx]
+                op_c = op[idx]
+                abso_c = abso[idx]
+                in_c = in_medium[idx]
+                sigma_c = sigma[idx]
+                bg_c = bg[idx]
+                fres_c = fres[idx]
+                d_r_c = d_r[idx]
+                d_t_c = d_t[idx]
                 refl = (
                     self.trace(
                         scene,
                         camera,
-                        p + eps * n,
-                        d_r,
+                        p_c + eps * n_c,
+                        d_r_c,
                         lit,
                         ambient,
-                        bg,
-                        in_medium,
-                        sigma,
+                        bg_c,
+                        in_c,
+                        sigma_c,
                         depth + 1,
                     )
-                    if w_r > 1e-3
-                    else mx.zeros_like(result)
+                    if w_r_v > 1e-3
+                    else mx.zeros((m_count, 3), dtype=mx.float32)
                 )
-                # 折射进入/离开介质: 更新介质位与吸收系数
-                entering = mx.logical_and(need, mx.logical_not(in_medium))
-                sig_next = mx.where(entering, abso, mx.where(need, 0.0, sigma))
+                # 折射进入/离开介质: 更新介质位与吸收系数 (子集上 need 恒真)
+                entering_c = mx.logical_not(in_c)
+                sig_next_c = mx.where(entering_c, abso_c, 0.0)
                 refr = (
                     self.trace(
                         scene,
                         camera,
-                        p - eps * n,
-                        d_t,
+                        p_c - eps * n_c,
+                        d_t_c,
                         lit,
                         ambient,
-                        bg,
-                        mx.logical_xor(in_medium, need),
-                        sig_next,
+                        bg_c,
+                        mx.logical_not(in_c),
+                        sig_next_c,
                         depth + 1,
                     )
-                    if w_t > 1e-3
-                    else mx.zeros_like(result)
+                    if w_t_v > 1e-3
+                    else mx.zeros((m_count, 3), dtype=mx.float32)
                 )
-                glass = fres * refl + (1.0 - fres) * (
-                    op[:, None] * local + (1.0 - op[:, None]) * refr
+                glass_c = fres_c * refl + (1.0 - fres_c) * (
+                    op_c[:, None] * local_c + (1.0 - op_c[:, None]) * refr
                 )
-                result = mx.where(need[:, None], glass, result)
+                result = mx.put_along_axis(result, idx[:, None], glass_c, axis=0)
         # Beer: 介质内传播衰减
         att = mx.where(
             mx.logical_and(in_medium, hit)[:, None],
@@ -281,9 +342,12 @@ class Renderer:
 
     @staticmethod
     def frame_to_bytes(img: mx.array) -> bytes:
-        """(H, W, 4) uint8 RGBA 帧 → 扁平 RGBA bytes (PIL 输出桥, 无 numpy)。
+        """(H, W, 4) uint8 RGBA 帧 → 扁平 RGBA bytes (PIL 输出桥)。
 
         demo 层用 `Image.frombytes("RGBA", (w, h), Renderer.frame_to_bytes(img))`
-        存图。
+        存图。纯 MLX: mx.eval 把惰性图落地到主机内存, 再走 buffer 协议
+        一次取字节 (C-order RGBA)。旧实现 img.tolist() 逐元素 Python 生成器
+        ~67ms; 此路径 ~9ms, 剩余瓶颈是 GPU→CPU 拷贝而非转换方式。
         """
-        return bytes(v for row in img.tolist() for px in row for v in px)
+        mx.eval(img)  # 惰性图落地到主机内存 (eval 就地求值, 返回 None)
+        return bytes(memoryview(img))

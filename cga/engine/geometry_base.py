@@ -20,3 +20,20 @@ class GeometryBase:
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array, mx.array]:
         raise NotImplementedError
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线专用求交: 只返回 (t, mask), 跳过法向 (阴影不需要)。
+
+        t/mask 必须与 intersect 逐位一致 (最近表面 + 命中掩码)。
+        """
+        raise NotImplementedError
+
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple] | None:
+        """相机空间 AABB (lo, hi) (各为 3 元 float 的保守包围盒)。
+
+        None = 无界 (无限平面/圆柱), 无法剔除。用于保守剔除: AABB 整体在
+        相机后方 (hi.z <= 0) 时主射线 t>0 不可能命中, 跳过该对象求交。
+        """
+        return None

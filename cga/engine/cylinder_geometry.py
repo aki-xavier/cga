@@ -31,6 +31,16 @@ class CylinderGeometry(GeometryBase):
         u = Vec3.unit(Vec3.dir3(motor.apply(Multivector.E3)))
         return (q, u, self.radius, self.half)
 
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple] | None:
+        q, u, r, h = params
+        if h is None:
+            return None  # 无限圆柱无界
+        # 胶囊 (轴段 + 半径) 的保守 AABB
+        return (
+            tuple(q[i] - (abs(u[i]) * h + r) for i in range(3)),
+            tuple(q[i] + (abs(u[i]) * h + r) for i in range(3)),
+        )
+
     def intersect(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array, mx.array]:
@@ -100,3 +110,54 @@ class CylinderGeometry(GeometryBase):
             mx.where(fin[:, None], n_fin, mx.zeros_like(n_fin)),
             fin,
         )
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线: 只算 (t, mask), 与 intersect 逐位一致 (跳过法向)。"""
+        q = mx.array(params[0], dtype=mx.float32)
+        u = mx.array(params[1], dtype=mx.float32)
+        r = params[2]
+        h = params[3]
+        oc = o - q
+        d_par = mx.sum(d * u, axis=-1, keepdims=True)
+        o_par = mx.sum(oc * u, axis=-1, keepdims=True)
+        d_p = d - d_par * u
+        o_p = oc - o_par * u
+        a = mx.sum(d_p * d_p, axis=-1)
+        b = 2.0 * mx.sum(o_p * d_p, axis=-1)
+        cq = mx.sum(o_p * o_p, axis=-1) - r * r
+        disc = b * b - 4.0 * a * cq
+        valid = mx.logical_and(a > 1e-12, disc > 1e-12)
+        sq = mx.sqrt(mx.maximum(disc, 0.0))
+        t1 = (-b - sq) / (2.0 * a)
+        t2 = (-b + sq) / (2.0 * a)
+        t = mx.where(mx.logical_and(valid, t1 > 1e-6), t1, t2)
+        mask = mx.logical_and(valid, t > 1e-6)
+        if h is None:
+            return t, mask  # 无限圆柱: 侧面
+        # 有限圆柱: 侧面限制在轴段 + 两端盖
+        s = o_par + t[:, None] * d_par
+        side_ok = mx.logical_and(mask, mx.abs(s)[:, 0] <= h)
+        denom = d_par[:, 0]
+        cap_t = mx.stack(
+            [(h - o_par[:, 0]) / denom, (-h - o_par[:, 0]) / denom], axis=-1
+        )  # (N,2)
+        cap_ok = mx.broadcast_to((mx.abs(denom) > 1e-9)[:, None], (o.shape[0], 2))
+        cap_ok = mx.logical_and(cap_ok, cap_t > 1e-6)
+        p_cap = o[:, None, :] + cap_t[:, :, None] * d[:, None, :]  # (N,2,3)
+        lat = (
+            p_cap
+            - q[None, None, :]
+            - mx.sum(
+                (p_cap - q[None, None, :]) * u[None, None, :], axis=-1, keepdims=True
+            )
+            * u[None, None, :]
+        )
+        cap_ok = mx.logical_and(cap_ok, mx.sum(lat * lat, axis=-1) <= r * r)
+        t_all = mx.stack([t, cap_t[:, 0], cap_t[:, 1]], axis=-1)  # (N,3)
+        ok_all = mx.stack([side_ok, cap_ok[:, 0], cap_ok[:, 1]], axis=-1)
+        t_eff = mx.where(ok_all, t_all, mx.full_like(t_all, float("inf")))
+        t_min = mx.min(t_eff, axis=-1)
+        fin = mx.logical_and(mx.isfinite(t_min), t_min > 1e-6)
+        return mx.where(fin, t_min, t), fin

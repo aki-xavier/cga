@@ -21,6 +21,15 @@ class CircleGeometry(GeometryBase):
         n = Vec3.unit(Vec3.dir3(motor.apply(Multivector.E3)))
         return (c, n, self.radius)
 
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple]:
+        # 圆盘 ⊂ 其外接球 (保守)
+        c = params[0]
+        r = params[2]
+        return (
+            tuple(c[i] - r for i in range(3)),
+            tuple(c[i] + r for i in range(3)),
+        )
+
     def intersect(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array, mx.array]:
@@ -35,3 +44,17 @@ class CircleGeometry(GeometryBase):
         mask = mx.logical_and(mx.logical_and(mx.abs(denom) > 1e-9, t > 1e-6), in_disc)
         n = mx.where(front[:, None], n, -n)  # 背面可见时翻向相机
         return t, mx.where(mask[:, None], n, mx.zeros_like(n)), mask
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线: 只算 (t, mask), 与 intersect 逐位一致。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        n = mx.array(params[1], dtype=mx.float32)
+        r = params[2]
+        denom = mx.sum(n * d, axis=-1)
+        t = mx.sum(n * (c - o), axis=-1) / denom
+        p = o + t[:, None] * d
+        in_disc = mx.sum((p - c) * (p - c), axis=-1) <= r * r
+        mask = mx.logical_and(mx.logical_and(mx.abs(denom) > 1e-9, t > 1e-6), in_disc)
+        return t, mask

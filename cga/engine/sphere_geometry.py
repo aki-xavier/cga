@@ -17,6 +17,13 @@ class SphereGeometry(GeometryBase):
         s = motor.apply(self.blade)  # 对偶球 blade 共轭 (类型降级为 Multivector)
         return Sphere.from_dual(s)
 
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple]:
+        c, r = params
+        return (
+            tuple(c[i] - r for i in range(3)),
+            tuple(c[i] + r for i in range(3)),
+        )
+
     def intersect(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array, mx.array]:
@@ -39,3 +46,21 @@ class SphereGeometry(GeometryBase):
         inside = mx.logical_and(mask, t1 <= 1e-6)
         n = mx.where(inside[:, None], -n, n)
         return t, n, mask
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线: 只算 (t, mask), 与 intersect 逐位一致。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        r = params[1]
+        oc = o - c
+        b = 2.0 * mx.sum(oc * d, axis=-1)
+        cq = mx.sum(oc * oc, axis=-1) - r * r
+        disc = b * b - 4.0 * cq
+        valid = disc > 1e-12
+        sq = mx.sqrt(mx.maximum(disc, 0.0))
+        t1 = (-b - sq) / 2.0
+        t2 = (-b + sq) / 2.0
+        t = mx.where(mx.logical_and(valid, t1 > 1e-6), t1, t2)
+        mask = mx.logical_and(valid, t > 1e-6)
+        return t, mask

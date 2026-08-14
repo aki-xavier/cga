@@ -7,6 +7,8 @@ import mlx.core as mx
 from cga import Motor
 from cga.engine import (
     AmbientLight,
+    BoxGeometry,
+    CircleGeometry,
     Color,
     CylinderGeometry,
     DirectionalLight,
@@ -137,3 +139,63 @@ class TestEngine(Checks):
             i for i in range(47) if img_cap[i, 31][0] > 200 and img_cap[i, 31][2] < 100
         ]
         assert red_col and img[max(0, red_col[0] - 3), 31][0] > 200
+
+    def test_intersect_shadow_matches_intersect(self):
+        # 阴影专用求交 intersect_shadow 的 (t, mask) 必须与 intersect 逐位一致
+        geoms = [
+            SphereGeometry(1.0),
+            PlaneGeometry((0.0, 0.0, 1.0), -2.0),
+            CircleGeometry(1.0),
+            CylinderGeometry(0.6),
+            CylinderGeometry(0.6, length=1.5),
+            BoxGeometry(1.2, 1.4, 0.8),
+        ]
+        motor = Motor.rotor((1.0, 0.4, 0.2), 0.7)  # 非平凡旋转
+        u = mx.linspace(-2.0, 2.0, 9)
+        v = mx.linspace(-2.0, 2.0, 7)
+        uu, vv = mx.meshgrid(u, v)
+        d = mx.stack([uu, vv, mx.ones_like(uu)], axis=-1).reshape(-1, 3)
+        d = d / mx.sqrt(mx.sum(d * d, axis=-1, keepdims=True))
+        o = mx.zeros_like(d)
+        for g in geoms:
+            params = g.to_camera(motor)
+            t1, _n1, m1 = g.intersect(params, o, d)
+            t2, m2 = g.intersect_shadow(params, o, d)
+            assert mx.array_equal(m1, m2).item(), f"{type(g).__name__}: mask 不一致"
+            # 命中像素 t 逐位一致 (未命中像素 t 为垃圾值, 不参与遮挡判断)
+            t1_hit = mx.where(m1, t1, 0.0)
+            t2_hit = mx.where(m2, t2, 0.0)
+            assert mx.array_equal(t1_hit, t2_hit).item(), (
+                f"{type(g).__name__}: 命中 t 不一致"
+            )
+
+    def test_behind_camera_culling(self):
+        # 相机后方的对象被保守剔除, 输出与不添加它们逐位一致
+        cam = PerspectiveCamera(
+            fov=40, aspect=1.0, position=(0, 0, 0), target=(0, 0, 1)
+        )
+        cam.look_at((0, 0, 1))
+
+        def scene(with_behind: bool) -> Scene:
+            sc = Scene(background=Color(0x0000FF))
+            sc.add(
+                Mesh(
+                    SphereGeometry(0.5),
+                    MeshBasicMaterial(Color(0xFF0000)),
+                    position=(0, 0, 3),
+                )
+            )
+            if with_behind:
+                # 整体在相机后 (z ∈ [-7, -3]) → 主射线不可能命中
+                sc.add(
+                    Mesh(
+                        SphereGeometry(2.0),
+                        MeshBasicMaterial(Color(0x00FF00)),
+                        position=(0, 0, -5),
+                    )
+                )
+            return sc
+
+        a = Renderer.frame_to_bytes(Renderer(64, 64).render(scene(False), cam))
+        b = Renderer.frame_to_bytes(Renderer(64, 64).render(scene(True), cam))
+        assert a == b

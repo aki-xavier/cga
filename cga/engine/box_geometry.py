@@ -25,6 +25,14 @@ class BoxGeometry(GeometryBase):
             axes.append(Vec3.unit(Vec3.dir3(motor.apply(ax))))
         return (c, axes, self.half)
 
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple]:
+        c, axes, half = params
+        ext = [sum(abs(axes[j][i]) * half[j] for j in range(3)) for i in range(3)]
+        return (
+            tuple(c[i] - ext[i] for i in range(3)),
+            tuple(c[i] + ext[i] for i in range(3)),
+        )
+
     def intersect(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array, mx.array]:
@@ -71,3 +79,37 @@ class BoxGeometry(GeometryBase):
         )
         n = mx.where(valid[:, None], n, mx.zeros_like(n))
         return t, n, valid
+
+    def intersect_shadow(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """阴影射线: 只算 (t, mask), 与 intersect 逐位一致 (跳过法向)。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        axes = params[1]
+        half = params[2]
+        oc = o - c
+        op = mx.stack(
+            [
+                mx.sum(oc * mx.array(axes[i], dtype=mx.float32), axis=-1)
+                for i in range(3)
+            ],
+            axis=-1,
+        )
+        dp = mx.stack(
+            [
+                mx.sum(d * mx.array(axes[i], dtype=mx.float32), axis=-1)
+                for i in range(3)
+            ],
+            axis=-1,
+        )
+        inv = 1.0 / dp
+        t0 = -inv * (op + mx.array(half, dtype=mx.float32))
+        t1 = -inv * (op - mx.array(half, dtype=mx.float32))
+        tmin = mx.minimum(t0, t1)
+        tmax = mx.maximum(t0, t1)
+        t_entry = mx.max(tmin, axis=-1)
+        t_exit = mx.min(tmax, axis=-1)
+        valid = mx.logical_and(t_entry < t_exit, t_exit > 1e-6)
+        inside_hit = mx.logical_and(valid, t_entry <= 1e-6)
+        t = mx.where(mx.logical_and(valid, ~inside_hit), t_entry, t_exit)
+        return t, valid
