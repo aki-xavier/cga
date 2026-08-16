@@ -10,6 +10,7 @@ module 体 = 全局作用域的子作用域 + 形参绑定 (词法, 看不到调
 """
 
 import math
+from pathlib import Path
 from typing import ClassVar
 
 from cga.engine import (
@@ -27,6 +28,7 @@ from cga.engine import (
     PointLight,
     Scene,
     SphereGeometry,
+    Texture,
 )
 from cga.motors import Motor
 from cga.scene_lang.lexer import Lexer
@@ -56,6 +58,7 @@ class SceneLoader:
                 "ior": None,
                 "absorption": None,
                 "unlit": None,
+                "map": None,
             },
         ),
         # 灯光
@@ -114,17 +117,23 @@ class SceneLoader:
         "%": 6,
     }
 
-    def __init__(self, tokens: list[tuple[str, object, int]]):
+    def __init__(
+        self, tokens: list[tuple[str, object, int]], asset_root: Path | None = None
+    ):
         self.toks = tokens
         self.pos = 0
+        self.asset_root = asset_root
         self.scene = Scene()
         self.camera: PerspectiveCamera | None = None
         self.modules: dict[str, tuple[list[tuple[str, list | None]], list]] = {}
 
     @staticmethod
-    def load(text: str) -> tuple[Scene, PerspectiveCamera]:
-        """解析 CGS 文本 → (Scene, 相机)。无 camera 语句时给默认机位。"""
-        loader = SceneLoader(Lexer.tokenize(text))
+    def load(
+        text: str, asset_root: str | Path | None = None
+    ) -> tuple[Scene, PerspectiveCamera]:
+        """Parse CGS text with optional root for relative texture assets."""
+        root = None if asset_root is None else Path(asset_root).resolve()
+        loader = SceneLoader(Lexer.tokenize(text), root)
         loader.run_tokens(loader.toks, Motor.identity(), {}, {"pi": math.pi})
         if loader.camera is None:
             loader.camera = PerspectiveCamera()
@@ -193,6 +202,8 @@ class SceneLoader:
             return val
         if kind == "[":
             return self.list_literal(scope, line)
+        if kind == "string":
+            return v
         if kind == "ident":
             if self.peek()[0] == "(":  # 函数调用
                 self.take()
@@ -703,14 +714,21 @@ class SceneLoader:
             return CircleGeometry(self.num(args["r"], line, "circle.r"))
         raise ValueError(f"CGS 第{line}行: 未知图元 {name!r}")
 
-    @staticmethod
-    def build_material(mat: dict):
+    def build_material(self, mat: dict):
         """材质字段 dict → Material (unlit=true → Basic, 否则 Standard)。"""
         color = mat.get("color", 0xFFFFFF)
+        texture = None
+        if mat.get("map") is not None:
+            path = mat["map"]
+            if not isinstance(path, str):
+                raise ValueError("CGS material.map 需要字符串路径")
+            if self.asset_root is None:
+                raise ValueError("CGS material.map 需要显式 asset_root")
+            texture = Texture.load(self.asset_root / path)
         if mat.get("unlit"):
             opacity = mat.get("opacity")
             return MeshBasicMaterial(
-                Color(color), opacity=1.0 if opacity is None else opacity
+                Color(color), opacity=1.0 if opacity is None else opacity, map=texture
             )
         kw = {
             k: mat[k]
@@ -719,7 +737,7 @@ class SceneLoader:
         }
         if mat.get("emissive") is not None:
             kw["emissive"] = Color(mat["emissive"])
-        return MeshStandardMaterial(Color(color), **kw)
+        return MeshStandardMaterial(Color(color), map=texture, **kw)
 
     def add_light(self, name: str, args: dict, line: int) -> None:
         color = Color(int(self.num(args["color"], line, "color")))

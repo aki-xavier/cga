@@ -80,6 +80,20 @@ class BoxGeometry(GeometryBase):
         n = mx.where(valid[:, None], n, mx.zeros_like(n))
         return t, n, valid
 
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        c = mx.array(params[0], dtype=mx.float32)
+        axes = [mx.array(axis, dtype=mx.float32) for axis in params[1]]
+        half = mx.array(params[2], dtype=mx.float32)
+        q = p - c
+        local = mx.stack([mx.sum(q * axis, axis=-1) for axis in axes], axis=-1)
+        face = mx.argmax(mx.abs(local / half), axis=-1)
+        # Cube projection: choose the two tangent local axes of the hit face.
+        x = mx.where(face == 0, local[:, 2], local[:, 0])
+        y = mx.where(face == 2, local[:, 1], local[:, 2])
+        sx = mx.where(face == 0, half[2], half[0])
+        sy = mx.where(face == 2, half[1], half[2])
+        return mx.stack([x / (2.0 * sx) + 0.5, y / (2.0 * sy) + 0.5], axis=-1)
+
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array]:

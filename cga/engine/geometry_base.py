@@ -21,6 +21,15 @@ class GeometryBase:
     ) -> tuple[mx.array, mx.array, mx.array]:
         raise NotImplementedError
 
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        """Return stable local UV coordinates for camera-space hit points.
+
+        ``p`` and ``n`` are (N, 3) arrays. Implementations derive coordinates
+        from the geometry's local frame carried in ``params``; a Motor therefore
+        moves the texture rigidly with its Mesh.
+        """
+        raise NotImplementedError
+
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array]:

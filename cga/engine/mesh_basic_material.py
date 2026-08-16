@@ -7,6 +7,7 @@ import mlx.core as mx
 
 from cga.engine.color import Color
 from cga.engine.material import Material
+from cga.engine.texture import Texture
 
 if TYPE_CHECKING:
     from cga.engine.ambient_light import AmbientLight
@@ -15,9 +16,15 @@ if TYPE_CHECKING:
 class MeshBasicMaterial(Material):
     """不接光照, 直接输出颜色 (three.js MeshBasicMaterial)。"""
 
-    def __init__(self, color: Color | int = 0xFFFFFF, opacity: float = 1.0):
+    def __init__(
+        self,
+        color: Color | int = 0xFFFFFF,
+        opacity: float = 1.0,
+        map: Texture | None = None,
+    ):
         self.color = Color(color) if isinstance(color, int) else color
         self.opacity = float(min(1.0, max(0.0, opacity)))
+        self.map = map
 
     def shade_params(self) -> tuple[mx.array, mx.array, mx.array, float]:
         """无光照平涂: emissive=材质色, diff/spec=0 → 直出颜色。

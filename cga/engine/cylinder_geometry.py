@@ -1,3 +1,5 @@
+import math
+
 import mlx.core as mx
 
 from cga.algebra import Cylinder, Point
@@ -110,6 +112,34 @@ class CylinderGeometry(GeometryBase):
             mx.where(fin[:, None], n_fin, mx.zeros_like(n_fin)),
             fin,
         )
+
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        q = mx.array(params[0], dtype=mx.float32)
+        axis = mx.array(params[1], dtype=mx.float32)
+        r = params[2]
+        rel = p - q
+        axial = mx.sum(rel * axis, axis=-1, keepdims=True) * axis
+        radial = rel - axial
+        # Pick a stable tangent basis from the camera-space cylinder axis.
+        seed = mx.array((1.0, 0.0, 0.0), dtype=mx.float32)
+        alt = mx.array((0.0, 1.0, 0.0), dtype=mx.float32)
+        e1 = mx.where(mx.abs(axis[0]) < 0.9, seed, alt)
+        e1 = e1 - mx.sum(e1 * axis) * axis
+        e1 = e1 / mx.sqrt(mx.sum(e1 * e1))
+        e2 = mx.stack(
+            [
+                axis[1] * e1[2] - axis[2] * e1[1],
+                axis[2] * e1[0] - axis[0] * e1[2],
+                axis[0] * e1[1] - axis[1] * e1[0],
+            ]
+        )
+        u = (
+            mx.atan2(mx.sum(radial * e2, axis=-1), mx.sum(radial * e1, axis=-1))
+            / (2.0 * math.pi)
+            + 0.5
+        )
+        v = mx.sum(rel * axis, axis=-1) / (2.0 * r)
+        return mx.stack([u, v], axis=-1)
 
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array

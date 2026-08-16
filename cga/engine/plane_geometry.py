@@ -33,6 +33,10 @@ class PlaneGeometry(GeometryBase):
         n_rep = mx.broadcast_to(n, o.shape)
         return t, mx.where(mask[:, None], n_rep, mx.zeros_like(n_rep)), mask
 
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        # A deterministic planar projection. Infinite planes repeat in scene units.
+        return mx.stack([p[:, 0], p[:, 2]], axis=-1)
+
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array]:

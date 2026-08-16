@@ -45,6 +45,12 @@ class CircleGeometry(GeometryBase):
         n = mx.where(front[:, None], n, -n)  # 背面可见时翻向相机
         return t, mx.where(mask[:, None], n, mx.zeros_like(n)), mask
 
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        c = mx.array(params[0], dtype=mx.float32)
+        r = params[2]
+        q = (p - c) / (2.0 * r)
+        return mx.stack([q[:, 0] + 0.5, q[:, 1] + 0.5], axis=-1)
+
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array]:

@@ -54,6 +54,7 @@ from cga.engine.point_light import PointLight
 from cga.engine.renderer import Renderer
 from cga.engine.scene import Scene
 from cga.engine.sphere_geometry import SphereGeometry
+from cga.engine.texture import Texture
 from cga.engine.vec3 import Vec3
 
 __all__ = [
@@ -77,5 +78,6 @@ __all__ = [
     "Renderer",
     "Scene",
     "SphereGeometry",
+    "Texture",
     "Vec3",
 ]

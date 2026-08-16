@@ -7,6 +7,7 @@ import mlx.core as mx
 
 from cga.engine.color import Color
 from cga.engine.material import Material
+from cga.engine.texture import Texture
 
 if TYPE_CHECKING:
     from cga.engine.ambient_light import AmbientLight
@@ -29,6 +30,7 @@ class MeshStandardMaterial(Material):
         opacity: float = 1.0,
         ior: float = 1.5,
         absorption: float = 0.0,
+        map: Texture | None = None,
     ):
         self.color = Color(color) if isinstance(color, int) else color
         self.roughness = float(min(1.0, max(0.0, roughness)))
@@ -37,6 +39,7 @@ class MeshStandardMaterial(Material):
         self.opacity = float(min(1.0, max(0.0, opacity)))
         self.ior = float(max(1.0, ior))
         self.absorption = float(max(0.0, absorption))
+        self.map = map
 
     def shade_params(self) -> tuple[mx.array, mx.array, mx.array, float]:
         """(emissive, diff, spec, expo) 标量参数 (线性空间)。"""

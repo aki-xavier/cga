@@ -38,6 +38,17 @@ class Lexer:
             elif ch in "[]{},;=()":
                 toks.append((ch, ch, line))
                 i += 1
+            elif ch in "\"'":
+                quote = ch
+                j = i + 1
+                while j < n and text[j] != quote:
+                    if text[j] == "\\":
+                        j += 1
+                    j += 1
+                if j >= n:
+                    raise ValueError(f"CGS 第{line}行: 未闭合字符串")
+                toks.append(("string", text[i + 1 : j], line))
+                i = j + 1
             elif ch.isalpha() or ch == "_":
                 j = i + 1
                 while j < n and (text[j].isalnum() or text[j] == "_"):

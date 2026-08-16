@@ -131,8 +131,12 @@ class Renderer:
         N = o.shape[0]
         best_t = mx.full((N,), float("inf"), dtype=mx.float32)
         best_n = mx.zeros((N, 3), dtype=mx.float32)
+        best_uv = mx.zeros((N, 2), dtype=mx.float32)
         best_idx = mx.zeros((N,), dtype=mx.int32)
         objs = scene.objects
+        opacity = mx.ones((N,), dtype=mx.float32)
+        iors = mx.full((N,), 1.5, dtype=mx.float32)
+        absos = mx.zeros((N,), dtype=mx.float32)
         # 逐对象标量 (opacity/ior/absorption) 预先堆叠, 循环后按最近对象
         # gather —— 避免循环内每对象 3 次全帧 where (对象多时是主要开销)。
         if objs:
@@ -155,9 +159,11 @@ class Renderer:
                 if bnd is not None and bnd[1][2] <= 1e-6:
                     continue  # AABB 整体在相机后 → 主射线 (d_z>0) 不可能命中
             t, n_i, mask = obj.geometry.intersect(params, o, d)
+            uv_i = obj.geometry.uv_at(params, o + t[:, None] * d, n_i)
             nearer = mx.logical_and(mask, t < best_t)
             best_t = mx.where(nearer, t, best_t)
             best_n = mx.where(nearer[:, None], n_i, best_n)
+            best_uv = mx.where(nearer[:, None], uv_i, best_uv)
             best_idx = mx.where(nearer, i, best_idx)
         hit = mx.isfinite(best_t)  # 命中像素 t 有限; 未命中保持 inf
         if objs:
@@ -206,6 +212,14 @@ class Renderer:
                 ambient,
                 vis,
             )
+            # Each texture samples all pixels in one MLX kernel; the nearest
+            # object index selects only its owning pixels. This preserves
+            # differently sized images without per-pixel Python dispatch.
+            for i, obj in enumerate(scene.objects):
+                texture = getattr(obj.material, "map", None)
+                if texture is not None:
+                    sampled = texture.sample(best_uv)[:, :3]
+                    col = mx.where((best_idx == i)[:, None], col * sampled, col)
         else:
             col = mx.zeros((N, 3), dtype=mx.float32)
         return hit, best_t, best_n, col, op, ior, abso
