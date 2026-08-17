@@ -83,3 +83,31 @@ fn test_cgs_union_is_grouping() {
 	sc, _ := cgs_load('union() { sphere(r=1); translate([2, 0, 0]) sphere(r=1); }', '')
 	assert sc.objects.len == 2
 }
+
+fn test_cgs_load_result_errors() {
+	// cgs_load_result returns an error instead of panicking.
+	mut saw_err := false
+	cgs_load_result('sphere(r=nope);', '') or {
+		assert err.msg().contains('undefined variable')
+		saw_err = true
+	}
+	assert saw_err
+
+	mut saw_err2 := false
+	cgs_load_result('blah();', '') or {
+		assert err.msg().contains('unknown primitive')
+		saw_err2 = true
+	}
+	assert saw_err2
+
+	mut saw_err3 := false
+	cgs_load_result('for (i = [0:0:1]) sphere(r=1);', '') or {
+		assert err.msg().contains('range step must not be 0')
+		saw_err3 = true
+	}
+	assert saw_err3
+
+	// valid input still parses
+	sc, _ := cgs_load_result('sphere(r=1);', '') or { panic('unexpected error') }
+	assert sc.objects.len == 1
+}

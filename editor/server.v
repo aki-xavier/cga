@@ -4,13 +4,11 @@ module main
 // plus the gpui editor's preview backend).
 //
 // Serves the web editor at `/` and renders CGS text to PNG at `POST /render`.
+// A CGS parse error returns HTTP 400 with the message (the parser is
+// Result-based, so it no longer crashes the server).
 //
 //   v -gc boehm run editor/server.v        (from the repo root)
 //   open http://127.0.0.1:8123
-//
-// NOTE: a CGS parse error currently panics the server process (cgs_load uses
-// `panic`, which V cannot catch).  Converting cgs_load to a Result-based API is
-// the follow-up needed for graceful HTTP 400 responses.
 
 import cga
 import json
@@ -40,7 +38,9 @@ fn (mut handler EditorHandler) handle(req http.Request) http.Response {
 		w := query_param(query, 'w', 720)
 		hgt := query_param(query, 'h', 500)
 		aa := query_param(query, 'aa', 1)
-		png := render_cgs(req.data, w, hgt, aa)
+		png := render_cgs(req.data, w, hgt, aa) or {
+			return text_response(400, 'text/plain; charset=utf-8', err.msg())
+		}
 		return bytes_response(200, 'image/png', png)
 	}
 	if req.method == .post && path == '/params' {
@@ -78,9 +78,10 @@ fn query_param(query string, key string, def int) int {
 	return def
 }
 
-// render_cgs parses + renders CGS text to PNG bytes.
-fn render_cgs(text string, w int, h int, aa int) []u8 {
-	sc, mut cam := cga.cgs_load(text, '')
+// render_cgs parses + renders CGS text to PNG bytes (returns a parse error
+// instead of crashing on bad CGS).
+fn render_cgs(text string, w int, h int, aa int) ![]u8 {
+	sc, mut cam := cga.cgs_load_result(text, '')!
 	cam.aspect = f64(w) / f64(h)
 	mut r := cga.renderer(w, h, aa, 3)
 	img := r.render(sc, cam)

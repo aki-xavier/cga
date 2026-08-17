@@ -30,10 +30,3 @@ The server:
 ```sh
 cd editor && v -gc boehm test .
 ```
-
-## Known limitation
-
-`cga.cgs_load` uses `panic` for parse errors, and V has no panic recovery, so a
-CGS **syntax error crashes the server process** (the Python render server
-returned HTTP 400 instead).  Fixing this requires converting `cga.cgs_load`
-(and the `SceneLoader` parser) to a `Result`-returning API — the follow-up.

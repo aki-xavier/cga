@@ -19,7 +19,7 @@ pub:
 }
 
 // lex tokenises CGS source text.
-pub fn cgs_lex(text string) []CgsToken {
+pub fn cgs_lex(text string) ![]CgsToken {
 	mut toks := []CgsToken{}
 	mut i := 0
 	mut line := 1
@@ -66,7 +66,7 @@ pub fn cgs_lex(text string) []CgsToken {
 				j++
 			}
 			if j >= n {
-				panic('CGS line ${line}: unclosed string')
+				return error('CGS line ${line}: unclosed string')
 			}
 			toks << CgsToken{
 				kind: 'string'
@@ -94,7 +94,7 @@ pub fn cgs_lex(text string) []CgsToken {
 					j++
 				}
 				if j == i + 2 {
-					panic('CGS line ${line}: illegal hex colour')
+					return error('CGS line ${line}: illegal hex colour')
 				}
 				toks << CgsToken{
 					kind: 'number'
@@ -130,7 +130,7 @@ pub fn cgs_lex(text string) []CgsToken {
 				i = j
 			}
 		} else {
-			panic('CGS line ${line}: illegal character ${ch.ascii_str()}')
+			return error('CGS line ${line}: illegal character ${ch.ascii_str()}')
 		}
 	}
 	return toks
@@ -158,24 +158,24 @@ fn strconv_hex(s string) int {
 // CgsValue is the dynamic value of the language (number / bool / string / list).
 type CgsValue = f64 | bool | string | []CgsValue
 
-fn cgs_num(v CgsValue, line int, what string) f64 {
+fn cgs_num(v CgsValue, line int, what string) !f64 {
 	match v {
 		f64 { return v }
-		else { panic('CGS line ${line}: ${what} needs a number, got ${v}') }
+		else { return error('CGS line ${line}: ${what} needs a number, got ${v}') }
 	}
 }
 
-fn cgs_vec3(v CgsValue, line int, what string) [3]f64 {
+fn cgs_vec3(v CgsValue, line int, what string) ![3]f64 {
 	match v {
 		[]CgsValue {
 			if v.len != 3 {
-				panic('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
+				return error('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
 			}
-			return [cgs_num(v[0], line, what), cgs_num(v[1], line, what),
-				cgs_num(v[2], line, what)]!
+			return [cgs_num(v[0], line, what)!, cgs_num(v[1], line, what)!,
+				cgs_num(v[2], line, what)!]!
 		}
 		else {
-			panic('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
+			return error('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
 		}
 	}
 }
@@ -202,10 +202,10 @@ fn scale4(s [3]f64) [16]f64 {
 	return [s[0], 0.0, 0.0, 0.0, 0.0, s[1], 0.0, 0.0, 0.0, 0.0, s[2], 0.0, 0.0, 0.0, 0.0, 1.0]!
 }
 
-fn mirror4(ax [3]f64) [16]f64 {
+fn mirror4(ax [3]f64) ![16]f64 {
 	n := math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2])
 	if n < 1e-12 {
-		panic('mirror.axis must not be zero')
+		return error('mirror.axis must not be zero')
 	}
 	ux := ax[0] / n
 	uy := ax[1] / n
@@ -224,7 +224,7 @@ fn cgs_truthy(v CgsValue) bool {
 	}
 }
 
-fn cgs_neg(v CgsValue, line int) CgsValue {
+fn cgs_neg(v CgsValue, line int) !CgsValue {
 	match v {
 		f64 {
 			x := -v
@@ -233,12 +233,12 @@ fn cgs_neg(v CgsValue, line int) CgsValue {
 		[]CgsValue {
 			mut out := []CgsValue{}
 			for x in v {
-				out << cgs_neg(x, line)
+				out << cgs_neg(x, line)!
 			}
 			return out
 		}
 		else {
-			panic('CGS line ${line}: unary minus needs number/vector')
+			return error('CGS line ${line}: unary minus needs number/vector')
 		}
 	}
 }
@@ -254,7 +254,7 @@ fn cgs_scalar_arith(op string, a f64, b f64) f64 {
 	}
 }
 
-fn cgs_binop(op string, a CgsValue, b CgsValue) CgsValue {
+fn cgs_binop(op string, a CgsValue, b CgsValue) !CgsValue {
 	if op == '==' {
 		return a == b
 	}
@@ -268,8 +268,8 @@ fn cgs_binop(op string, a CgsValue, b CgsValue) CgsValue {
 		return cgs_truthy(a) || cgs_truthy(b)
 	}
 	if op in ['<', '<=', '>', '>='] {
-		aa := cgs_num(a, 0, 'cmp')
-		bb := cgs_num(b, 0, 'cmp')
+		aa := cgs_num(a, 0, 'cmp')!
+		bb := cgs_num(b, 0, 'cmp')!
 		return match op {
 			'<' { aa < bb }
 			'<=' { aa <= bb }
@@ -283,18 +283,18 @@ fn cgs_binop(op string, a CgsValue, b CgsValue) CgsValue {
 			match b {
 				[]CgsValue {
 					if a.len != b.len {
-						panic('CGS: vector length mismatch (${a.len} vs ${b.len})')
+						return error('CGS: vector length mismatch (${a.len} vs ${b.len})')
 					}
 					mut out := []CgsValue{}
 					for i in 0 .. a.len {
-						out << cgs_binop(op, a[i], b[i])
+						out << cgs_binop(op, a[i], b[i])!
 					}
 					return out
 				}
 				else {
 					mut out := []CgsValue{}
 					for x in a {
-						out << cgs_binop(op, x, b)
+						out << cgs_binop(op, x, b)!
 					}
 					return out
 				}
@@ -305,24 +305,24 @@ fn cgs_binop(op string, a CgsValue, b CgsValue) CgsValue {
 				[]CgsValue {
 					mut out := []CgsValue{}
 					for x in b {
-						out << cgs_binop(op, a, x)
+						out << cgs_binop(op, a, x)!
 					}
 					return out
 				}
 				else {
-					return cgs_scalar_arith(op, cgs_num(a, 0, 'arith'), cgs_num(b, 0, 'arith'))
+					return cgs_scalar_arith(op, cgs_num(a, 0, 'arith')!, cgs_num(b, 0, 'arith')!)
 				}
 			}
 		}
 	}
 }
 
-fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
+fn cgs_call_fn(name string, args []CgsValue, line int) !CgsValue {
 	if name == 'len' {
 		a0 := args[0]
 		match a0 {
 			[]CgsValue { return f64(a0.len) }
-			else { panic('CGS line ${line}: len needs a list') }
+			else { return error('CGS line ${line}: len needs a list') }
 		}
 	}
 	if name == 'norm' {
@@ -331,24 +331,24 @@ fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
 			[]CgsValue {
 				mut s := 0.0
 				for x in a0 {
-					s += cgs_num(x, line, 'norm') * cgs_num(x, line, 'norm')
+					s += cgs_num(x, line, 'norm')! * cgs_num(x, line, 'norm')!
 				}
 				return math.sqrt(s)
 			}
 			else {
-				panic('CGS line ${line}: norm needs a vector')
+				return error('CGS line ${line}: norm needs a vector')
 			}
 		}
 	}
 	if name == 'cross' {
-		a := cgs_vec3(args[0], line, 'cross.a')
-		b := cgs_vec3(args[1], line, 'cross.b')
+		a := cgs_vec3(args[0], line, 'cross.a')!
+		b := cgs_vec3(args[1], line, 'cross.b')!
 		return [CgsValue(a[1] * b[2] - a[2] * b[1]), a[2] * b[0] - a[0] * b[2],
 			a[0] * b[1] - a[1] * b[0]]
 	}
 	// unary math functions
 	if args.len == 1 {
-		x := cgs_num(args[0], line, name)
+		x := cgs_num(args[0], line, name)!
 		v := match name {
 			'abs' {
 				math.abs(x)
@@ -402,23 +402,23 @@ fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
 				math.round(x)
 			}
 			else {
-				panic('CGS line ${line}: unknown function ${name}')
+				return error('CGS line ${line}: unknown function ${name}')
 			}
 		}
 		return v
 	}
 	if args.len == 2 {
-		a := cgs_num(args[0], line, name)
-		b := cgs_num(args[1], line, name)
+		a := cgs_num(args[0], line, name)!
+		b := cgs_num(args[1], line, name)!
 		return match name {
 			'atan2' { math.atan2(a, b) }
 			'pow' { math.pow(a, b) }
 			'min' { math.min(a, b) }
 			'max' { math.max(a, b) }
-			else { panic('CGS line ${line}: unknown function ${name}') }
+			else { return error('CGS line ${line}: unknown function ${name}') }
 		}
 	}
-	panic('CGS line ${line}: ${name} wrong arity')
+	return error('CGS line ${line}: ${name} wrong arity')
 }
 
 // SceneLoader parses CGS text.
@@ -433,6 +433,14 @@ mut:
 	params     map[string][]CgsToken // module formal parameters (name -> body tokens)
 	collect    []CollectedGeom
 	collecting bool
+	err        string // first parse error (empty = none)
+}
+
+// fail records the first parse error (later errors are ignored).
+fn (mut l SceneLoader) fail(msg string) {
+	if l.err == '' {
+		l.err = msg
+	}
 }
 
 struct CollectedGeom {
@@ -440,10 +448,17 @@ struct CollectedGeom {
 	m4  [16]f64
 }
 
-// cgs_load parses CGS text into (Scene, PerspectiveCamera).
+// cgs_load parses CGS text into (Scene, PerspectiveCamera), panicking on error.
 pub fn cgs_load(text string, asset_root string) (Scene, PerspectiveCamera) {
+	return cgs_load_result(text, asset_root) or { panic(err) }
+}
+
+// cgs_load_result parses CGS text, returning the first error instead of
+// panicking (so callers such as the render server can report it cleanly).
+pub fn cgs_load_result(text string, asset_root string) !(Scene, PerspectiveCamera) {
+	toks := cgs_lex(text)!
 	mut l := SceneLoader{
-		toks:       cgs_lex(text)
+		toks:       toks
 		asset_root: asset_root
 		scene:      scene(none)
 		modules:    map[string][]CgsToken{}
@@ -452,6 +467,9 @@ pub fn cgs_load(text string, asset_root string) (Scene, PerspectiveCamera) {
 	mut root_scope := map[string]CgsValue{}
 	root_scope['pi'] = f64(math.pi)
 	l.run_tokens(l.toks.clone(), mat4_identity(), map[string]CgsValue{}, mut root_scope)
+	if l.err != '' {
+		return error(l.err)
+	}
 	mut cam := if c := l.camera {
 		c
 	} else {
@@ -495,7 +513,7 @@ fn (mut l SceneLoader) take() CgsToken {
 fn (mut l SceneLoader) expect(sym string) {
 	t := l.take()
 	if t.kind != sym {
-		panic('CGS line ${t.line}: expected ${sym}, got ${t.kind}')
+		l.fail('CGS line ${t.line}: expected ${sym}, got ${t.kind}')
 	}
 }
 
@@ -504,7 +522,7 @@ fn (mut l SceneLoader) run_tokens(toks []CgsToken, ctx [16]f64, mat map[string]C
 	saved_pos := l.pos
 	l.toks = toks
 	l.pos = 0
-	for l.pos < l.toks.len {
+	for l.pos < l.toks.len && l.err == '' {
 		l.statement(ctx, mat, mut scope)
 	}
 	l.toks = saved
@@ -514,6 +532,9 @@ fn (mut l SceneLoader) run_tokens(toks []CgsToken, ctx [16]f64, mat map[string]C
 // --- expression parser (precedence climbing) --------------------------------
 
 fn (mut l SceneLoader) expr(scope map[string]CgsValue, min_prec int) CgsValue {
+	if l.err != '' {
+		return f64(0.0)
+	}
 	mut lhs := l.unary(scope)
 	for {
 		t := l.peek()
@@ -526,7 +547,10 @@ fn (mut l SceneLoader) expr(scope map[string]CgsValue, min_prec int) CgsValue {
 		}
 		l.take()
 		rhs := l.expr(scope, prec + 1)
-		lhs = cgs_binop(t.text, lhs, rhs)
+		lhs = cgs_binop(t.text, lhs, rhs) or {
+			l.fail(err.msg())
+			return f64(0.0)
+		}
 	}
 	return lhs
 }
@@ -551,10 +575,16 @@ fn cgs_precedence(op string) int {
 }
 
 fn (mut l SceneLoader) unary(scope map[string]CgsValue) CgsValue {
+	if l.err != '' {
+		return f64(0.0)
+	}
 	t := l.peek()
 	if t.kind == 'op' && t.text == '-' {
 		l.take()
-		return cgs_neg(l.expr(scope, 7), t.line)
+		return cgs_neg(l.expr(scope, 7), t.line) or {
+			l.fail(err.msg())
+			return f64(0.0)
+		}
 	}
 	if t.kind == 'op' && t.text == '!' {
 		l.take()
@@ -564,6 +594,9 @@ fn (mut l SceneLoader) unary(scope map[string]CgsValue) CgsValue {
 }
 
 fn (mut l SceneLoader) primary(scope map[string]CgsValue) CgsValue {
+	if l.err != '' {
+		return f64(0.0)
+	}
 	t := l.take()
 	if t.kind == 'number' {
 		return t.num
@@ -594,7 +627,10 @@ fn (mut l SceneLoader) primary(scope map[string]CgsValue) CgsValue {
 				}
 			}
 			l.expect(')')
-			return cgs_call_fn(t.text, args, t.line)
+			return cgs_call_fn(t.text, args, t.line) or {
+				l.fail(err.msg())
+				return f64(0.0)
+			}
 		}
 		if t.text == 'true' {
 			return true
@@ -605,29 +641,50 @@ fn (mut l SceneLoader) primary(scope map[string]CgsValue) CgsValue {
 		if v := scope[t.text] {
 			return v
 		}
-		panic('CGS line ${t.line}: undefined variable ${t.text}')
+		l.fail('CGS line ${t.line}: undefined variable ${t.text}')
+		return f64(0.0)
 	}
-	panic('CGS line ${t.line}: bad expression start ${t.kind}')
+	l.fail('CGS line ${t.line}: bad expression start ${t.kind}')
+	return f64(0.0)
 }
 
 fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValue {
+	if l.err != '' {
+		return f64(0.0)
+	}
 	first := l.expr(scope, 1)
 	if l.peek().kind == 'op' && l.peek().text == ':' {
 		l.take()
 		second := l.expr(scope, 1)
 		mut step := 1.0
-		mut start_v := cgs_num(first, line, 'range')
-		mut stop_v := cgs_num(second, line, 'range')
+		mut start_v := cgs_num(first, line, 'range') or {
+			l.fail(err.msg())
+			return f64(0.0)
+		}
+		mut stop_v := cgs_num(second, line, 'range') or {
+			l.fail(err.msg())
+			return f64(0.0)
+		}
 		if l.peek().kind == 'op' && l.peek().text == ':' {
 			l.take()
 			third := l.expr(scope, 1)
-			start_v = cgs_num(first, line, 'range')
-			step = cgs_num(second, line, 'range')
-			stop_v = cgs_num(third, line, 'range')
+			start_v = cgs_num(first, line, 'range') or {
+				l.fail(err.msg())
+				return f64(0.0)
+			}
+			step = cgs_num(second, line, 'range') or {
+				l.fail(err.msg())
+				return f64(0.0)
+			}
+			stop_v = cgs_num(third, line, 'range') or {
+				l.fail(err.msg())
+				return f64(0.0)
+			}
 		}
 		l.expect(']')
 		if step == 0.0 {
-			panic('CGS line ${line}: range step must not be 0')
+			l.fail('CGS line ${line}: range step must not be 0')
+			return f64(0.0)
 		}
 		mut out := []CgsValue{}
 		mut v := start_v
@@ -657,10 +714,13 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 // --- statements -------------------------------------------------------------
 
 fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue) {
+	if l.err != '' {
+		return
+	}
 	t := l.peek()
 	if t.kind == '{' {
 		l.expect('{')
-		for l.peek().kind != '}' {
+		for l.peek().kind != '}' && l.err == '' {
 			l.statement(ctx, mat, mut scope)
 		}
 		l.expect('}')
@@ -708,7 +768,8 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 	}
 	l.take()
 	if t.kind != 'ident' {
-		panic('CGS line ${t.line}: expected statement name, got ${t.kind}')
+		l.fail('CGS line ${t.line}: expected statement name, got ${t.kind}')
+		return
 	}
 	pos, kw := l.call_args(scope)
 	name := t.text
@@ -719,14 +780,23 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 	}
 	args := l.resolve(name, pos, kw, t.line)
 	if name == 'translate' {
-		v := cgs_vec3(args['t'] or { f64(0.0) }, t.line, 'translate.t')
+		v := cgs_vec3(args['t'] or { f64(0.0) }, t.line, 'translate.t') or {
+			l.fail(err.msg())
+			return
+		}
 		m2 := mat4_mul(ctx, translate4(v))
 		l.body(m2, mat, mut scope, t.line)
 		return
 	}
 	if name == 'rotate' {
-		ax := cgs_vec3(args['axis'] or { f64(0.0) }, t.line, 'rotate.axis')
-		ang := cgs_num(args['angle'] or { f64(0.0) }, t.line, 'rotate.angle')
+		ax := cgs_vec3(args['axis'] or { f64(0.0) }, t.line, 'rotate.axis') or {
+			l.fail(err.msg())
+			return
+		}
+		ang := cgs_num(args['angle'] or { f64(0.0) }, t.line, 'rotate.angle') or {
+			l.fail(err.msg())
+			return
+		}
 		m2 := mat4_mul(ctx, motor_rotor(ax, ang).to_matrix())
 		l.body(m2, mat, mut scope, t.line)
 		return
@@ -736,11 +806,17 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		mut s4 := [16]f64{}
 		match sv {
 			[]CgsValue {
-				v := cgs_vec3(sv, t.line, 'scale.s')
+				v := cgs_vec3(sv, t.line, 'scale.s') or {
+					l.fail(err.msg())
+					return
+				}
 				s4 = scale4(v)
 			}
 			else {
-				x := cgs_num(sv, t.line, 'scale.s')
+				x := cgs_num(sv, t.line, 'scale.s') or {
+					l.fail(err.msg())
+					return
+				}
 				s4 = scale4([x, x, x]!)
 			}
 		}
@@ -749,8 +825,14 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	if name == 'mirror' {
-		ax := cgs_vec3(args['axis'] or { f64(0.0) }, t.line, 'mirror.axis')
-		m2 := mat4_mul(ctx, mirror4(ax))
+		ax := cgs_vec3(args['axis'] or { f64(0.0) }, t.line, 'mirror.axis') or {
+			l.fail(err.msg())
+			return
+		}
+		m2 := mat4_mul(ctx, mirror4(ax) or {
+			l.fail(err.msg())
+			return
+		})
 		l.body(m2, mat, mut scope, t.line)
 		return
 	}
@@ -767,20 +849,33 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 	}
 	if name == 'background' {
 		l.expect(';')
-		l.scene.background = color_hex(int(cgs_num(args['color'] or { f64(0.0) }, t.line, 'color')))
+		c := cgs_num(args['color'] or { f64(0.0) }, t.line, 'color') or {
+			l.fail(err.msg())
+			return
+		}
+		l.scene.background = color_hex(int(c))
 		return
 	}
 	if name == 'camera' {
 		l.expect(';')
-		mut cam := perspective_camera(cgs_num(args['fov'] or { f64(0.0) }, t.line, 'fov'), cgs_num(args['aspect'] or {
-			f64(0.0)
-		}, t.line, 'aspect'), 0.1, 100.0, cgs_vec3(args['position'] or { f64(0.0) }, t.line,
-			'camera.position'), cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target'), [
-			0.0,
-			1.0,
-			0.0,
-		]!)
-		cam.look_at(cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target'), none)
+		fov := cgs_num(args['fov'] or { f64(0.0) }, t.line, 'fov') or {
+			l.fail(err.msg())
+			return
+		}
+		aspect := cgs_num(args['aspect'] or { f64(0.0) }, t.line, 'aspect') or {
+			l.fail(err.msg())
+			return
+		}
+		campos := cgs_vec3(args['position'] or { f64(0.0) }, t.line, 'camera.position') or {
+			l.fail(err.msg())
+			return
+		}
+		tgt := cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target') or {
+			l.fail(err.msg())
+			return
+		}
+		mut cam := perspective_camera(fov, aspect, 0.1, 100.0, campos, tgt, [0.0, 1.0, 0.0]!)
+		cam.look_at(tgt, none)
 		l.camera = cam
 		return
 	}
@@ -790,11 +885,13 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		match m {
 			string {
 				if m != 'float32' && m != 'float64' {
-					panic('CGS line ${t.line}: precision.mode needs "float32" or "float64"')
+					l.fail('CGS line ${t.line}: precision.mode needs "float32" or "float64"')
+					return
 				}
 			}
 			else {
-				panic('CGS line ${t.line}: precision.mode needs a string')
+				l.fail('CGS line ${t.line}: precision.mode needs a string')
+				return
 			}
 		}
 		return
@@ -810,25 +907,32 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 }
 
 fn (mut l SceneLoader) body(ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
+	if l.err != '' {
+		return
+	}
 	if l.peek().kind == '{' {
 		l.expect('{')
-		for l.peek().kind != '}' {
+		for l.peek().kind != '}' && l.err == '' {
 			l.statement(ctx, mat, mut scope)
 		}
 		l.expect('}')
 	} else if l.peek().kind == ';' {
-		panic('CGS line ${line}: modifier missing target statement')
+		l.fail('CGS line ${line}: modifier missing target statement')
 	} else {
 		l.statement(ctx, mat, mut scope)
 	}
 }
 
 fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue) {
+	if l.err != '' {
+		return
+	}
 	l.take() // for
 	l.expect('(')
 	vt := l.take()
 	if vt.kind != 'ident' || l.peek().kind != '=' {
-		panic('CGS line ${vt.line}: for needs (var = list)')
+		l.fail('CGS line ${vt.line}: for needs (var = list)')
+		return
 	}
 	l.take()
 	values := l.expr(scope, 1)
@@ -842,7 +946,8 @@ fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope 
 			}
 		}
 		else {
-			panic('CGS line ${vt.line}: for needs a list')
+			l.fail('CGS line ${vt.line}: for needs a list')
+			return
 		}
 	}
 }
@@ -891,17 +996,22 @@ fn (mut l SceneLoader) echo_stmt(scope map[string]CgsValue) {
 }
 
 fn (mut l SceneLoader) module_def() {
+	if l.err != '' {
+		return
+	}
 	l.take() // module
 	nt := l.take()
 	if nt.kind != 'ident' {
-		panic('CGS line ${nt.line}: module missing name')
+		l.fail('CGS line ${nt.line}: module missing name')
+		return
 	}
 	l.expect('(')
 	if l.peek().kind != ')' {
 		for {
 			pt := l.take()
 			if pt.kind != 'ident' {
-				panic('CGS line ${pt.line}: module parameter must be a name')
+				l.fail('CGS line ${pt.line}: module parameter must be a name')
+				return
 			}
 			if l.peek().kind == '=' {
 				l.take()
@@ -956,9 +1066,13 @@ fn (mut l SceneLoader) module_call(name string, pos []CgsValue, kw map[string]Cg
 		if pname !in scope {
 			def := l.params[name + ':' + pname] or { []CgsToken{} }
 			if def.len == 0 {
-				panic('CGS line ${line}: module ${name} missing parameter ${pname}')
+				l.fail('CGS line ${line}: module ${name} missing parameter ${pname}')
+				return
 			}
 			scope[pname] = l.eval_tokens(def, scope)
+			if l.err != '' {
+				return
+			}
 		}
 	}
 	l.run_tokens(body, ctx, mat, mut scope)
@@ -970,7 +1084,8 @@ fn (mut l SceneLoader) capture_expr() []CgsToken {
 	for {
 		t := l.peek()
 		if t.kind == 'eof' {
-			panic('CGS line ${t.line}: unclosed expression')
+			l.fail('CGS line ${t.line}: unclosed expression')
+			return l.toks[start..l.pos]
 		}
 		if depth == 0 && t.kind in [',', ')', ';'] {
 			break
@@ -1114,7 +1229,8 @@ fn (mut l SceneLoader) resolve(name string, pos []CgsValue, kw map[string]CgsVal
 		merged[k] = v
 	}
 	if pos.len > names.len {
-		panic('CGS line ${line}: ${name} too many positional args')
+		l.fail('CGS line ${line}: ${name} too many positional args')
+		return map[string]CgsValue{}
 	}
 	for i, pname in names {
 		if i < pos.len {
@@ -1123,7 +1239,8 @@ fn (mut l SceneLoader) resolve(name string, pos []CgsValue, kw map[string]CgsVal
 	}
 	for k, v in kw {
 		if k !in names && k !in defaults {
-			panic('CGS line ${line}: ${name} has no parameter ${k}')
+			l.fail('CGS line ${line}: ${name} has no parameter ${k}')
+			return map[string]CgsValue{}
 		}
 		merged[k] = v
 	}
@@ -1236,7 +1353,8 @@ fn (mut l SceneLoader) csg_block(op string, ctx [16]f64, mat map[string]CgsValue
 	l.collect = saved
 	l.collecting = was_collecting
 	if children.len < 2 {
-		panic('CGS line ${line}: ${op} needs >= 2 geometry children')
+		l.fail('CGS line ${line}: ${op} needs >= 2 geometry children')
+		return
 	}
 	mut kids := []Geometry{}
 	for c in children {
@@ -1251,56 +1369,106 @@ fn (mut l SceneLoader) csg_block(op string, ctx [16]f64, mat map[string]CgsValue
 }
 
 fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, line int) Geometry {
+	if l.err != '' {
+		return sphere_geometry(1.0)
+	}
 	match name {
 		'sphere' {
-			return sphere_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'sphere.r'))
+			r := cgs_num(args['r'] or { f64(0.0) }, line, 'sphere.r') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return sphere_geometry(r)
 		}
 		'plane' {
-			return plane_geometry(cgs_vec3(args['n'] or { f64(0.0) }, line, 'plane.n'), cgs_num(args['d'] or {
-				f64(0.0)
-			}, line, 'plane.d'))
+			n := cgs_vec3(args['n'] or { f64(0.0) }, line, 'plane.n') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			d := cgs_num(args['d'] or { f64(0.0) }, line, 'plane.d') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return plane_geometry(n, d)
 		}
 		'cylinder' {
-			h := cgs_num(args['h'] or { f64(0.0) }, line, 'cylinder.h')
-			return cylinder_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cylinder.r'), if h < 0.0 {
-				-1.0
-			} else {
-				h
-			})
+			h := cgs_num(args['h'] or { f64(0.0) }, line, 'cylinder.h') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			r := cgs_num(args['r'] or { f64(0.0) }, line, 'cylinder.r') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return cylinder_geometry(r, if h < 0.0 { -1.0 } else { h })
 		}
 		'box' {
-			s := cgs_vec3(args['s'] or { f64(0.0) }, line, 'box.s')
+			s := cgs_vec3(args['s'] or { f64(0.0) }, line, 'box.s') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
 			return box_geometry(s[0], s[1], s[2])
 		}
 		'circle' {
-			return circle_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'circle.r'))
+			r := cgs_num(args['r'] or { f64(0.0) }, line, 'circle.r') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return circle_geometry(r)
 		}
 		'cone' {
-			return cone_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cone.r'), cgs_num(args['h'] or {
-				f64(0.0)
-			}, line, 'cone.h'))
+			r := cgs_num(args['r'] or { f64(0.0) }, line, 'cone.r') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			h := cgs_num(args['h'] or { f64(0.0) }, line, 'cone.h') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return cone_geometry(r, h)
 		}
 		'torus' {
-			return torus_geometry(cgs_num(args['R'] or { f64(0.0) }, line, 'torus.R'), cgs_num(args['r'] or {
-				f64(0.0)
-			}, line, 'torus.r'))
+			r1 := cgs_num(args['R'] or { f64(0.0) }, line, 'torus.R') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			r2 := cgs_num(args['r'] or { f64(0.0) }, line, 'torus.r') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return torus_geometry(r1, r2)
 		}
 		'cyclide' {
-			return cyclide_geometry(cgs_num(args['a'] or { f64(0.0) }, line, 'cyclide.a'), cgs_num(args['b'] or {
-				f64(0.0)
-			}, line, 'cyclide.b'), cgs_num(args['d'] or { f64(0.0) }, line, 'cyclide.d'), [
-				0.0,
-				0.0,
-				0.0,
-			]!)
+			a := cgs_num(args['a'] or { f64(0.0) }, line, 'cyclide.a') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			b := cgs_num(args['b'] or { f64(0.0) }, line, 'cyclide.b') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			d := cgs_num(args['d'] or { f64(0.0) }, line, 'cyclide.d') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
+			return cyclide_geometry(a, b, d, [0.0, 0.0, 0.0]!)
 		}
 		'ellipsoid' {
-			r := cgs_vec3(args['radii'] or { f64(0.0) }, line, 'ellipsoid.radii')
+			r := cgs_vec3(args['radii'] or { f64(0.0) }, line, 'ellipsoid.radii') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
 			return ellipsoid_geometry(r[0], r[1], r[2])
 		}
 		'extrude' {
 			prof := l.profile2d(args['profile'] or { f64(0.0) }, line, 'extrude.profile')
-			h := cgs_num(args['h'] or { f64(0.0) }, line, 'extrude.h')
+			if l.err != '' {
+				return sphere_geometry(1.0)
+			}
+			h := cgs_num(args['h'] or { f64(0.0) }, line, 'extrude.h') or {
+				l.fail(err.msg())
+				return sphere_geometry(1.0)
+			}
 			v, f := extrude(prof, h)
 			return trimesh_geometry(v, f)
 		}
@@ -1309,29 +1477,39 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 			match raw {
 				[]CgsValue {
 					if raw.len < 2 {
-						panic('CGS line ${line}: loft.profiles needs >= 2 sections')
+						l.fail('CGS line ${line}: loft.profiles needs >= 2 sections')
+						return sphere_geometry(1.0)
 					}
 					mut profiles := [][][2]f64{}
 					for p in raw {
 						profiles << l.profile2d(p, line, 'loft.profiles[i]')
+						if l.err != '' {
+							return sphere_geometry(1.0)
+						}
 					}
 					zsraw := args['zs'] or { f64(0.0) }
 					match zsraw {
 						[]CgsValue {
 							mut zs := []f64{}
 							for z in zsraw {
-								zs << cgs_num(z, line, 'loft.zs[i]')
+								zv := cgs_num(z, line, 'loft.zs[i]') or {
+									l.fail(err.msg())
+									return sphere_geometry(1.0)
+								}
+								zs << zv
 							}
 							v, f := loft(profiles, zs)
 							return trimesh_geometry(v, f)
 						}
 						else {
-							panic('CGS line ${line}: loft.zs needs a list')
+							l.fail('CGS line ${line}: loft.zs needs a list')
+							return sphere_geometry(1.0)
 						}
 					}
 				}
 				else {
-					panic('CGS line ${line}: loft.profiles needs a list')
+					l.fail('CGS line ${line}: loft.profiles needs a list')
+					return sphere_geometry(1.0)
 				}
 			}
 		}
@@ -1340,7 +1518,8 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 			match p {
 				string {
 					if l.asset_root == '' {
-						panic('CGS line ${line}: mesh needs an explicit asset_root')
+						l.fail('CGS line ${line}: mesh needs an explicit asset_root')
+						return sphere_geometry(1.0)
 					}
 					full := l.asset_root + '/' + p
 					if full.ends_with('.obj') {
@@ -1350,50 +1529,75 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 					if full.ends_with('.glb') || full.ends_with('.gltf') {
 						return gltf_to_geometry(load_gltf(full))
 					}
-					panic('CGS line ${line}: unsupported mesh file "${p}" (use .obj/.glb/.gltf)')
+					l.fail('CGS line ${line}: unsupported mesh file "${p}" (use .obj/.glb/.gltf)')
+					return sphere_geometry(1.0)
 				}
 				else {
-					panic('CGS line ${line}: mesh.file needs a string path')
+					l.fail('CGS line ${line}: mesh.file needs a string path')
+					return sphere_geometry(1.0)
 				}
 			}
 		}
 		else {
-			panic('CGS line ${line}: unknown primitive ${name}')
+			l.fail('CGS line ${line}: unknown primitive ${name}')
+			return sphere_geometry(1.0)
 		}
 	}
 }
 
 fn (mut l SceneLoader) profile2d(v CgsValue, line int, what string) [][2]f64 {
+	if l.err != '' {
+		return [][2]f64{}
+	}
 	match v {
 		[]CgsValue {
 			if v.len < 3 {
-				panic('CGS line ${line}: ${what} needs >= 3 [x,y] points')
+				l.fail('CGS line ${line}: ${what} needs >= 3 [x,y] points')
+				return [][2]f64{}
 			}
 			mut pts := [][2]f64{}
 			for p in v {
 				match p {
 					[]CgsValue {
 						if p.len != 2 {
-							panic('CGS line ${line}: ${what} items must be [x,y]')
+							l.fail('CGS line ${line}: ${what} items must be [x,y]')
+							return [][2]f64{}
 						}
-						pts << [cgs_num(p[0], line, what), cgs_num(p[1], line, what)]!
+						x := cgs_num(p[0], line, what) or {
+							l.fail(err.msg())
+							return [][2]f64{}
+						}
+						y := cgs_num(p[1], line, what) or {
+							l.fail(err.msg())
+							return [][2]f64{}
+						}
+						pts << [x, y]!
 					}
 					else {
-						panic('CGS line ${line}: ${what} items must be [x,y]')
+						l.fail('CGS line ${line}: ${what} items must be [x,y]')
+						return [][2]f64{}
 					}
 				}
 			}
 			return pts
 		}
 		else {
-			panic('CGS line ${line}: ${what} needs a list')
+			l.fail('CGS line ${line}: ${what} needs a list')
+			return [][2]f64{}
 		}
 	}
 }
 
 fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
+	if l.err != '' {
+		return basic_material(color_hex(0xFFFFFF), 1.0)
+	}
 	color := if v := mat['color'] {
-		color_hex(int(cgs_num(v, 0, 'color')))
+		c := cgs_num(v, 0, 'color') or {
+			l.fail(err.msg())
+			return basic_material(color_hex(0xFFFFFF), 1.0)
+		}
+		color_hex(int(c))
 	} else {
 		color_hex(0xFFFFFF)
 	}
@@ -1403,26 +1607,38 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 			string {
 				if v != '' {
 					if l.asset_root == '' {
-						panic('CGS material.map needs an explicit asset_root')
+						l.fail('CGS material.map needs an explicit asset_root')
+						return basic_material(color_hex(0xFFFFFF), 1.0)
 					}
 					tex = texture_load(l.asset_root + '/' + v)
 				}
 			}
 			else {
-				panic('CGS material.map needs a string path')
+				l.fail('CGS material.map needs a string path')
+				return basic_material(color_hex(0xFFFFFF), 1.0)
 			}
 		}
 	}
 	if u := mat['unlit'] {
 		if cgs_truthy(u) {
-			op := if o := mat['opacity'] { clamp01(cgs_num(o, 0, 'opacity')) } else { 1.0 }
-			return basic_material(color, op)
+			op := if o := mat['opacity'] {
+				cgs_num(o, 0, 'opacity') or {
+					l.fail(err.msg())
+					return basic_material(color_hex(0xFFFFFF), 1.0)
+				}
+			} else {
+				1.0
+			}
+			return basic_material(color, clamp01(op))
 		}
 	}
 	roughness := cgs_opt_num(mat['roughness'] or { f64(-1.0) }, 0.5)
 	metalness := cgs_opt_num(mat['metalness'] or { f64(-1.0) }, 0.0)
 	emissive := if v := mat['emissive'] {
-		ev := cgs_num(v, 0, 'emissive')
+		ev := cgs_num(v, 0, 'emissive') or {
+			l.fail(err.msg())
+			return basic_material(color_hex(0xFFFFFF), 1.0)
+		}
 		if ev < 0.0 {
 			color_hex(0x000000)
 		} else {
@@ -1442,13 +1658,29 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 }
 
 fn (mut l SceneLoader) add_light(name string, args map[string]CgsValue, line int) {
-	color := color_hex(int(cgs_num(args['color'] or { f64(0.0) }, line, 'color')))
-	intensity := cgs_num(args['intensity'] or { f64(0.0) }, line, 'intensity')
+	if l.err != '' {
+		return
+	}
+	c := cgs_num(args['color'] or { f64(0.0) }, line, 'color') or {
+		l.fail(err.msg())
+		return
+	}
+	color := color_hex(int(c))
+	intensity := cgs_num(args['intensity'] or { f64(0.0) }, line, 'intensity') or {
+		l.fail(err.msg())
+		return
+	}
 	if name == 'directional_light' {
-		d := cgs_vec3(args['direction'] or { f64(0.0) }, line, 'direction')
+		d := cgs_vec3(args['direction'] or { f64(0.0) }, line, 'direction') or {
+			l.fail(err.msg())
+			return
+		}
 		l.scene.add_light(directional_light(color, intensity, d))
 	} else if name == 'point_light' {
-		p := cgs_vec3(args['position'] or { f64(0.0) }, line, 'position')
+		p := cgs_vec3(args['position'] or { f64(0.0) }, line, 'position') or {
+			l.fail(err.msg())
+			return
+		}
 		l.scene.add_light(point_light(color, intensity, p))
 	} else {
 		l.scene.add_light(ambient_light(color, intensity))
