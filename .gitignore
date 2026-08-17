@@ -220,3 +220,4 @@ __marimo__/
 /artifacts/
 # Rust (editor/)
 target/
+.vmodules
