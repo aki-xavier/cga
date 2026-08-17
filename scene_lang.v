@@ -22,12 +22,12 @@ pub:
 pub fn cgs_lex(text string) ![]CgsToken {
 	mut toks := []CgsToken{}
 	mut i := 0
-	mut line := 1
+	mut ln := 1
 	n := text.len
 	for i < n {
 		ch := text[i]
 		if ch == `\n` {
-			line++
+			ln++
 			i++
 		} else if ch == ` ` || ch == `\t` || ch == `\r` {
 			i++
@@ -39,21 +39,21 @@ pub fn cgs_lex(text string) ![]CgsToken {
 			toks << CgsToken{
 				kind: 'op'
 				text: text[i..i + 2]
-				line: line
+				line: ln
 			}
 			i += 2
 		} else if ch in [`+`, `-`, `*`, `/`, `%`, `<`, `>`, `!`, `:`] {
 			toks << CgsToken{
 				kind: 'op'
 				text: ch.ascii_str()
-				line: line
+				line: ln
 			}
 			i++
 		} else if ch in [`[`, `]`, `{`, `}`, `,`, `;`, `=`, `(`, `)`] {
 			toks << CgsToken{
 				kind: ch.ascii_str()
 				text: ch.ascii_str()
-				line: line
+				line: ln
 			}
 			i++
 		} else if ch == `"` || ch == `'` {
@@ -66,25 +66,23 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				j++
 			}
 			if j >= n {
-				return error('CGS line ${line}: unclosed string')
+				return error('CGS line ${ln}: unclosed string')
 			}
 			toks << CgsToken{
 				kind: 'string'
 				text: text[i + 1..j]
-				line: line
+				line: ln
 			}
 			i = j + 1
-		} else if (ch >= `a` && ch <= `z`) || (ch >= `A` && ch <= `Z`) || ch == `_` {
+		} else if ch.is_letter() || ch == `_` {
 			mut j := i + 1
-			for j < n && ((text[j] >= `a` && text[j] <= `z`)
-				|| (text[j] >= `A` && text[j] <= `Z`)
-				|| (text[j] >= `0` && text[j] <= `9`) || text[j] == `_`) {
+			for j < n && (text[j].is_alnum() || text[j] == `_`) {
 				j++
 			}
 			toks << CgsToken{
 				kind: 'ident'
 				text: text[i..j]
-				line: line
+				line: ln
 			}
 			i = j
 		} else if ch >= `0` && ch <= `9` {
@@ -94,12 +92,12 @@ pub fn cgs_lex(text string) ![]CgsToken {
 					j++
 				}
 				if j == i + 2 {
-					return error('CGS line ${line}: illegal hex colour')
+					return error('CGS line ${ln}: illegal hex colour')
 				}
 				toks << CgsToken{
 					kind: 'number'
 					num:  f64(strconv_hex(text[i + 2..j]))
-					line: line
+					line: ln
 				}
 				i = j
 			} else {
@@ -125,12 +123,12 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				toks << CgsToken{
 					kind: 'number'
 					num:  text[i..j].f64()
-					line: line
+					line: ln
 				}
 				i = j
 			}
 		} else {
-			return error('CGS line ${line}: illegal character ${ch.ascii_str()}')
+			return error('CGS line ${ln}: illegal character ${ch.ascii_str()}')
 		}
 	}
 	return toks
@@ -701,8 +699,7 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 		}
 		return out
 	}
-	mut items := []CgsValue{len: 1}
-	items[0] = first
+	mut items := [first]
 	for l.peek().kind == ',' {
 		l.take()
 		items << l.expr(scope, 1)

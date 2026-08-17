@@ -190,15 +190,15 @@ pub fn cylinder_uv(p CylinderParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	radial := rel.subtract(axial)
 	seed := arr3(1.0, 0.0, 0.0)
 	alt := arr3(0.0, 1.0, 0.0)
-	mut e1 := mlx.where(s_lt(axis.take_axis(mlx.int_scalar(0), 0).abs(), 0.9), seed, alt)
-	e1 = e1.subtract(e1.multiply(axis).sum().multiply(axis))
-	e1 = e1.divide(e1.multiply(e1).sum().sqrt())
-	e2 := mlx.stack([
-		axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(2), 0)).subtract(axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(1), 0))),
-		axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(0), 0)).subtract(axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(2), 0))),
-		axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(1), 0)).subtract(axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(0), 0))),
+	mut b1 := mlx.where(s_lt(axis.take_axis(mlx.int_scalar(0), 0).abs(), 0.9), seed, alt)
+	b1 = b1.subtract(b1.multiply(axis).sum().multiply(axis))
+	b1 = b1.divide(b1.multiply(b1).sum().sqrt())
+	b2 := mlx.stack([
+		axis.take_axis(mlx.int_scalar(1), 0).multiply(b1.take_axis(mlx.int_scalar(2), 0)).subtract(axis.take_axis(mlx.int_scalar(2), 0).multiply(b1.take_axis(mlx.int_scalar(1), 0))),
+		axis.take_axis(mlx.int_scalar(2), 0).multiply(b1.take_axis(mlx.int_scalar(0), 0)).subtract(axis.take_axis(mlx.int_scalar(0), 0).multiply(b1.take_axis(mlx.int_scalar(2), 0))),
+		axis.take_axis(mlx.int_scalar(0), 0).multiply(b1.take_axis(mlx.int_scalar(1), 0)).subtract(axis.take_axis(mlx.int_scalar(1), 0).multiply(b1.take_axis(mlx.int_scalar(0), 0))),
 	], 0)
-	u := s_add(s_div(radial.multiply(e2).sum_axis(-1, false).arctan2(radial.multiply(e1).sum_axis(-1,
+	u := s_add(s_div(radial.multiply(b2).sum_axis(-1, false).arctan2(radial.multiply(b1).sum_axis(-1,
 		false)), 2.0 * math.pi), 0.5)
 	v := s_div(rel.multiply(axis).sum_axis(-1, false), 2.0 * p.r)
 	return mlx.stack([u, v], -1)

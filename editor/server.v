@@ -11,7 +11,7 @@ module main
 //   open http://127.0.0.1:8123
 
 import cga
-import json
+import json2
 import net.http
 import os
 import time
@@ -44,7 +44,7 @@ fn (mut handler EditorHandler) handle(req http.Request) http.Response {
 		return bytes_response(200, 'image/png', png)
 	}
 	if req.method == .post && path == '/params' {
-		return text_response(200, 'application/json', json.encode(extract_params(req.data)))
+		return text_response(200, 'application/json', json2.encode(extract_params(req.data)))
 	}
 	return text_response(404, 'text/plain', 'not found')
 }

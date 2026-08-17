@@ -225,18 +225,18 @@ pub fn trimesh_geometry(vertices [][3]f64, faces [][3]int) TrimeshGeometry {
 	}
 	nv := vertices.len
 	mut v0 := [][3]f64{}
-	mut e1 := [][3]f64{}
-	mut e2 := [][3]f64{}
+	mut edge1 := [][3]f64{}
+	mut edge2 := [][3]f64{}
 	mut nrm := [][3]f64{}
-	mut lo := [1e30, 1e30, 1e30]!
-	mut hi := [-1e30, -1e30, -1e30]!
+	mut bmin := [1e30, 1e30, 1e30]!
+	mut bmax := [-1e30, -1e30, -1e30]!
 	for v in vertices {
 		for k in 0 .. 3 {
-			if v[k] < lo[k] {
-				lo[k] = v[k]
+			if v[k] < bmin[k] {
+				bmin[k] = v[k]
 			}
-			if v[k] > hi[k] {
-				hi[k] = v[k]
+			if v[k] > bmax[k] {
+				bmax[k] = v[k]
 			}
 		}
 	}
@@ -255,18 +255,18 @@ pub fn trimesh_geometry(vertices [][3]f64, faces [][3]int) TrimeshGeometry {
 			panic('trimesh has degenerate (zero-area) faces')
 		}
 		v0 << a
-		e1 << ee1
-		e2 << ee2
+		edge1 << ee1
+		edge2 << ee2
 		nrm << [cr[0] / cl, cr[1] / cl, cr[2] / cl]!
 	}
 	return TrimeshGeometry{
 		n_faces: faces.len
 		v0:      v0
-		e1:      e1
-		e2:      e2
+		e1:      edge1
+		e2:      edge2
 		nrm:     nrm
-		lo:      lo
-		hi:      hi
+		lo:      bmin
+		hi:      bmax
 	}
 }
 

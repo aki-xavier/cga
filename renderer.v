@@ -45,8 +45,10 @@ fn (mut r Renderer) build_rays() mlx.Array {
 	k := r.aa
 	for j in 0 .. k {
 		for i in 0 .. k {
-			du := ((f64(i) + 0.5) / f64(k) - 0.5) / fx
-			dv := ((f64(j) + 0.5) / f64(k) - 0.5) / fy
+			off_u := (f64(i) + 0.5) / f64(k) - 0.5
+			off_v := (f64(j) + 0.5) / f64(k) - 0.5
+			du := off_u / fx
+			dv := off_v / fy
 			u := s_add(u0, du).expand_dims(0).broadcast_to([hh, ww])
 			v := s_add(v0, dv).expand_dims(1).broadcast_to([hh, ww])
 			dirs << mlx.stack([u, v, z], -1)
@@ -200,7 +202,7 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		vis << v
 	}
 	// batched shading
-	mut col := mlx.zeros([n_rays, 3], .float32)
+	mut acc := mlx.zeros([n_rays, 3], .float32)
 	if objs.len > 0 {
 		mut em_arr := []mlx.Array{}
 		mut diff_arr := []mlx.Array{}
@@ -217,7 +219,7 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		diff := mlx.stack(diff_arr, 0).take_axis(best_idx, 0)
 		spec := mlx.stack(spec_arr, 0).take_axis(best_idx, 0)
 		expo := mlx.stack(expo_arr, 0).take_axis(best_idx, 0).expand_dims(1)
-		col = shade_batched(emissive, diff, spec, expo, p, best_n, d, lit, ambient, vis)
+		acc = shade_batched(emissive, diff, spec, expo, p, best_n, d, lit, ambient, vis)
 		for i, obj in objs {
 			if tex := obj.material.map {
 				sampled := tex.sample(best_uv, .repeat, .repeat).take_axis(mlx.array_i32([
@@ -225,12 +227,12 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 					1,
 					2,
 				], [3]), 1)
-				col = mlx.where(best_idx.equal(mlx.int_scalar(i)).expand_dims(1),
-					col.multiply(sampled), col)
+				acc = mlx.where(best_idx.equal(mlx.int_scalar(i)).expand_dims(1),
+					acc.multiply(sampled), acc)
 			}
 		}
 	}
-	return hit, best_t, best_n, col, op, ior, abso
+	return hit, best_t, best_n, acc, op, ior, abso
 }
 
 // render_frame is the single-frame convenience entry point.

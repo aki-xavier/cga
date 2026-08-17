@@ -96,7 +96,7 @@ pub fn affine_normal(n_l mlx.Array, a_inv3 Mat3) mlx.Array {
 // decompose_rigid factors a 4x4 affine into (motor, linear): A = motor . linear
 // via Newton polar decomposition (reflections absorbed into linear).
 pub fn decompose_rigid(m4 [16]f64) (Multivector, Mat3) {
-	b := mat3_new([m4[0], m4[1], m4[2]]!, [m4[4], m4[5], m4[6]]!, [m4[8], m4[9], m4[10]]!)
+	mut b := mat3_new([m4[0], m4[1], m4[2]]!, [m4[4], m4[5], m4[6]]!, [m4[8], m4[9], m4[10]]!)
 	t := [m4[3], m4[7], m4[11]]!
 	mat3_inv(b) // singularity check (panics if det ~ 0)
 	mut x := b

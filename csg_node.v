@@ -134,48 +134,48 @@ pub fn csg_bounds(p CsgParams) ?[2][3]f64 {
 		return none
 	}
 	if p.op == 'union' {
-		mut lo := [3]f64{}
-		mut hi := [3]f64{}
+		mut bmin := [3]f64{}
+		mut bmax := [3]f64{}
 		mut first := true
 		for b in bounded {
 			bb := b or { return none }
 			if first {
-				lo = bb[0]
-				hi = bb[1]
+				bmin = bb[0]
+				bmax = bb[1]
 				first = false
 			} else {
 				for i in 0 .. 3 {
-					if bb[0][i] < lo[i] {
-						lo[i] = bb[0][i]
+					if bb[0][i] < bmin[i] {
+						bmin[i] = bb[0][i]
 					}
-					if bb[1][i] > hi[i] {
-						hi[i] = bb[1][i]
+					if bb[1][i] > bmax[i] {
+						bmax[i] = bb[1][i]
 					}
 				}
 			}
 		}
-		return [lo, hi]!
+		return [bmin, bmax]!
 	}
 	// intersection
-	mut lo := [3]f64{}
-	mut hi := [3]f64{}
+	mut bmin := [3]f64{}
+	mut bmax := [3]f64{}
 	mut first := true
 	for b in bounded {
 		bb := b or { return none }
 		if first {
-			lo = bb[0]
-			hi = bb[1]
+			bmin = bb[0]
+			bmax = bb[1]
 			first = false
 		} else {
 			for i in 0 .. 3 {
-				if bb[0][i] > lo[i] {
-					lo[i] = bb[0][i]
+				if bb[0][i] > bmin[i] {
+					bmin[i] = bb[0][i]
 				}
-				if bb[1][i] < hi[i] {
-					hi[i] = bb[1][i]
+				if bb[1][i] < bmax[i] {
+					bmax[i] = bb[1][i]
 				}
 			}
 		}
 	}
-	return [lo, hi]!
+	return [bmin, bmax]!
 }

@@ -120,11 +120,11 @@ pub fn load_obj(path string) ([][3]f64, [][3]int) {
 	mut vertices := [][3]f64{}
 	mut faces := [][3]int{}
 	for lineno, raw_line in text.split_into_lines() {
-		line := raw_line.all_before('#').trim_space()
-		if line == '' {
+		trimmed := raw_line.all_before('#').trim_space()
+		if trimmed == '' {
 			continue
 		}
-		parts := line.split(' ')
+		parts := trimmed.split(' ')
 		if parts.len == 0 {
 			continue
 		}

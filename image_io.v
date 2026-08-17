@@ -88,7 +88,7 @@ fn be32(v int) []u8 {
 }
 
 fn be32_at(b []u8, pos int) int {
-	return int(b[pos]) << 24 | int(b[pos + 1]) << 16 | int(b[pos + 2]) << 8 | int(b[pos + 3])
+	return int(u32(b[pos]) << 24 | u32(b[pos + 1]) << 16 | u32(b[pos + 2]) << 8 | u32(b[pos + 3]))
 }
 
 fn paeth(a int, b int, c int) int {
@@ -159,7 +159,7 @@ pub fn load_png_rgba(path string) ([]u8, int, int) {
 		row_start := y * (stride + 1) + 1
 		mut prev := []u8{len: stride}
 		if y > 0 {
-			prev = img[(y - 1) * stride..y * stride]
+			prev = img[(y - 1) * stride..y * stride].clone()
 		}
 		for x in 0 .. stride {
 			cur := int(raw[row_start + x])

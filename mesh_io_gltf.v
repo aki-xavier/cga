@@ -264,8 +264,8 @@ fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out
 	node := gltf.nodes[idx]
 	world := mat4_mul(parent, node_local_matrix(node))
 	if m := node.mesh {
-		mesh := gltf.meshes[m]
-		for prim in mesh.primitives {
+		mob := gltf.meshes[m]
+		for prim in mob.primitives {
 			if prim.mode != 4 && prim.mode != 0 {
 				continue
 			}

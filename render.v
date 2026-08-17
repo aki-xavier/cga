@@ -116,10 +116,10 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 			mlx.f32_scalar(f32(math.inf(1))), .float32))
 		t = mlx.where(sel, t, mlx.full_like(t, mlx.f32_scalar(f32(math.inf(1))), .float32))
 		best = best.minimum(t)
-		col := arr3v(palette_rgb[p.region % 12])
+		base := arr3v(palette_rgb[p.region % 12])
 		sh := s_max(nrm.multiply(light).sum_axis(-1, false), 0.0)
 		rgb_p :=
-			col.expand_dims(0).expand_dims(0).multiply(s_add(s_mul(sh, 0.65), 0.35).expand_dims(2))
+			base.expand_dims(0).expand_dims(0).multiply(s_add(s_mul(sh, 0.65), 0.35).expand_dims(2))
 		valid1 := s_lt(t, math.inf(1))
 		hits_t << t
 		hits_rgb << mlx.where(valid1.expand_dims(2), rgb_p, mlx.zeros_like(rgb_p))

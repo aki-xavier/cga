@@ -184,10 +184,10 @@ fn test_cyclide_axis_ray_four_crossings() {
 	assert v.len == 4
 	assert v[0] && v[1] && v[2] && v[3]
 	td := ts.data_f32()
-	mut exp := [3.0 - cga_x1, 3.0 - cga_x2, 3.0 - cga_x3, 3.0 - cga_x4]
-	exp.sort()
+	mut want := [3.0 - cga_x1, 3.0 - cga_x2, 3.0 - cga_x3, 3.0 - cga_x4]
+	want.sort()
 	for i in 0 .. 4 {
-		assert math.abs(f64(td[i]) - exp[i]) < 1e-2
+		assert math.abs(f64(td[i]) - want[i]) < 1e-2
 	}
 }
 
@@ -215,15 +215,15 @@ fn test_cyclide_bounds_contain_surface() {
 	g := cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!)
 	p := geom_to_camera(g, motor_identity())
 	b := geom_bounds(p) or { panic('no bounds') }
-	lo := b[0]
-	hi := b[1]
+	bmin := b[0]
+	bmax := b[1]
 	cy := cga_cy()
 	for i in 0 .. 7 {
 		for j in 0 .. 7 {
 			s := cy.surface(f64(i) * 2.0 * math.pi / 6.0, f64(j) * 2.0 * math.pi / 6.0)
-			assert s[0] >= lo[0] - 1e-6 && s[0] <= hi[0] + 1e-6
-			assert s[1] >= lo[1] - 1e-6 && s[1] <= hi[1] + 1e-6
-			assert s[2] >= lo[2] - 1e-6 && s[2] <= hi[2] + 1e-6
+			assert s[0] >= bmin[0] - 1e-6 && s[0] <= bmax[0] + 1e-6
+			assert s[1] >= bmin[1] - 1e-6 && s[1] <= bmax[1] + 1e-6
+			assert s[2] >= bmin[2] - 1e-6 && s[2] <= bmax[2] + 1e-6
 		}
 	}
 }

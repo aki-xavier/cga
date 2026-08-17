@@ -86,8 +86,8 @@ fn test_render_beer_absorption() {
 		px := rq_slab(depth, 0.8)
 		trans := math.exp(-0.8 * depth)
 		for i in 0 .. 3 {
-			exp := rq_linear_to_srgb255(trans * srgb_to_linear(wall[i]))
-			assert math.abs(f64(px[i]) - f64(exp)) <= 2.0
+			want := rq_linear_to_srgb255(trans * srgb_to_linear(wall[i]))
+			assert math.abs(f64(px[i]) - f64(want)) <= 2.0
 		}
 	}
 	// sigma=0 -> no attenuation (exact wall colour)
@@ -124,6 +124,6 @@ fn test_render_shadow_umbra_is_ambient_only() {
 	mut r := renderer(96, 96, 1, 3)
 	img := r.render(rq_shadow_scene(1.0), rq_shadow_cam())
 	p := rq_px(img, 96, 48, 48)
-	exp := rq_linear_to_srgb255(0.2)
-	assert math.abs(f64(p[0]) - f64(exp)) <= 2.0
+	want := rq_linear_to_srgb255(0.2)
+	assert math.abs(f64(p[0]) - f64(want)) <= 2.0
 }

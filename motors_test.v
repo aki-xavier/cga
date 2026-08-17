@@ -2,20 +2,20 @@ module cga
 
 import math
 
-fn p(x f64, y f64, z f64) Multivector {
+fn point_mv(x f64, y f64, z f64) Multivector {
 	return mv_vector(x, y, z, 1.0, 0.5 * (x * x + y * y + z * z))
 }
 
 fn test_translator() {
 	t := translator([1.0, 2.0, 3.0]!)
-	q := t.apply(p(0.0, 0.0, 0.0)).coords()
+	q := t.apply(point_mv(0.0, 0.0, 0.0)).coords()
 	assert q[0] == 1.0 && q[1] == 2.0 && q[2] == 3.0
 }
 
 fn test_rotor_z_quarter() {
 	// rotate (1,0,0) by 90 deg about +z -> (0,1,0)
 	r := motor_rotor([0.0, 0.0, 1.0]!, math.pi / 2.0)
-	q := r.apply(p(1.0, 0.0, 0.0)).coords()
+	q := r.apply(point_mv(1.0, 0.0, 0.0)).coords()
 	assert math.abs(q[0] - 0.0) < 1e-6
 	assert math.abs(q[1] - 1.0) < 1e-6
 	assert math.abs(q[2] - 0.0) < 1e-6
