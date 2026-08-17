@@ -26,10 +26,6 @@ module cga
 
 import math
 
-// Homebrew keeps bdw-gc (Boehm GC, linked by V itself) keg-only on Apple
-// Silicon; give the linker the path (same flag mlx-v adds).
-#flag darwin -L/opt/homebrew/opt/bdw-gc/lib
-
 pub struct Multivector {
 pub mut:
 	values [32]f64
