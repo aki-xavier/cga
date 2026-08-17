@@ -4,12 +4,15 @@ import os
 
 fn render_center(geom Geometry, pos [3]f64, name string) [3]f32 {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(geom, standard_material(color_hex(0xC0392B), 0.3, 0.1,
-		color_hex(0x000000), 1.0, 1.5, 0.0), pos, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(geom, standard_material(color_hex(0xC0392B), 0.3, 0.1, color_hex(0x000000),
+		1.0, 1.5, 0.0), pos, [0.0, 0.0, 1.0]!, 0.0, none))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
-	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [pos[0], pos[1],
-		pos[2] + 4.0]!, pos, [0.0, 1.0, 0.0]!)
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [pos[0], pos[1], pos[2] + 4.0]!, pos, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
 	cam.look_at(pos, none)
 	img := render_frame(sc, cam, 120, 120, 1)
 	os.mkdir_all('artifacts/tests') or {}
@@ -31,26 +34,27 @@ fn test_render_cone_hits() {
 }
 
 fn test_render_ellipsoid_hits() {
-	c := render_center(ellipsoid_geometry(1.0, 0.6, 0.8), [0.0, 0.0, 0.0]!,
-		'ellipsoid')
+	c := render_center(ellipsoid_geometry(1.0, 0.6, 0.8), [0.0, 0.0, 0.0]!, 'ellipsoid')
 	assert c[0] > c[2]
 }
 
 fn test_render_cyclide_hits() {
-	c := render_center(cyclide_geometry(2.0, 1.2, 1.6, [0.0, 0.0, 0.0]!),
-		[0.0, 0.0, 0.0]!, 'cyclide')
+	c := render_center(cyclide_geometry(2.0, 1.2, 1.6, [0.0, 0.0, 0.0]!), [0.0, 0.0, 0.0]!,
+		'cyclide')
 	assert c[0] > c[2]
 }
 
 fn test_render_torus_nonempty() {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(torus_geometry(1.0, 0.3), standard_material(color_hex(0xC0392B),
-		0.3, 0.1, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!,
-		[0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(torus_geometry(1.0, 0.3), standard_material(color_hex(0xC0392B), 0.3, 0.1,
+		color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
-	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!,
-		[0.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!)
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
 	cam.look_at([0.0, 0.0, 0.0]!, none)
 	img := render_frame(sc, cam, 120, 120, 1)
 	os.mkdir_all('artifacts/tests') or {}
@@ -67,16 +71,18 @@ fn test_render_torus_nonempty() {
 
 fn test_render_trimesh_nonempty() {
 	mut sc := scene(none)
-	verts := [[0.0, 0.0, 1.0]!, [1.0, 0.0, 0.0]!, [-0.5, 0.866, 0.0]!, [0.0, 0.0,
-		-1.0]!]
+	verts := [[0.0, 0.0, 1.0]!, [1.0, 0.0, 0.0]!, [-0.5, 0.866, 0.0]!,
+		[0.0, 0.0, -1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
-	sc.add_mesh(mesh(trimesh_geometry(verts, faces), standard_material(color_hex(0xC0392B),
-		0.3, 0.1, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!,
-		[0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(trimesh_geometry(verts, faces), standard_material(color_hex(0xC0392B), 0.3,
+		0.1, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
-	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!,
-		[0.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!)
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
 	cam.look_at([0.0, 0.0, 0.0]!, none)
 	img := render_frame(sc, cam, 120, 120, 1)
 	os.mkdir_all('artifacts/tests') or {}

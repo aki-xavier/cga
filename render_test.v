@@ -42,8 +42,8 @@ fn test_render_motor() {
 	w := 128
 	pf2 := plane([0.0, 0.0, 1.0]!, 4.0)
 	m := translator([0.0, 0.0, -1.0]!)
-	out := render_scene([render_primitive('plane', pf2, 1, 1.0)], 100.0, 100.0,
-		64.0, 48.0, h, w, none, m, 0.1, 1e4)
+	out := render_scene([render_primitive('plane', pf2, 1, 1.0)], 100.0, 100.0, 64.0, 48.0, h, w,
+		none, m, 0.1, 1e4)
 	assert math.abs(depth_at(out.depth, 48, 64, w) - 3.0) < 1e-3
 }
 

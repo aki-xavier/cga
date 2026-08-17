@@ -24,8 +24,8 @@ fn test_triangulate_square() {
 
 fn test_triangulate_concave() {
 	// L-shaped (concave) polygon, 6 vertices -> 4 triangles
-	l := [[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 1.0]!, [1.0, 1.0]!, [1.0, 2.0]!, [0.0,
-		2.0]!]
+	l := [[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 1.0]!, [1.0, 1.0]!,
+		[1.0, 2.0]!, [0.0, 2.0]!]
 	tris := triangulate(l)
 	assert tris.len == 4
 }
@@ -65,10 +65,10 @@ fn test_transform_point() {
 }
 
 fn test_obj_roundtrip() {
-	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!, [0.0, 0.0,
-		1.0]!]
+	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!,
+		[0.0, 0.0, 1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
-	save_obj('/tmp/cga_obj_roundtrip.obj', [ObjMesh{vertices: verts, faces: faces}])
+	save_obj('/tmp/cga_obj_roundtrip.obj', [ObjMesh{ vertices: verts, faces: faces }])
 	v2, f2 := load_obj('/tmp/cga_obj_roundtrip.obj')
 	assert v2.len == verts.len
 	assert f2.len == faces.len

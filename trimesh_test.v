@@ -18,8 +18,8 @@ fn tm_hit(g Geometry, o [3]f64, d [3]f64) (f32, [3]f32, bool) {
 
 fn tm_triangle() Geometry {
 	// triangle in the z=1 plane, centroid (2/3, 2/3, 1), normal +z
-	return trimesh_geometry([[0.0, 0.0, 1.0]!, [2.0, 0.0, 1.0]!, [0.0, 2.0, 1.0]!],
-		[[0, 1, 2]!])
+	return trimesh_geometry([[0.0, 0.0, 1.0]!, [2.0, 0.0, 1.0]!,
+		[0.0, 2.0, 1.0]!], [[0, 1, 2]!])
 }
 
 fn test_trimesh_center_hit() {
@@ -55,9 +55,9 @@ fn test_trimesh_backface_normal_flips() {
 }
 
 fn test_trimesh_nearest_of_two() {
-	g := trimesh_geometry([[0.0, 0.0, 1.0]!, [2.0, 0.0, 1.0]!, [0.0, 2.0, 1.0]!,
-		[0.0, 0.0, 2.0]!, [2.0, 0.0, 2.0]!, [0.0, 2.0, 2.0]!], [[0, 1, 2]!,
-		[3, 4, 5]!])
+	g := trimesh_geometry([[0.0, 0.0, 1.0]!, [2.0, 0.0, 1.0]!,
+		[0.0, 2.0, 1.0]!, [0.0, 0.0, 2.0]!, [2.0, 0.0, 2.0]!,
+		[0.0, 2.0, 2.0]!], [[0, 1, 2]!, [3, 4, 5]!])
 	t, _, m := tm_hit(g, [2.0 / 3.0, 2.0 / 3.0, 5.0]!, [0.0, 0.0, -1.0]!)
 	assert m
 	assert math.abs(f64(t) - 3.0) < 1e-3 // nearest face is at z=2
@@ -67,8 +67,7 @@ fn test_trimesh_translated_by_motor() {
 	// local triangle at z=1, motor translates by +z=2 -> world z=3
 	g := tm_triangle()
 	p := geom_to_camera(g, translator([0.0, 0.0, 2.0]!))
-	t, _, mask := geom_intersect(p, tm_ray(2.0 / 3.0, 2.0 / 3.0, 5.0), tm_ray(0.0,
-		0.0, -1.0))
+	t, _, mask := geom_intersect(p, tm_ray(2.0 / 3.0, 2.0 / 3.0, 5.0), tm_ray(0.0, 0.0, -1.0))
 	assert mask.data_bool()[0]
 	assert math.abs(f64(t.item_f32()) - 2.0) < 1e-3
 }

@@ -3,7 +3,6 @@ module cga
 // AffineGeometry: wraps any geometry with an invertible 3x3 linear block
 // (scale/mirror/shear), applied by the ray-inverse transform.  The inner
 // geometry stays in its local canonical form.
-
 import mlx
 
 pub struct AffineGeometry {
@@ -19,9 +18,9 @@ pub:
 // affine_geometry wraps `inner` with a linear block (identity linear = no-op).
 pub fn affine_geometry(inner Geometry, linear Mat3) AffineGeometry {
 	return AffineGeometry{
-		inner: [inner]
+		inner:  [inner]
 		linear: linear
-		motor: motor_identity()
+		motor:  motor_identity()
 	}
 }
 
@@ -29,9 +28,9 @@ pub fn affine_geometry(inner Geometry, linear Mat3) AffineGeometry {
 // glTF node transforms).
 pub fn transformed_geometry(inner Geometry, motor Multivector, linear Mat3) AffineGeometry {
 	return AffineGeometry{
-		inner: [inner]
+		inner:  [inner]
 		linear: linear
-		motor: motor
+		motor:  motor
 	}
 }
 
@@ -49,10 +48,10 @@ pub fn affine_to_camera(g AffineGeometry, m Multivector) AffineParams {
 	full := m.gp(g.motor)
 	ai, ti, af := affine_from_motor(full, g.linear)
 	return AffineParams{
-		inner: ip
+		inner:  ip
 		a_inv3: ai
-		t_inv: ti
-		a_fwd: af
+		t_inv:  ti
+		a_fwd:  af
 	}
 }
 

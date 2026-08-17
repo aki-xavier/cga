@@ -2,7 +2,6 @@ module cga
 
 // Modeling builders: ear-clipping triangulation + extrude / loft.
 // Pure data transforms producing watertight triangle meshes (vertices, faces).
-
 import math
 
 // --- ear clipping -----------------------------------------------------------
@@ -23,8 +22,7 @@ fn cross2(o [2]f64, a [2]f64, b [2]f64) f64 {
 }
 
 fn in_tri(p [2]f64, a [2]f64, b [2]f64, c [2]f64) bool {
-	return cross2(a, b, p) >= -1e-12 && cross2(b, c, p) >= -1e-12 && cross2(c, a,
-		p) >= -1e-12
+	return cross2(a, b, p) >= -1e-12 && cross2(b, c, p) >= -1e-12 && cross2(c, a, p) >= -1e-12
 }
 
 // triangulate ear-clips a simple polygon (no self-intersection, no holes) into

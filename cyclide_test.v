@@ -114,13 +114,14 @@ fn test_cyclide_characteristic_circle_on_surface() {
 	nn := math.sqrt(ep2)
 	n := [ep[0] / nn, ep[1] / nn, ep[2] / nn]!
 	e1v := [n[1], -n[0], 0.0]!
-	e2v := [n[1] * e1v[2] - n[2] * e1v[1], n[2] * e1v[0] - n[0] * e1v[2], n[0] *
-		e1v[1] - n[1] * e1v[0]]!
+	e2v := [n[1] * e1v[2] - n[2] * e1v[1], n[2] * e1v[0] - n[0] * e1v[2],
+		n[0] * e1v[1] - n[1] * e1v[0]]!
 	cc := cy.characteristic_circle(u)
 	for t in [0.0, 1.3, 2.5] {
 		p := [center[0] + radius * (e1v[0] * math.cos(t) + e2v[0] * math.sin(t)),
 			center[1] + radius * (e1v[1] * math.cos(t) + e2v[1] * math.sin(t)),
-			center[2] + radius * (e1v[2] * math.cos(t) + e2v[2] * math.sin(t))]!
+			center[2] +
+				radius * (e1v[2] * math.cos(t) + e2v[2] * math.sin(t))]!
 		assert math.abs(cy.implicit(p[0], p[1], p[2])) < 1e-8
 		assert math.abs(point(p[0], p[1], p[2]).ip(cc).scalar_part()) < 1e-6
 	}
@@ -228,8 +229,10 @@ fn test_cyclide_bounds_contain_surface() {
 }
 
 fn test_cyclide_csg_combines() {
-	csg := csg_geometry('union', [cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0,
-		0.0]!), cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!)])
+	csg := csg_geometry('union', [
+		cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!),
+		cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!),
+	])
 	t, m := cyc_hit(csg, [3.0, 0.0, 0.0]!, [-1.0, 0.0, 0.0]!)
 	assert m
 	assert t > 0.0

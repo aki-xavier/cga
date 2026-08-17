@@ -4,12 +4,15 @@ import os
 import math
 
 fn test_glb_roundtrip() {
-	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!, [0.0, 0.0, 1.0]!]
+	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!,
+		[0.0, 0.0, 1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
-	save_glb('/tmp/cga_roundtrip.glb', [GltfMeshIn{
-		vertices: verts
-		faces: faces
-	}])
+	save_glb('/tmp/cga_roundtrip.glb', [
+		GltfMeshIn{
+			vertices: verts
+			faces:    faces
+		},
+	])
 	out := load_gltf('/tmp/cga_roundtrip.glb')
 	assert out.len == 1
 	assert out[0].vertices.len == 4
@@ -27,7 +30,8 @@ fn test_glb_roundtrip() {
 
 fn test_gltf_json_roundtrip() {
 	// plain .gltf (JSON) with an external .bin buffer, like a typical exporter
-	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!, [0.0, 0.0, 1.0]!]
+	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!,
+		[0.0, 0.0, 1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
 	mut bin := []u8{}
 	for p in verts {
@@ -62,13 +66,16 @@ fn test_gltf_json_roundtrip() {
 }
 
 fn test_glb_color_material() {
-	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!, [0.0, 0.0, 1.0]!]
+	verts := [[0.0, 0.0, 0.0]!, [1.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!,
+		[0.0, 0.0, 1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
-	save_glb('/tmp/cga_color.glb', [GltfMeshIn{
-		vertices: verts
-		faces: faces
-		color: [0.8, 0.2, 0.2]!
-	}])
+	save_glb('/tmp/cga_color.glb', [
+		GltfMeshIn{
+			vertices: verts
+			faces:    faces
+			color:    [0.8, 0.2, 0.2]!
+		},
+	])
 	// the color must be written as a baseColorFactor material
 	data := os.read_bytes('/tmp/cga_color.glb') or { panic('read glb') }
 	assert data.bytestr().contains('baseColorFactor')

@@ -9,7 +9,6 @@ module cga
 //
 // A motor is just a multivector with even-grade components; in this port the
 // motor functions below operate on plain `Multivector` values.
-
 import math
 
 // Quaternion is an (w, x, y, z) quaternion (MJCF convention).
@@ -198,10 +197,22 @@ pub fn (m Multivector) to_matrix() [16]f64 {
 	pz_t := m.apply(mv_vector(0.0, 0.0, 1.0, 1.0, 0.5))
 
 	return [
-		px_t.values[1] - tx, py_t.values[1] - tx, pz_t.values[1] - tx, tx,
-		px_t.values[2] - ty, py_t.values[2] - ty, pz_t.values[2] - ty, ty,
-		px_t.values[3] - tz, py_t.values[3] - tz, pz_t.values[3] - tz, tz,
-		0.0, 0.0, 0.0, 1.0,
+		px_t.values[1] - tx,
+		py_t.values[1] - tx,
+		pz_t.values[1] - tx,
+		tx,
+		px_t.values[2] - ty,
+		py_t.values[2] - ty,
+		pz_t.values[2] - ty,
+		ty,
+		px_t.values[3] - tz,
+		py_t.values[3] - tz,
+		pz_t.values[3] - tz,
+		tz,
+		0.0,
+		0.0,
+		0.0,
+		1.0,
 	]!
 }
 
@@ -244,8 +255,7 @@ pub fn motor_exp(b Multivector, scale f64) Multivector {
 	}
 	if v_norm < 1e-12 {
 		// pure rotation through the origin
-		return motor_rotor([w_bar[0] / theta, w_bar[1] / theta, w_bar[2] / theta]!,
-			theta)
+		return motor_rotor([w_bar[0] / theta, w_bar[1] / theta, w_bar[2] / theta]!, theta)
 	}
 	// general screw: Rodrigues + SO(3) left Jacobian
 	bx := w_bar[0]
@@ -328,12 +338,14 @@ pub fn (m Multivector) log() Multivector {
 		wx2 := mat3_mul(wxm, wxm)
 		theta2 := theta * theta
 		coeff := 1.0 / theta2 - (1.0 + cos_theta) / (2.0 * theta * sin_theta)
-		v_inv := mat3_add_scaled(mat3_add_scaled(mat3_identity(), -0.5, wxm), coeff,
-			wx2)
+		v_inv := mat3_add_scaled(mat3_add_scaled(mat3_identity(), -0.5, wxm), coeff, wx2)
 		v_bar = mat3_vec(v_inv, tv)
 	}
-	return velocity_bivector([w_bar[0] / 2.0, w_bar[1] / 2.0, w_bar[2] / 2.0]!,
-		[v_bar[0] / 2.0, v_bar[1] / 2.0, v_bar[2] / 2.0]!)
+	return velocity_bivector([w_bar[0] / 2.0, w_bar[1] / 2.0, w_bar[2] / 2.0]!, [
+		v_bar[0] / 2.0,
+		v_bar[1] / 2.0,
+		v_bar[2] / 2.0,
+	]!)
 }
 
 // extract_velocity derives angular/linear velocity from two adjacent motors.

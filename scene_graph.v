@@ -2,7 +2,6 @@ module cga
 
 // Scene-graph layer: Vec3 helpers, Color, Object3D, Mesh, Scene,
 // PerspectiveCamera and OrbitControls (the three.js-style surface).
-
 import math
 
 // --- Vec3 -------------------------------------------------------------------

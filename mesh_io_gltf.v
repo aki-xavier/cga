@@ -1,17 +1,16 @@
 module cga
 
 // glTF 2.0 read + GLB write (geometry only: TRIANGLES primitives).
-
 import encoding.binary
 import encoding.base64
-import json
+import json2
 import os
 import math
 
 struct GltfAccessor {
 pub:
-	buffer_view    int    @[json: 'bufferView']
-	component_type int    @[json: 'componentType']
+	buffer_view    int @[json: 'bufferView']
+	component_type int @[json: 'componentType']
 	count          int
 	typ            string @[json: 'type']
 	byte_offset    int    @[json: 'byteOffset']
@@ -44,7 +43,7 @@ pub:
 
 struct GltfNode {
 pub:
-	mesh        ?int  @[json: 'mesh']
+	mesh        ?int @[json: 'mesh']
 	matrix      []f64
 	translation []f64
 	rotation    []f64
@@ -114,8 +113,17 @@ fn node_local_matrix(n GltfNode) [16]f64 {
 		}
 		return from_column_major(m)
 	}
-	t := if n.translation.len == 3 { [n.translation[0], n.translation[1], n.translation[2]]! } else { [0.0, 0.0, 0.0]! }
-	r := if n.rotation.len == 4 { [n.rotation[0], n.rotation[1], n.rotation[2], n.rotation[3]]! } else { [0.0, 0.0, 0.0, 1.0]! }
+	t := if n.translation.len == 3 { [n.translation[0], n.translation[1], n.translation[2]]! } else { [
+			0.0,
+			0.0,
+			0.0,
+		]! }
+	r := if n.rotation.len == 4 { [n.rotation[0], n.rotation[1], n.rotation[2], n.rotation[3]]! } else { [
+			0.0,
+			0.0,
+			0.0,
+			1.0,
+		]! }
 	sc := if n.scale.len == 3 { [n.scale[0], n.scale[1], n.scale[2]]! } else { [1.0, 1.0, 1.0]! }
 	return from_trs(t, r, sc)
 }
@@ -282,8 +290,8 @@ fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out
 			}
 			out << GltfMeshOut{
 				vertices: verts
-				faces: faces
-				world: world
+				faces:    faces
+				world:    world
 			}
 		}
 	}
@@ -355,7 +363,7 @@ pub fn load_gltf(path string) []GltfMeshOut {
 		// Plain .gltf JSON document.
 		json_text = data.bytestr()
 	}
-	gltf := json.decode(GltfRoot, json_text) or { panic('bad glTF JSON: ${err}') }
+	gltf := json2.decode[GltfRoot](json_text) or { panic('bad glTF JSON: ${err}') }
 	if gltf.scenes.len == 0 {
 		return []
 	}

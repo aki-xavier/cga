@@ -5,7 +5,6 @@ module cga
 // and this module cannot extend `mlx.Array` (methods on foreign types are not
 // allowed), so these are free functions.  All operate in float32, matching the
 // render-kernel dtype.
-
 import mlx
 
 // fs returns a 0-d float32 scalar array (broadcasts in elementwise ops).

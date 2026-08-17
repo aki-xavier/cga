@@ -23,7 +23,6 @@ module cga
 //
 // `set_precision` is kept for API compatibility: the algebra core is always
 // float64 here (the render kernel is float32, exactly as in the reference).
-
 import math
 
 pub struct Multivector {

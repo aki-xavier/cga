@@ -2,7 +2,6 @@ module cga
 
 // Intersection kernels for the non-blade primitives (cone / torus / ellipsoid /
 // cyclide), which use the affine ray-inverse transform (see affine.v).
-
 import mlx
 import math
 
@@ -10,8 +9,7 @@ import math
 // Durand-Kerner iteration (50 rounds, complex64).  Returns (N,4) sorted real
 // roots (invalid = +inf).
 fn dk_roots(c3 mlx.Array, c2 mlx.Array, c1 mlx.Array, c0 mlx.Array) mlx.Array {
-	rad := s_add(mlx.stack([c3.abs(), c2.abs(), c1.abs(), c0.abs()], -1).max_axis(-1,
-		true), 1.0)
+	rad := s_add(mlx.stack([c3.abs(), c2.abs(), c1.abs(), c0.abs()], -1).max_axis(-1, true), 1.0)
 	seed := mlx.array_with([mlx.Complex64{
 		real: 0.4
 		imag: 0.9
@@ -98,8 +96,7 @@ fn cone_local_interval(r f64, h f64, o mlx.Array, d mlx.Array) (mlx.Array, mlx.A
 	wz := s_sub(col(o, 2), h / 2.0)
 	dz := col(d, 2)
 	wd := o.multiply(d).sum_axis(-1, false).subtract(s_mul(dz, h / 2.0))
-	ww := s_add(o.multiply(o).sum_axis(-1, false).subtract(s_mul(col(o, 2), h)), h * h /
-		4.0)
+	ww := s_add(o.multiply(o).sum_axis(-1, false).subtract(s_mul(col(o, 2), h)), h * h / 4.0)
 	a := fs(1.0).subtract(s_mul(dz.multiply(dz), k2))
 	b := s_mul(wd.subtract(s_mul(wz.multiply(dz), k2)), 2.0)
 	c := ww.subtract(s_mul(wz.multiply(wz), k2))
@@ -236,11 +233,12 @@ fn torus_local_crossings(major f64, minor f64, o mlx.Array, d mlx.Array) (mlx.Ar
 	od := o.multiply(d).sum_axis(-1, false)
 	g := s_add(oo, r2 - minor * minor)
 	c3 := s_mul(od, 4.0)
-	c2 := s_mul(g, 2.0).add(s_mul(od.multiply(od), 4.0)).subtract(s_mul(col(d, 0).multiply(col(d, 0)).add(col(d, 1).multiply(col(d, 1))), 4.0 * r2))
-	c1 := s_mul(od.multiply(g), 4.0).subtract(s_mul(col(o, 0).multiply(col(d,
-		0)).add(col(o, 1).multiply(col(d, 1))), 8.0 * r2))
-	c0 := g.multiply(g).subtract(s_mul(col(o, 0).multiply(col(o, 0)).add(col(o,
-		1).multiply(col(o, 1))), 4.0 * r2))
+	c2 := s_mul(g, 2.0).add(s_mul(od.multiply(od), 4.0)).subtract(s_mul(col(d, 0).multiply(col(d, 0)).add(col(d, 1).multiply(col(d, 1))),
+		4.0 * r2))
+	c1 := s_mul(od.multiply(g), 4.0).subtract(s_mul(col(o, 0).multiply(col(d, 0)).add(col(o, 1).multiply(col(d, 1))),
+		8.0 * r2))
+	c0 := g.multiply(g).subtract(s_mul(col(o, 0).multiply(col(o, 0)).add(col(o, 1).multiply(col(o, 1))),
+		4.0 * r2))
 	ts := dk_roots(c3, c2, c1, c0)
 	valid := ts.isfinite()
 	safe_t := mlx.where(valid, ts, mlx.zeros_like(ts))
@@ -260,8 +258,8 @@ fn torus_local_crossings(major f64, minor f64, o mlx.Array, d mlx.Array) (mlx.Ar
 
 fn torus_local_contains(major f64, minor f64, p mlx.Array) mlx.Array {
 	r2 := major * major
-	f := s_add(p.multiply(p).sum_axis(-1, false), r2 - minor * minor).square().subtract(s_mul(col(p,
-		0).multiply(col(p, 0)).add(col(p, 1).multiply(col(p, 1))), 4.0 * r2))
+	f := s_add(p.multiply(p).sum_axis(-1, false), r2 - minor * minor).square().subtract(s_mul(col(p, 0).multiply(col(p, 0)).add(col(p, 1).multiply(col(p, 1))),
+		4.0 * r2))
 	return s_lt(f, 0.0)
 }
 
@@ -273,7 +271,8 @@ pub fn torus_intersect(p TorusParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.
 	t_l := cand.min_axis(-1, false)
 	mask := t_l.isfinite()
 	idx := cand.argmin_axis(-1, false)
-	mut n_l := ns.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns.shape()[0], 1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
+	mut n_l := ns.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns.shape()[0],
+		1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
 	inside := mask.logical_and(torus_local_contains(p.major, p.minor, o_l))
 	n_l = mlx.where(inside.expand_dims(1), n_l.negative(), n_l)
 	t := t_l.divide(col(lam, 0))
@@ -315,7 +314,8 @@ fn cyclide_local_crossings(a f64, b f64, dd f64, c f64, shift [3]f64, o mlx.Arra
 	p0 := s_sub(s_mul(ox, a), c * dd)
 	p1 := s_mul(dx, a)
 	c3 := s_mul(b1, 4.0)
-	c2 := s_mul(g, 2.0).add(s_mul(b1.multiply(b1), 4.0)).subtract(s_mul(p1.multiply(p1), 4.0)).subtract(s_mul(dy.multiply(dy), 4.0 * b * b))
+	c2 := s_mul(g, 2.0).add(s_mul(b1.multiply(b1), 4.0)).subtract(s_mul(p1.multiply(p1), 4.0)).subtract(s_mul(dy.multiply(dy),
+		4.0 * b * b))
 	c1 := s_mul(b1.multiply(g), 4.0).subtract(s_mul(p0.multiply(p1), 8.0)).subtract(s_mul(oy.multiply(dy),
 		8.0 * b * b))
 	c0 := g.multiply(g).subtract(s_mul(p0.multiply(p0), 4.0)).subtract(s_mul(oy.multiply(oy),
@@ -323,7 +323,8 @@ fn cyclide_local_crossings(a f64, b f64, dd f64, c f64, shift [3]f64, o mlx.Arra
 	ts := dk_roots(c3, c2, c1, c0)
 	valid := ts.isfinite()
 	safe_t := mlx.where(valid, ts, mlx.zeros_like(ts))
-	p := o.expand_dims(1).subtract(arr3v(shift).expand_dims(0).expand_dims(0)).add(safe_t.expand_dims(2).multiply(d.expand_dims(1)))
+	p :=
+		o.expand_dims(1).subtract(arr3v(shift).expand_dims(0).expand_dims(0)).add(safe_t.expand_dims(2).multiply(d.expand_dims(1)))
 	mut ns := cyclide_normal(a, b, dd, c, p)
 	ns = mlx.where(valid.expand_dims(2), ns, mlx.zeros_like(ns))
 	return ts, ns, valid
@@ -337,9 +338,10 @@ fn cyclide_normal(a f64, b f64, dd f64, c f64, p mlx.Array) mlx.Array {
 	p0 := p.take_axis(mlx.int_scalar(0), 2)
 	p1 := p.take_axis(mlx.int_scalar(1), 2)
 	p2 := p.take_axis(mlx.int_scalar(2), 2)
-	grad := mlx.stack([s_mul(p0.multiply(g0), 4.0).subtract(s_mul(s_sub(s_mul(p0,
-		a), c * dd), 8.0 * a)), s_mul(p1.multiply(g0), 4.0).subtract(s_mul(p1,
-		8.0 * b * b)), s_mul(p2.multiply(g0), 4.0)], -1)
+	grad := mlx.stack([s_mul(p0.multiply(g0), 4.0).subtract(s_mul(s_sub(s_mul(p0, a), c * dd),
+		8.0 * a)),
+		s_mul(p1.multiply(g0), 4.0).subtract(s_mul(p1, 8.0 * b * b)),
+		s_mul(p2.multiply(g0), 4.0)], -1)
 	norm := grad.multiply(grad).sum_axis(-1, true).sqrt()
 	return grad.divide(mlx.where(s_gt(norm, 1e-12), norm, mlx.ones_like(norm)))
 }
@@ -350,8 +352,8 @@ fn cyclide_local_contains(a f64, b f64, dd f64, c f64, shift [3]f64, p mlx.Array
 	z := s_sub(col(p, 2), shift[2])
 	bb := b * b - dd * dd
 	rho := x.multiply(x).add(y.multiply(y)).add(z.multiply(z))
-	f := s_add(rho, bb).square().subtract(s_mul(s_sub(s_mul(x, a), c * dd).square(),
-		4.0)).subtract(s_mul(y.multiply(y), 4.0 * b * b))
+	f := s_add(rho, bb).square().subtract(s_mul(s_sub(s_mul(x, a), c * dd).square(), 4.0)).subtract(s_mul(y.multiply(y),
+		4.0 * b * b))
 	return s_lt(f, 0.0)
 }
 
@@ -363,7 +365,8 @@ pub fn cyclide_intersect(p CyclideParams, o mlx.Array, d mlx.Array) (mlx.Array, 
 	t_l := cand.min_axis(-1, false)
 	mask := t_l.isfinite()
 	idx := cand.argmin_axis(-1, false)
-	mut n_l := ns.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns.shape()[0], 1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
+	mut n_l := ns.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns.shape()[0],
+		1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
 	inside := mask.logical_and(cyclide_local_contains(p.a, p.b, p.d, p.c, p.shift, o_l))
 	n_l = mlx.where(inside.expand_dims(1), n_l.negative(), n_l)
 	t := t_l.divide(col(lam, 0))
@@ -387,9 +390,9 @@ pub fn cyclide_uv(p CyclideParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	y := s_sub(col(p_l, 1), p.shift[1])
 	z := s_sub(col(p_l, 2), p.shift[2])
 	rho := x.multiply(x).add(y.multiply(y)).add(z.multiply(z))
-	u := s_add(s_div(s_mul(y, 2.0 * p.b).arctan2(s_mul(s_sub(s_mul(x, p.a), p.c *
-		p.d), 2.0)), 2.0 * math.pi), 0.5)
-	v := s_add(s_div(s_mul(z, 2.0 * p.b).arctan2(s_rsub(rho, p.d * p.d + p.b *
-		p.b)), 2.0 * math.pi), 0.5)
+	u := s_add(s_div(s_mul(y, 2.0 * p.b).arctan2(s_mul(s_sub(s_mul(x, p.a), p.c * p.d), 2.0)),
+		2.0 * math.pi), 0.5)
+	v :=
+		s_add(s_div(s_mul(z, 2.0 * p.b).arctan2(s_rsub(rho, p.d * p.d + p.b * p.b)), 2.0 * math.pi), 0.5)
 	return mlx.stack([u, v], -1)
 }

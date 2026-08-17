@@ -55,8 +55,11 @@ fn geom_kind(g Geometry) string {
 // --- affine ------------------------------------------------------------------
 
 fn test_affine_scaled_sphere() {
-	g := affine_geometry(sphere_geometry(1.0), mat3_new([2.0, 0.0, 0.0]!, [0.0, 1.0,
-		0.0]!, [0.0, 0.0, 1.0]!))
+	g := affine_geometry(sphere_geometry(1.0), mat3_new([2.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!, [
+		0.0,
+		0.0,
+		1.0,
+	]!))
 	t, n, m := em_hit(g, [0.0, 0.0, 5.0]!, [0.0, 0.0, -1.0]!)
 	assert m
 	assert math.abs(f64(t) - 4.0) < 1e-5
@@ -129,14 +132,14 @@ fn test_ellipsoid_is_scaled_sphere() {
 // --- modeling builders -------------------------------------------------------
 
 fn test_earclip_l_shape() {
-	l := [[0.0, 0.0]!, [4.0, 0.0]!, [4.0, 2.0]!, [2.0, 2.0]!, [2.0, 4.0]!, [0.0,
-		4.0]!]
+	l := [[0.0, 0.0]!, [4.0, 0.0]!, [4.0, 2.0]!, [2.0, 2.0]!,
+		[2.0, 4.0]!, [0.0, 4.0]!]
 	assert triangulate(l).len == 4 // 6-vertex L -> 4 triangles
 }
 
 fn test_extrude_hit_and_contains() {
-	verts, faces := extrude([[0.0, 0.0]!, [4.0, 0.0]!, [4.0, 2.0]!, [2.0, 2.0]!, [2.0,
-		4.0]!, [0.0, 4.0]!], 1.5)
+	verts, faces := extrude([[0.0, 0.0]!, [4.0, 0.0]!, [4.0, 2.0]!,
+		[2.0, 2.0]!, [2.0, 4.0]!, [0.0, 4.0]!], 1.5)
 	g := trimesh_geometry(verts, faces)
 	t, _, m := em_hit(g, [1.0, 1.0, 5.0]!, [0.0, 0.0, -1.0]!)
 	assert m
@@ -147,7 +150,8 @@ fn test_extrude_hit_and_contains() {
 }
 
 fn test_loft_between_squares() {
-	verts, faces := loft([[[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!, [0.0, 2.0]!],
+	verts, faces := loft([[[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,
+		[0.0, 2.0]!],
 		[[0.4, 0.4]!, [1.6, 0.4]!, [1.6, 1.6]!, [0.4, 1.6]!]], [0.0, 1.0])
 	assert verts.len == 8
 	g := trimesh_geometry(verts, faces)
@@ -159,8 +163,9 @@ fn test_loft_between_squares() {
 // --- mesh IO -----------------------------------------------------------------
 
 fn test_obj_roundtrip() {
-	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!, [0.0, 2.0]!], 1.0)
-	save_obj('/tmp/cga_em_obj.obj', [ObjMesh{vertices: verts, faces: faces}])
+	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,
+		[0.0, 2.0]!], 1.0)
+	save_obj('/tmp/cga_em_obj.obj', [ObjMesh{ vertices: verts, faces: faces }])
 	v2, f2 := load_obj('/tmp/cga_em_obj.obj')
 	assert v2.len == verts.len
 	assert f2.len == faces.len
@@ -176,15 +181,17 @@ fn test_obj_roundtrip() {
 }
 
 fn test_glb_roundtrip_with_transform() {
-	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!, [0.0, 2.0]!], 1.0)
-	t4 := [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0,
-		0.0, 1.0]!
-	save_glb('/tmp/cga_em.glb', [GltfMeshIn{
-		vertices: verts
-		faces: faces
-		transform: t4
-		color: [0.8, 0.2, 0.2]!
-	}])
+	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,
+		[0.0, 2.0]!], 1.0)
+	t4 := [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0, 1.0]!
+	save_glb('/tmp/cga_em.glb', [
+		GltfMeshIn{
+			vertices:  verts
+			faces:     faces
+			transform: t4
+			color:     [0.8, 0.2, 0.2]!
+		},
+	])
 	loaded := load_gltf('/tmp/cga_em.glb')
 	assert loaded.len == 1
 	assert loaded[0].faces.len == faces.len
@@ -215,13 +222,10 @@ fn test_cgs_modifier_ordering() {
 }
 
 fn test_cgs_csg_block_and_new_primitives() {
-	text := 'difference() { box(s=[2,2,2]); cylinder(r=0.5, h=4); }\n' +
-		'cone(r=1, h=2);\n' +
-		'torus(R=1, r=0.3);\n' +
-		'ellipsoid(radii=[1,2,3]);\n' +
+	text := 'difference() { box(s=[2,2,2]); cylinder(r=0.5, h=4); }\n' + 'cone(r=1, h=2);\n' +
+		'torus(R=1, r=0.3);\n' + 'ellipsoid(radii=[1,2,3]);\n' +
 		'extrude(profile=[[0,0],[1,0],[1,1],[0,1]], h=0.5);\n' +
-		'p1 = [[0,0],[1,0],[1,1],[0,1]];\n' +
-		'p2 = [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]];\n' +
+		'p1 = [[0,0],[1,0],[1,1],[0,1]];\n' + 'p2 = [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]];\n' +
 		'loft(profiles=[p1, p2], zs=[0, 0.5]);'
 	sc, _ := cgs_load(text, '')
 	assert sc.objects.len == 6
@@ -241,10 +245,11 @@ fn test_cgs_precision_statement() {
 
 fn test_cgs_gltf_mesh() {
 	// save a GLB then load it back through the CGS mesh() primitive
-	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!, [0.0, 2.0]!], 1.0)
+	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,
+		[0.0, 2.0]!], 1.0)
 	save_glb('/tmp/cga_cgs.glb', [GltfMeshIn{
 		vertices: verts
-		faces: faces
+		faces:    faces
 	}])
 	sc, _ := cgs_load('mesh(file="cga_cgs.glb");', '/tmp')
 	assert sc.objects.len == 1

@@ -3,7 +3,6 @@ module cga
 // Per-pixel ray-intersection kernels (MLX batch, float32).  Each geometry
 // provides intersect / intersect_shadow / uv_at / bounds_camera over the
 // camera-space parameters computed in geometry.v.
-
 import mlx
 import math
 
@@ -127,13 +126,14 @@ pub fn cylinder_intersect(p CylinderParams, o mlx.Array, d mlx.Array) (mlx.Array
 	s := o_par.add(t.expand_dims(1).multiply(d_par))
 	side_ok := mask.logical_and(s_le(col(s.abs(), 0), h))
 	denom := col(d_par, 0)
-	cap_t := mlx.stack([s_rsub(col(o_par, 0), h).divide(denom), s_rsub(col(o_par, 0), -h).divide(denom)], -1)
+	cap_t := mlx.stack([s_rsub(col(o_par, 0), h).divide(denom),
+		s_rsub(col(o_par, 0), -h).divide(denom)], -1)
 	mut cap_ok := s_gt(denom.abs(), 1e-9).expand_dims(1).broadcast_to([o.shape()[0], 2])
 	cap_ok = cap_ok.logical_and(s_gt(cap_t, 1e-6))
 	p_cap := o.expand_dims(1).add(cap_t.expand_dims(2).multiply(d.expand_dims(1)))
 	rel := p_cap.subtract(q.expand_dims(0).expand_dims(0))
-	lat := rel.subtract(rel.multiply(u.expand_dims(0).expand_dims(0)).sum_axis(-1,
-		true).multiply(u.expand_dims(0).expand_dims(0)))
+	lat :=
+		rel.subtract(rel.multiply(u.expand_dims(0).expand_dims(0)).sum_axis(-1, true).multiply(u.expand_dims(0).expand_dims(0)))
 	cap_ok = cap_ok.logical_and(s_le(lat.multiply(lat).sum_axis(-1, false), p.r * p.r))
 	mut n_cap := denom.sign().negative().expand_dims(1).multiply(u.expand_dims(0))
 	n_cap = mlx.stack([n_cap, n_cap], 1)
@@ -142,13 +142,15 @@ pub fn cylinder_intersect(p CylinderParams, o mlx.Array, d mlx.Array) (mlx.Array
 	t_eff := mlx.where(ok_all, t_all, inf_array_like(t_all))
 	t_min := t_eff.min_axis(-1, false)
 	idx := t_eff.argmin_axis(-1, false)
-	n_all := mlx.stack([n, n_cap.take_axis(mlx.int_scalar(0), 1), n_cap.take_axis(mlx.int_scalar(1),
-		1)], 1)
-	n_fin := n_all.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([n.shape()[0],
-		1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
+	n_all := mlx.stack([n, n_cap.take_axis(mlx.int_scalar(0), 1),
+		n_cap.take_axis(mlx.int_scalar(1), 1)], 1)
+	n_fin := n_all.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([
+		n.shape()[0],
+		1,
+		3,
+	]), 1).take_axis(mlx.int_scalar(0), 1)
 	fin := t_min.isfinite().logical_and(s_gt(t_min, 1e-6))
-	return mlx.where(fin, t_min, t), mlx.where(fin.expand_dims(1), n_fin, mlx.zeros_like(n_fin)),
-		fin
+	return mlx.where(fin, t_min, t), mlx.where(fin.expand_dims(1), n_fin, mlx.zeros_like(n_fin)), fin
 }
 
 pub fn cylinder_shadow(p CylinderParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array) {
@@ -163,13 +165,14 @@ pub fn cylinder_shadow(p CylinderParams, o mlx.Array, d mlx.Array) (mlx.Array, m
 	s := o_par.add(t.expand_dims(1).multiply(d_par))
 	side_ok := mask.logical_and(s_le(col(s.abs(), 0), h))
 	denom := col(d_par, 0)
-	cap_t := mlx.stack([s_rsub(col(o_par, 0), h).divide(denom), s_rsub(col(o_par, 0), -h).divide(denom)], -1)
+	cap_t := mlx.stack([s_rsub(col(o_par, 0), h).divide(denom),
+		s_rsub(col(o_par, 0), -h).divide(denom)], -1)
 	mut cap_ok := s_gt(denom.abs(), 1e-9).expand_dims(1).broadcast_to([o.shape()[0], 2])
 	cap_ok = cap_ok.logical_and(s_gt(cap_t, 1e-6))
 	p_cap := o.expand_dims(1).add(cap_t.expand_dims(2).multiply(d.expand_dims(1)))
 	rel := p_cap.subtract(q.expand_dims(0).expand_dims(0))
-	lat := rel.subtract(rel.multiply(u.expand_dims(0).expand_dims(0)).sum_axis(-1,
-		true).multiply(u.expand_dims(0).expand_dims(0)))
+	lat :=
+		rel.subtract(rel.multiply(u.expand_dims(0).expand_dims(0)).sum_axis(-1, true).multiply(u.expand_dims(0).expand_dims(0)))
 	cap_ok = cap_ok.logical_and(s_le(lat.multiply(lat).sum_axis(-1, false), p.r * p.r))
 	t_all := mlx.stack([t, col(cap_t, 0), col(cap_t, 1)], -1)
 	ok_all := mlx.stack([side_ok, col(cap_ok, 0), col(cap_ok, 1)], -1)
@@ -190,13 +193,11 @@ pub fn cylinder_uv(p CylinderParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	mut e1 := mlx.where(s_lt(axis.take_axis(mlx.int_scalar(0), 0).abs(), 0.9), seed, alt)
 	e1 = e1.subtract(e1.multiply(axis).sum().multiply(axis))
 	e1 = e1.divide(e1.multiply(e1).sum().sqrt())
-	e2 := mlx.stack([axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(2),
-		0)).subtract(axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(1),
-		0))), axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(0),
-		0)).subtract(axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(2),
-		0))), axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(1),
-		0)).subtract(axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(0),
-		0)))], 0)
+	e2 := mlx.stack([
+		axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(2), 0)).subtract(axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(1), 0))),
+		axis.take_axis(mlx.int_scalar(2), 0).multiply(e1.take_axis(mlx.int_scalar(0), 0)).subtract(axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(2), 0))),
+		axis.take_axis(mlx.int_scalar(0), 0).multiply(e1.take_axis(mlx.int_scalar(1), 0)).subtract(axis.take_axis(mlx.int_scalar(1), 0).multiply(e1.take_axis(mlx.int_scalar(0), 0))),
+	], 0)
 	u := s_add(s_div(radial.multiply(e2).sum_axis(-1, false).arctan2(radial.multiply(e1).sum_axis(-1,
 		false)), 2.0 * math.pi), 0.5)
 	v := s_div(rel.multiply(axis).sum_axis(-1, false), 2.0 * p.r)
@@ -211,10 +212,10 @@ pub fn box_intersect(p BoxParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Arra
 	ax0 := arr3v(p.axes[0])
 	ax1 := arr3v(p.axes[1])
 	ax2 := arr3v(p.axes[2])
-	op := mlx.stack([oc.multiply(ax0).sum_axis(-1, false), oc.multiply(ax1).sum_axis(-1,
-		false), oc.multiply(ax2).sum_axis(-1, false)], -1)
-	dp := mlx.stack([d.multiply(ax0).sum_axis(-1, false), d.multiply(ax1).sum_axis(-1,
-		false), d.multiply(ax2).sum_axis(-1, false)], -1)
+	op := mlx.stack([oc.multiply(ax0).sum_axis(-1, false), oc.multiply(ax1).sum_axis(-1, false),
+		oc.multiply(ax2).sum_axis(-1, false)], -1)
+	dp := mlx.stack([d.multiply(ax0).sum_axis(-1, false), d.multiply(ax1).sum_axis(-1, false),
+		d.multiply(ax2).sum_axis(-1, false)], -1)
 	inv := s_rdiv(dp, 1.0)
 	half_a := arr3v(p.half)
 	t0 := inv.negative().multiply(op.add(half_a))
@@ -230,7 +231,8 @@ pub fn box_intersect(p BoxParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Arra
 	t := mlx.where(valid.logical_and(inside_hit.logical_not()), t_entry, t_exit)
 	idx := mlx.where(inside_hit, i_exit, i_entry)
 	eye := mlx.eye(3, 3, 0, .float32)
-	mut n := eye.take_axis(idx, 0).multiply(dp.take_along_axis(idx.expand_dims(1), -1).squeeze_axis(-1).sign().negative().expand_dims(1))
+	mut n :=
+		eye.take_axis(idx, 0).multiply(dp.take_along_axis(idx.expand_dims(1), -1).squeeze_axis(-1).sign().negative().expand_dims(1))
 	n = mlx.where(valid.expand_dims(1), n, mlx.zeros_like(n))
 	return t, n, valid
 }
@@ -241,10 +243,10 @@ pub fn box_shadow(p BoxParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array) 
 	ax0 := arr3v(p.axes[0])
 	ax1 := arr3v(p.axes[1])
 	ax2 := arr3v(p.axes[2])
-	op := mlx.stack([oc.multiply(ax0).sum_axis(-1, false), oc.multiply(ax1).sum_axis(-1,
-		false), oc.multiply(ax2).sum_axis(-1, false)], -1)
-	dp := mlx.stack([d.multiply(ax0).sum_axis(-1, false), d.multiply(ax1).sum_axis(-1,
-		false), d.multiply(ax2).sum_axis(-1, false)], -1)
+	op := mlx.stack([oc.multiply(ax0).sum_axis(-1, false), oc.multiply(ax1).sum_axis(-1, false),
+		oc.multiply(ax2).sum_axis(-1, false)], -1)
+	dp := mlx.stack([d.multiply(ax0).sum_axis(-1, false), d.multiply(ax1).sum_axis(-1, false),
+		d.multiply(ax2).sum_axis(-1, false)], -1)
 	inv := s_rdiv(dp, 1.0)
 	half_a := arr3v(p.half)
 	t0 := inv.negative().multiply(op.add(half_a))
@@ -265,8 +267,8 @@ pub fn box_uv(p BoxParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	ax0 := arr3v(p.axes[0])
 	ax1 := arr3v(p.axes[1])
 	ax2 := arr3v(p.axes[2])
-	local := mlx.stack([q.multiply(ax0).sum_axis(-1, false), q.multiply(ax1).sum_axis(-1,
-		false), q.multiply(ax2).sum_axis(-1, false)], -1)
+	local := mlx.stack([q.multiply(ax0).sum_axis(-1, false), q.multiply(ax1).sum_axis(-1, false),
+		q.multiply(ax2).sum_axis(-1, false)], -1)
 	half_a := arr3v(p.half)
 	face := local.divide(half_a).abs().argmax_axis(-1, false)
 	l0 := col(local, 0)
@@ -274,9 +276,12 @@ pub fn box_uv(p BoxParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	l2 := col(local, 2)
 	x := mlx.where(s_eq(face, 0.0), l2, l0)
 	y := mlx.where(s_eq(face, 2.0), l1, l2)
-	sx := mlx.where(s_eq(face, 0.0), half_a.take_axis(mlx.int_scalar(2), 0), half_a.take_axis(mlx.int_scalar(0), 0))
-	sy := mlx.where(s_eq(face, 2.0), half_a.take_axis(mlx.int_scalar(1), 0), half_a.take_axis(mlx.int_scalar(2), 0))
-	return mlx.stack([s_add(x.divide(s_mul(sx, 2.0)), 0.5), s_add(y.divide(s_mul(sy, 2.0)), 0.5)], -1)
+	sx := mlx.where(s_eq(face, 0.0), half_a.take_axis(mlx.int_scalar(2), 0),
+		half_a.take_axis(mlx.int_scalar(0), 0))
+	sy := mlx.where(s_eq(face, 2.0), half_a.take_axis(mlx.int_scalar(1), 0),
+		half_a.take_axis(mlx.int_scalar(2), 0))
+	return mlx.stack([s_add(x.divide(s_mul(sx, 2.0)), 0.5), s_add(y.divide(s_mul(sy, 2.0)), 0.5)],
+		-1)
 }
 
 // --- circle -----------------------------------------------------------------
@@ -372,20 +377,23 @@ pub fn geom_bounds(p GeometryParams) ?[2][3]f64 {
 		SphereParams {
 			return [lo(p.c, p.r), hi(p.c, p.r)]!
 		}
-		PlaneParams { return none }
+		PlaneParams {
+			return none
+		}
 		CylinderParams {
 			if p.h < 0.0 {
 				return none
 			}
 			return capsule_bounds(p.q, p.u, p.r, p.h)
 		}
-		BoxParams { return box_bounds(p.c, p.axes, p.half) }
+		BoxParams {
+			return box_bounds(p.c, p.axes, p.half)
+		}
 		CircleParams {
 			return [lo(p.c, p.r), hi(p.c, p.r)]!
 		}
 		ConeParams {
-			return affine_bounds([-p.r, -p.r, -p.h / 2.0]!, [p.r, p.r, p.h / 2.0]!,
-				p.a_fwd)
+			return affine_bounds([-p.r, -p.r, -p.h / 2.0]!, [p.r, p.r, p.h / 2.0]!, p.a_fwd)
 		}
 		TorusParams {
 			e := p.major + p.minor
@@ -396,9 +404,11 @@ pub fn geom_bounds(p GeometryParams) ?[2][3]f64 {
 		}
 		CyclideParams {
 			r := p.d + p.c
-			return affine_bounds([p.shift[0] - p.a - r, p.shift[1] - p.b - r,
-				p.shift[2] - r]!, [p.shift[0] + p.a + r, p.shift[1] + p.b + r,
-				p.shift[2] + r]!, p.a_fwd)
+			return affine_bounds([p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r]!, [
+				p.shift[0] + p.a + r,
+				p.shift[1] + p.b + r,
+				p.shift[2] + r,
+			]!, p.a_fwd)
 		}
 		TrimeshParams {
 			return affine_bounds(p.lo, p.hi, p.a_fwd)

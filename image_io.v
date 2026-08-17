@@ -2,7 +2,6 @@ module cga
 
 // Minimal PNG writer (RGBA, 8-bit) so render output can be saved to disk
 // without external dependencies.  Uses V's zlib + crc32 modules.
-
 import hash.crc32
 import compress.zlib
 import os
@@ -94,8 +93,7 @@ fn paeth(a int, b int, c int) int {
 // greyscale+alpha) into RGBA bytes, returning (pixels, width, height).
 pub fn load_png_rgba(path string) ([]u8, int, int) {
 	data := os.read_bytes(path) or { panic('cannot read ${path}') }
-	if data.len < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E ||
-		data[3] != 0x47 {
+	if data.len < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 {
 		panic('${path} is not a PNG')
 	}
 	mut pos := 8

@@ -1,7 +1,6 @@
 module cga
 
 // Mesh, Scene, PerspectiveCamera and OrbitControls (three.js-style surface).
-
 import math
 
 // Mesh binds a geometry, a material and a local pose (Object3D).
@@ -64,14 +63,14 @@ pub fn perspective_camera(fov f64, aspect f64, near f64, far f64, position [3]f6
 		panic('fov must be in (0, 180), got ${fov}')
 	}
 	return PerspectiveCamera{
-		fov: fov
-		aspect: aspect
-		near: near
-		far: far
+		fov:      fov
+		aspect:   aspect
+		near:     near
+		far:      far
 		position: position
-		target: target
-		up: vec3_unit(up)
-		motor: motor_identity()
+		target:   target
+		up:       vec3_unit(up)
+		motor:    motor_identity()
 	}
 }
 
@@ -81,16 +80,15 @@ pub fn (mut c PerspectiveCamera) look_at(target [3]f64, up ?[3]f64) {
 	if u := up {
 		c.up = vec3_unit(u)
 	}
-	f := vec3_unit([target[0] - c.position[0], target[1] - c.position[1],
-		target[2] - c.position[2]]!)
+	f :=
+		vec3_unit([target[0] - c.position[0], target[1] - c.position[1], target[2] - c.position[2]]!)
 	r := vec3_unit(vec3_cross(f, c.up))
 	u := vec3_cross(r, f)
 	mut mat := identity3()
 	mat[0] = r
 	mat[1] = [-u[0], -u[1], -u[2]]!
 	mat[2] = f
-	t := [-vec3_dot(mat[0], c.position), -vec3_dot(mat[1], c.position), -vec3_dot(mat[2],
-		c.position)]!
+	t := [-vec3_dot(mat[0], c.position), -vec3_dot(mat[1], c.position), -vec3_dot(mat[2], c.position)]!
 	c.motor = motor_from_matrix(mat, t)
 }
 
@@ -106,10 +104,10 @@ pub mut:
 
 pub fn orbit_controls(target [3]f64, azimuth f64, elevation f64, radius f64) OrbitControls {
 	return OrbitControls{
-		target: target
-		azimuth: azimuth
+		target:    target
+		azimuth:   azimuth
 		elevation: elevation
-		radius: radius
+		radius:    radius
 	}
 }
 

@@ -4,7 +4,6 @@ module cga
 // circle) plus their per-frame camera-space parameters.  `geom_to_camera`
 // computes the parameters (CPU-side versor conjugation); the per-pixel
 // intersection kernels live in geometry_ops.v.
-
 import math
 import mlx
 
@@ -97,7 +96,18 @@ pub:
 }
 
 // GeometryParams is the sum of all camera-space parameter variants.
-pub type GeometryParams = AffineParams | CsgParams | TrimeshParams | CircleParams | ConeParams | CyclideParams | EllipsoidParams | TorusParams | BoxParams | CylinderParams | PlaneParams | SphereParams
+pub type GeometryParams = AffineParams
+	| CsgParams
+	| TrimeshParams
+	| CircleParams
+	| ConeParams
+	| CyclideParams
+	| EllipsoidParams
+	| TorusParams
+	| BoxParams
+	| CylinderParams
+	| PlaneParams
+	| SphereParams
 
 // --- geometry structs --------------------------------------------------------
 
@@ -113,7 +123,7 @@ pub fn sphere_geometry(radius f64) SphereGeometry {
 	}
 	return SphereGeometry{
 		radius: radius
-		blade: sphere([0.0, 0.0, 0.0]!, radius)
+		blade:  sphere([0.0, 0.0, 0.0]!, radius)
 	}
 }
 
@@ -142,14 +152,14 @@ pub fn cylinder_geometry(radius f64, length f64) CylinderGeometry {
 	if length > 0.0 {
 		return CylinderGeometry{
 			radius: radius
-			half: length / 2.0
-			blade: cylinder([0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, radius)
+			half:   length / 2.0
+			blade:  cylinder([0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, radius)
 		}
 	}
 	return CylinderGeometry{
 		radius: radius
-		half: -1.0
-		blade: cylinder([0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, radius)
+		half:   -1.0
+		blade:  cylinder([0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, radius)
 	}
 }
 
@@ -179,12 +189,23 @@ pub fn circle_geometry(radius f64) CircleGeometry {
 	}
 	return CircleGeometry{
 		radius: radius
-		blade: circle([0.0, 0.0, 0.0]!, radius, [0.0, 0.0, 1.0]!)
+		blade:  circle([0.0, 0.0, 0.0]!, radius, [0.0, 0.0, 1.0]!)
 	}
 }
 
 // Geometry is the sum type of all renderable geometries.
-pub type Geometry = AffineGeometry | CsgGeometry | TrimeshGeometry | ConeGeometry | CyclideGeometry | EllipsoidGeometry | TorusGeometry | SphereGeometry | PlaneGeometry | CylinderGeometry | BoxGeometry | CircleGeometry
+pub type Geometry = AffineGeometry
+	| CsgGeometry
+	| TrimeshGeometry
+	| ConeGeometry
+	| CyclideGeometry
+	| EllipsoidGeometry
+	| TorusGeometry
+	| SphereGeometry
+	| PlaneGeometry
+	| CylinderGeometry
+	| BoxGeometry
+	| CircleGeometry
 
 pub struct TrimeshGeometry {
 pub:
@@ -240,12 +261,12 @@ pub fn trimesh_geometry(vertices [][3]f64, faces [][3]int) TrimeshGeometry {
 	}
 	return TrimeshGeometry{
 		n_faces: faces.len
-		v0: v0
-		e1: e1
-		e2: e2
-		nrm: nrm
-		lo: lo
-		hi: hi
+		v0:      v0
+		e1:      e1
+		e2:      e2
+		nrm:     nrm
+		lo:      lo
+		hi:      hi
 	}
 }
 
@@ -311,9 +332,9 @@ pub fn cyclide_geometry(a f64, b f64, d f64, shift [3]f64) CyclideGeometry {
 		panic('cyclide needs d > 0, got ${d}')
 	}
 	return CyclideGeometry{
-		a: a
-		b: b
-		d: d
+		a:     a
+		b:     b
+		d:     d
 		shift: shift
 	}
 }
@@ -326,8 +347,8 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 			s := m.apply(g.blade)
 			c, r := sphere_from_dual(s)
 			SphereParams{
-				c: c
-				r: r
+				c:    c
+				r:    r
 				axes: [vec3_unit(dir3(m.apply(e1()))), vec3_unit(dir3(m.apply(e2()))),
 					vec3_unit(dir3(m.apply(e3())))]!
 			}
@@ -350,7 +371,7 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 		BoxGeometry {
 			hf := g.half
 			BoxParams{
-				c: m.apply(point(0.0, 0.0, 0.0)).coords()
+				c:    m.apply(point(0.0, 0.0, 0.0)).coords()
 				axes: [vec3_unit(dir3(m.apply(e1()))), vec3_unit(dir3(m.apply(e2()))),
 					vec3_unit(dir3(m.apply(e3())))]!
 				half: hf
@@ -367,20 +388,20 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 			ai, ti, af := affine_from_motor(m, identity3())
 			ConeParams{
 				a_inv3: ai
-				t_inv: ti
-				a_fwd: af
-				r: g.radius
-				h: g.height
+				t_inv:  ti
+				a_fwd:  af
+				r:      g.radius
+				h:      g.height
 			}
 		}
 		TorusGeometry {
 			ai, ti, af := affine_from_motor(m, identity3())
 			TorusParams{
 				a_inv3: ai
-				t_inv: ti
-				a_fwd: af
-				major: g.major
-				minor: g.minor
+				t_inv:  ti
+				a_fwd:  af
+				major:  g.major
+				minor:  g.minor
 			}
 		}
 		EllipsoidGeometry {
@@ -389,8 +410,8 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 			ai, ti, af := affine_from_motor(m, diag)
 			EllipsoidParams{
 				a_inv3: ai
-				t_inv: ti
-				a_fwd: af
+				t_inv:  ti
+				a_fwd:  af
 			}
 		}
 		CyclideGeometry {
@@ -398,13 +419,13 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 			sh := g.shift
 			CyclideParams{
 				a_inv3: ai
-				t_inv: ti
-				a_fwd: af
-				a: g.a
-				b: g.b
-				d: g.d
-				c: math.sqrt(g.a * g.a - g.b * g.b)
-				shift: sh
+				t_inv:  ti
+				a_fwd:  af
+				a:      g.a
+				b:      g.b
+				d:      g.d
+				c:      math.sqrt(g.a * g.a - g.b * g.b)
+				shift:  sh
 			}
 		}
 		TrimeshGeometry {
@@ -413,14 +434,14 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 			ghi := g.hi
 			TrimeshParams{
 				a_inv3: ai
-				t_inv: ti
-				a_fwd: af
-				v0: mlx.array_f32(to_f32_3(g.v0), [g.v0.len, 3])
-				e1: mlx.array_f32(to_f32_3(g.e1), [g.e1.len, 3])
-				e2: mlx.array_f32(to_f32_3(g.e2), [g.e2.len, 3])
-				nrm: mlx.array_f32(to_f32_3(g.nrm), [g.nrm.len, 3])
-				lo: glo
-				hi: ghi
+				t_inv:  ti
+				a_fwd:  af
+				v0:     mlx.array_f32(to_f32_3(g.v0), [g.v0.len, 3])
+				e1:     mlx.array_f32(to_f32_3(g.e1), [g.e1.len, 3])
+				e2:     mlx.array_f32(to_f32_3(g.e2), [g.e2.len, 3])
+				nrm:    mlx.array_f32(to_f32_3(g.nrm), [g.nrm.len, 3])
+				lo:     glo
+				hi:     ghi
 			}
 		}
 		CsgGeometry {
@@ -429,7 +450,7 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 				ch << geom_to_camera(c, m)
 			}
 			CsgParams{
-				op: g.op
+				op:       g.op
 				children: ch
 			}
 		}

@@ -2,7 +2,6 @@ module cga
 
 // Inverse rendering: render a CGA primitive scene (plane / sphere / cylinder
 // blades) back to a 2D depth image + visualisation RGB.
-
 import mlx
 import math
 
@@ -19,10 +18,10 @@ pub mut:
 
 pub fn render_primitive(kind string, blade Multivector, region int, alpha f64) RenderPrimitive {
 	return RenderPrimitive{
-		kind: kind
-		blade: blade
+		kind:   kind
+		blade:  blade
 		region: region
-		alpha: alpha
+		alpha:  alpha
 	}
 }
 
@@ -53,7 +52,7 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 	if prims.len == 0 {
 		return RenderResult{
 			depth: mlx.zeros([h, w], .float32)
-			rgb: mlx.zeros([h, w, 3], .float32)
+			rgb:   mlx.zeros([h, w, 3], .float32)
 		}
 	}
 	yy := mlx.arange(0, h, 1, .float32).expand_dims(1).broadcast_to([h, w])
@@ -90,7 +89,9 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 			bb := s_mul(dirs.multiply(ca).sum_axis(-1, false), -2.0)
 			cc := s_sub(ca.multiply(ca).sum(), r * r)
 			disc := bb.multiply(bb).subtract(s_mul(a.multiply(cc), 4.0))
-			t = mlx.where(s_gt(disc, 0.0), bb.negative().subtract(s_max(disc, 0.0).sqrt()).divide(s_mul(a, 2.0)), mlx.full_like(a, mlx.f32_scalar(f32(math.inf(1))), .float32))
+			t = mlx.where(s_gt(disc, 0.0),
+				bb.negative().subtract(s_max(disc, 0.0).sqrt()).divide(s_mul(a, 2.0)), mlx.full_like(a,
+				mlx.f32_scalar(f32(math.inf(1))), .float32))
 			hit := t.expand_dims(2).multiply(dirs).subtract(ca)
 			nrm = hit.divide(s_max(hit.multiply(hit).sum_axis(-1, true).sqrt(), 1e-8))
 		} else {
@@ -104,22 +105,21 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 			bq := dn.multiply(qn).subtract(dirs.multiply(q).sum_axis(-1, false))
 			cq := s_sub(q.multiply(q).sum().subtract(qn.multiply(qn)), r * r)
 			disc := bq.multiply(bq).subtract(aq.multiply(cq))
-			t = mlx.where(s_gt(aq, 1e-8).logical_and(s_gt(disc, 0.0)), bq.negative().subtract(s_max(disc,
-				0.0).sqrt()).divide(aq), mlx.full_like(aq, mlx.f32_scalar(f32(math.inf(1))),
-				.float32))
+			t = mlx.where(s_gt(aq, 1e-8).logical_and(s_gt(disc, 0.0)),
+				bq.negative().subtract(s_max(disc, 0.0).sqrt()).divide(aq), mlx.full_like(aq,
+				mlx.f32_scalar(f32(math.inf(1))), .float32))
 			hit := t.expand_dims(2).multiply(dirs).subtract(q)
 			rad := hit.subtract(hit.multiply(n).sum_axis(-1, true).multiply(n))
 			nrm = rad.divide(s_max(rad.multiply(rad).sum_axis(-1, true).sqrt(), 1e-8))
 		}
 		t = mlx.where(s_gt(t, near).logical_and(s_lt(t, far)), t, mlx.full_like(t,
 			mlx.f32_scalar(f32(math.inf(1))), .float32))
-		t = mlx.where(sel, t, mlx.full_like(t, mlx.f32_scalar(f32(math.inf(1))),
-			.float32))
+		t = mlx.where(sel, t, mlx.full_like(t, mlx.f32_scalar(f32(math.inf(1))), .float32))
 		best = best.minimum(t)
 		col := arr3v(palette_rgb[p.region % 12])
 		sh := s_max(nrm.multiply(light).sum_axis(-1, false), 0.0)
-		rgb_p := col.expand_dims(0).expand_dims(0).multiply(s_add(s_mul(sh, 0.65),
-			0.35).expand_dims(2))
+		rgb_p :=
+			col.expand_dims(0).expand_dims(0).multiply(s_add(s_mul(sh, 0.65), 0.35).expand_dims(2))
 		valid1 := s_lt(t, math.inf(1))
 		hits_t << t
 		hits_rgb << mlx.where(valid1.expand_dims(2), rgb_p, mlx.zeros_like(rgb_p))
@@ -133,13 +133,13 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 	mut trans := mlx.ones([h, w], .float32)
 	for i in 0 .. prims.len {
 		a_i := alphas.take_axis(mlx.int_scalar(i), 0)
-		acc = acc.add(trans.multiply(a_i).expand_dims(2).multiply(rgbs.take_axis(mlx.int_scalar(i),
-			0)))
+		acc =
+			acc.add(trans.multiply(a_i).expand_dims(2).multiply(rgbs.take_axis(mlx.int_scalar(i), 0)))
 		trans = trans.multiply(fs(1.0).subtract(a_i))
 	}
 	depth := mlx.where(s_lt(best, far), best, fs(0.0))
 	return RenderResult{
 		depth: depth
-		rgb: acc
+		rgb:   acc
 	}
 }

@@ -2,17 +2,14 @@ module cga
 
 // mesh_io: Wavefront OBJ read/write plus 4x4 (row-major) matrix helpers.
 // (glTF/GLB lives in mesh_io_gltf.v.)
-
 import os
 import math
 import strconv
 
 // --- 4x4 row-major matrix helpers -------------------------------------------
 
-
 pub fn mat4_identity() [16]f64 {
-	return [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-		0.0, 1.0]!
+	return [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]!
 }
 
 pub fn mat4_mul(a [16]f64, b [16]f64) [16]f64 {
@@ -31,8 +28,10 @@ pub fn mat4_mul(a [16]f64, b [16]f64) [16]f64 {
 
 // transform_point applies a row-major matrix to a point (w = 1).
 pub fn transform_point(m [16]f64, p [3]f64) [3]f64 {
-	return [m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3], m[4] * p[0] + m[5] * p[1] +
-		m[6] * p[2] + m[7], m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11]]!
+	return [m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3],
+		m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7],
+		m[8] * p[0] + m[9] * p[1] + m[10] * p[2] +
+			m[11]]!
 }
 
 // from_trs builds a row-major matrix from glTF TRS (quaternion x,y,z,w).
@@ -65,8 +64,8 @@ pub fn from_trs(translation [3]f64, rotation [4]f64, scale [3]f64) [16]f64 {
 	r20 := 2.0 * (qx * qz - qy * qw)
 	r21 := 2.0 * (qy * qz + qx * qw)
 	r22 := 1.0 - 2.0 * (qx * qx + qy * qy)
-	return [r00 * sx, r01 * sy, r02 * sz, tx, r10 * sx, r11 * sy, r12 * sz, ty,
-		r20 * sx, r21 * sy, r22 * sz, tz, 0.0, 0.0, 0.0, 1.0]!
+	return [r00 * sx, r01 * sy, r02 * sz, tx, r10 * sx, r11 * sy, r12 * sz, ty, r20 * sx, r21 * sy,
+		r22 * sz, tz, 0.0, 0.0, 0.0, 1.0]!
 }
 
 pub fn to_column_major(m [16]f64) [16]f64 {

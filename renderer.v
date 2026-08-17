@@ -4,7 +4,6 @@ module cga
 // an (H, W, 4) float32 RGBA frame (0..255).  Supports opaque + transparent
 // materials (Whitted Fresnel reflection / Beer refraction), hard shadows, SSAA
 // and sRGB encode.
-
 import mlx
 import math
 
@@ -23,9 +22,9 @@ pub fn renderer(width int, height int, aa int, max_depth int) Renderer {
 		panic('aa must be >= 1, got ${aa}')
 	}
 	return Renderer{
-		width: width
-		height: height
-		aa: aa
+		width:     width
+		height:    height
+		aa:        aa
 		max_depth: max_depth
 	}
 }
@@ -82,7 +81,8 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 		rgb = rgb.reshape([s, n_rays / s, 3]).mean_axis(0, false)
 	}
 	rgb = s_clip(rgb, 0.0, 1.0)
-	rgb = mlx.where(s_le(rgb, 0.0031308), s_mul(rgb, 12.92), s_sub(s_mul(s_pow(rgb, 1.0 / 2.4), 1.055), 0.055))
+	rgb = mlx.where(s_le(rgb, 0.0031308), s_mul(rgb, 12.92), s_sub(s_mul(s_pow(rgb, 1.0 / 2.4),
+		1.055), 0.055))
 	mut rgba := mlx.concatenate([rgb, mlx.ones([n_rays / s, 1], .float32)], -1)
 	rgba = s_clip(s_add(s_mul(rgba, 255.0), 0.5), 0.0, 255.0)
 	return rgba.reshape([r.height, r.width, 4])
@@ -91,8 +91,7 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 // trace returns the (N,3) linear colour for a ray bundle.  Transparent hits
 // split into Fresnel reflection + refraction (Beer absorption) up to max_depth.
 fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) mlx.Array {
-	hit, t, n0, local, op, ior, abso := r.nearest(scene, o, d, lit, ambient,
-		depth == 0)
+	hit, t, n0, local, op, ior, abso := r.nearest(scene, o, d, lit, ambient, depth == 0)
 	mut cos_i := d.multiply(n0).sum_axis(-1, true).negative()
 	n := mlx.where(s_lt(cos_i, 0.0), n0.negative(), n0)
 	cos_i = cos_i.abs()
@@ -102,7 +101,8 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 		if need.sum().item_f32() > 0.0 {
 			eta := mlx.where(in_medium.expand_dims(1), ior.expand_dims(1),
 				fs(1.0).divide(ior.expand_dims(1)))
-			k := fs(1.0).subtract(eta.multiply(eta).multiply(fs(1.0).subtract(cos_i.multiply(cos_i))))
+			k :=
+				fs(1.0).subtract(eta.multiply(eta).multiply(fs(1.0).subtract(cos_i.multiply(cos_i))))
 			cos_t := s_max(k, 0.0).sqrt()
 			g := fs(1.0).divide(eta)
 			rs := cos_i.subtract(g.multiply(cos_t)).divide(s_max(cos_i.add(g.multiply(cos_t)),
@@ -116,17 +116,19 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 			d_t := d.multiply(eta).add(n.multiply(eta.multiply(cos_i).subtract(cos_t)))
 			entering := in_medium.logical_not()
 			sig_next := mlx.where(entering, abso, fs(0.0))
-			refl := r.trace(scene, p.add(s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium,
-				sigma, depth + 1)
-			refr := r.trace(scene, p.subtract(s_mul(n, 1e-3)), d_t, lit, ambient, bg,
-				entering, sig_next, depth + 1)
-			body := op.expand_dims(1).multiply(local).add(fs(1.0).subtract(op.expand_dims(1)).multiply(refr))
+			refl := r.trace(scene, p.add(s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
+
+				depth + 1)
+			refr := r.trace(scene, p.subtract(s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
+				sig_next, depth + 1)
+			body :=
+				op.expand_dims(1).multiply(local).add(fs(1.0).subtract(op.expand_dims(1)).multiply(refr))
 			glass := fres.multiply(refl).add(fs(1.0).subtract(fres).multiply(body))
 			result = mlx.where(need.expand_dims(1), glass, result)
 		}
 	}
-	att := mlx.where(in_medium.logical_and(hit).expand_dims(1), sigma.negative().multiply(t).expand_dims(1).exp(),
-		fs(1.0))
+	att := mlx.where(in_medium.logical_and(hit).expand_dims(1),
+		sigma.negative().multiply(t).expand_dims(1).exp(), fs(1.0))
 	return result.multiply(att)
 }
 
@@ -218,7 +220,11 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		col = shade_batched(emissive, diff, spec, expo, p, best_n, d, lit, ambient, vis)
 		for i, obj in objs {
 			if tex := obj.material.map {
-				sampled := tex.sample(best_uv, .repeat, .repeat).take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 1)
+				sampled := tex.sample(best_uv, .repeat, .repeat).take_axis(mlx.array_i32([
+					i32(0),
+					1,
+					2,
+				], [3]), 1)
 				col = mlx.where(best_idx.equal(mlx.int_scalar(i)).expand_dims(1),
 					col.multiply(sampled), col)
 			}

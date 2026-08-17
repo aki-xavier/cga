@@ -10,7 +10,6 @@ module cga
 //   implicit: (x^2+y^2+z^2+b^2-d^2)^2 - 4(a x - c d)^2 - 4 b^2 y^2 = 0
 //   d classification: c<d<a ring | d>a spindle | 0<d<c horn
 //   degenerate a=b (c=0): torus (major radius a, minor radius d, axis z).
-
 import math
 
 pub struct DupinCyclide {
@@ -30,9 +29,9 @@ pub fn dupin_cyclide(a f64, b f64, d f64, shift [3]f64) DupinCyclide {
 		panic('need d > 0, got d=${d}')
 	}
 	return DupinCyclide{
-		a: a
-		b: b
-		d: d
+		a:     a
+		b:     b
+		d:     d
 		shift: shift
 	}
 }
@@ -136,8 +135,8 @@ pub fn (cy DupinCyclide) implicit(x f64, y f64, z f64) f64 {
 	sz := z - cy.shift[2]
 	bb := b * b - d * d
 	rho := sx * sx + sy * sy + sz * sz
-	return (rho + bb) * (rho + bb) - 4.0 * (a * sx - c * d) * (a * sx - c * d) - 4.0 *
-		b * b * sy * sy
+	return (rho + bb) * (rho + bb) - 4.0 * (a * sx - c * d) * (a * sx - c * d) -
+		4.0 * b * b * sy * sy
 }
 
 // gradient returns grad F (shift-independent direction).
@@ -152,8 +151,7 @@ pub fn (cy DupinCyclide) gradient(x f64, y f64, z f64) [3]f64 {
 	bb := b * b - d * d
 	rho := sx * sx + sy * sy + sz * sz
 	g := rho + bb
-	return [4.0 * sx * g - 8.0 * a * (a * sx - c * d), 4.0 * sy * g - 8.0 * b * b * sy,
-		4.0 * sz * g]!
+	return [4.0 * sx * g - 8.0 * a * (a * sx - c * d), 4.0 * sy * g - 8.0 * b * b * sy, 4.0 * sz * g]!
 }
 
 // normal returns the unit normal (gradient direction, pointing outside).

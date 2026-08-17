@@ -2,7 +2,6 @@ module cga
 
 // Triangle-mesh primitive: brute-force Möller–Trumbore over all faces (no BVH),
 // with the affine ray-inverse transform (see affine.v).
-
 import mlx
 import math
 
@@ -14,8 +13,8 @@ fn cross3(a mlx.Array, b mlx.Array) mlx.Array {
 	b0 := b.take_axis(mlx.int_scalar(0), -1)
 	b1 := b.take_axis(mlx.int_scalar(1), -1)
 	b2 := b.take_axis(mlx.int_scalar(2), -1)
-	return mlx.stack([a1.multiply(b2).subtract(a2.multiply(b1)), a2.multiply(b0).subtract(a0.multiply(b2)),
-		a0.multiply(b1).subtract(a1.multiply(b0))], -1)
+	return mlx.stack([a1.multiply(b2).subtract(a2.multiply(b1)),
+		a2.multiply(b0).subtract(a0.multiply(b2)), a0.multiply(b1).subtract(a1.multiply(b0))], -1)
 }
 
 fn trimesh_mt_all(v0 mlx.Array, e1 mlx.Array, e2 mlx.Array, nrm mlx.Array, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, mlx.Array) {
@@ -36,8 +35,7 @@ fn trimesh_mt_all(v0 mlx.Array, e1 mlx.Array, e2 mlx.Array, nrm mlx.Array, o mlx
 	t := e2c.multiply(q).sum_axis(-1, false).multiply(inv)
 	mut hit := ok.logical_and(s_ge(u, -1e-9)).logical_and(s_ge(v, -1e-9))
 	hit = hit.logical_and(s_le(u.add(v), 1.0 + 1e-9)).logical_and(s_gt(t, 1e-6))
-	tall := mlx.where(hit, t, mlx.full_like(t, mlx.f32_scalar(f32(math.inf(1))),
-		.float32))
+	tall := mlx.where(hit, t, mlx.full_like(t, mlx.f32_scalar(f32(math.inf(1))), .float32))
 	valid := tall.isfinite()
 	nall := nrm.expand_dims(0).broadcast_to([n, f, 3])
 	return tall, nall, valid
@@ -49,7 +47,11 @@ pub fn trimesh_intersect(p TrimeshParams, o mlx.Array, d mlx.Array) (mlx.Array, 
 	t_l := tall.min_axis(-1, false)
 	mask := t_l.isfinite()
 	idx := tall.argmin_axis(-1, false)
-	mut n_l := nall.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([nall.shape()[0], 1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
+	mut n_l := nall.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([
+		nall.shape()[0],
+		1,
+		3,
+	]), 1).take_axis(mlx.int_scalar(0), 1)
 	cos_i := d_u.multiply(n_l).sum_axis(-1, true).negative()
 	n_l = mlx.where(s_lt(cos_i, 0.0), n_l.negative(), n_l)
 	t := t_l.divide(col(lam, 0))

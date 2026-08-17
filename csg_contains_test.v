@@ -28,26 +28,29 @@ fn cc_contains(g Geometry, pts [][3]f64) []bool {
 fn test_csg_union_contains() {
 	g := csg_geometry('union', [sphere_geometry(1.0), box_geometry(4.0, 4.0, 4.0)])
 	// inside sphere | inside box | outside both
-	assert cc_contains(g, [[0.9, 0.0, 0.0]!, [1.5, 0.0, 0.0]!, [3.0, 0.0, 0.0]!]) == [true,
-		true, false]
+	assert cc_contains(g, [[0.9, 0.0, 0.0]!, [1.5, 0.0, 0.0]!,
+		[3.0, 0.0, 0.0]!]) == [true, true, false]
 }
 
 fn test_csg_difference_contains() {
-	g := csg_geometry('difference', [box_geometry(4.0, 4.0, 4.0), sphere_geometry(1.0)])
+	g := csg_geometry('difference', [box_geometry(4.0, 4.0, 4.0),
+		sphere_geometry(1.0)])
 	// in box not sphere | in sphere | outside box
-	assert cc_contains(g, [[1.5, 0.0, 0.0]!, [0.0, 0.0, 0.0]!, [3.0, 0.0, 0.0]!]) == [true,
-		false, false]
+	assert cc_contains(g, [[1.5, 0.0, 0.0]!, [0.0, 0.0, 0.0]!,
+		[3.0, 0.0, 0.0]!]) == [true, false, false]
 }
 
 fn test_csg_intersection_contains() {
-	g := csg_geometry('intersection', [box_geometry(4.0, 4.0, 4.0), sphere_geometry(1.0)])
+	g := csg_geometry('intersection', [box_geometry(4.0, 4.0, 4.0),
+		sphere_geometry(1.0)])
 	// in both | in box not sphere | outside both
-	assert cc_contains(g, [[0.5, 0.0, 0.0]!, [1.5, 0.0, 0.0]!, [3.0, 0.0, 0.0]!]) == [true,
-		false, false]
+	assert cc_contains(g, [[0.5, 0.0, 0.0]!, [1.5, 0.0, 0.0]!,
+		[3.0, 0.0, 0.0]!]) == [true, false, false]
 }
 
 fn test_csg_nested_contains() {
-	inner := csg_geometry('difference', [box_geometry(4.0, 4.0, 4.0), sphere_geometry(1.0)])
+	inner := csg_geometry('difference', [box_geometry(4.0, 4.0, 4.0),
+		sphere_geometry(1.0)])
 	// half-space y<0
 	g := csg_geometry('intersection', [inner, plane_geometry([0.0, 1.0, 0.0]!, 0.0)])
 	assert cc_contains(g, [[1.5, -0.5, 0.0]!, [1.5, 0.5, 0.0]!]) == [true, false]

@@ -1,7 +1,6 @@
 module cga
 
 // CsgGeometry: recursive boolean combinator over solid primitives.
-
 import mlx
 
 // CsgGeometry combines solid children via union / intersection / difference.
@@ -26,7 +25,7 @@ pub fn csg_geometry(op string, children []Geometry) CsgGeometry {
 		}
 	}
 	return CsgGeometry{
-		op: op
+		op:       op
 		children: children
 	}
 }
@@ -48,8 +47,7 @@ fn csg_crossings(p CsgParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, m
 		ns_l << n
 		vs_l << v
 	}
-	return mlx.concatenate(ts_l, 1), mlx.concatenate(ns_l, 1), mlx.concatenate(vs_l,
-		1)
+	return mlx.concatenate(ts_l, 1), mlx.concatenate(ns_l, 1), mlx.concatenate(vs_l, 1)
 }
 
 // csg_contains is the whole-tree membership test.
@@ -87,7 +85,8 @@ fn csg_nearest_surface(p CsgParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Ar
 	t := cand.min_axis(1, false)
 	mask := t.isfinite()
 	idx := cand.argmin_axis(1, false)
-	mut n := ns_s.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns_s.shape()[0], 1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
+	mut n := ns_s.take_along_axis(idx.expand_dims(1).expand_dims(2).broadcast_to([ns_s.shape()[0],
+		1, 3]), 1).take_axis(mlx.int_scalar(0), 1)
 	n = mlx.where(mask.expand_dims(1), n, mlx.zeros_like(n))
 	return t, n, mask
 }

@@ -7,7 +7,6 @@ module cga
 // variables/expressions/math functions, all primitives, lights, camera,
 // background, precision, CSG (difference/intersection/union), and
 // extrude/loft/mesh(.obj/.glb/.gltf).
-
 import math
 
 // CgsToken is one lexed token.
@@ -77,9 +76,9 @@ pub fn cgs_lex(text string) []CgsToken {
 			i = j + 1
 		} else if (ch >= `a` && ch <= `z`) || (ch >= `A` && ch <= `Z`) || ch == `_` {
 			mut j := i + 1
-			for j < n && ((text[j] >= `a` && text[j] <= `z`) || (text[j] >= `A` &&
-				text[j] <= `Z`) || (text[j] >= `0` && text[j] <= `9`) || text[j] ==
-				`_`) {
+			for j < n && ((text[j] >= `a` && text[j] <= `z`)
+				|| (text[j] >= `A` && text[j] <= `Z`)
+				|| (text[j] >= `0` && text[j] <= `9`) || text[j] == `_`) {
 				j++
 			}
 			toks << CgsToken{
@@ -99,7 +98,7 @@ pub fn cgs_lex(text string) []CgsToken {
 				}
 				toks << CgsToken{
 					kind: 'number'
-					num: f64(strconv_hex(text[i + 2..j]))
+					num:  f64(strconv_hex(text[i + 2..j]))
 					line: line
 				}
 				i = j
@@ -125,7 +124,7 @@ pub fn cgs_lex(text string) []CgsToken {
 				}
 				toks << CgsToken{
 					kind: 'number'
-					num: text[i..j].f64()
+					num:  text[i..j].f64()
 					line: line
 				}
 				i = j
@@ -172,10 +171,12 @@ fn cgs_vec3(v CgsValue, line int, what string) [3]f64 {
 			if v.len != 3 {
 				panic('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
 			}
-			return [cgs_num(v[0], line, what), cgs_num(v[1], line, what), cgs_num(v[2],
-				line, what)]!
+			return [cgs_num(v[0], line, what), cgs_num(v[1], line, what),
+				cgs_num(v[2], line, what)]!
 		}
-		else { panic('CGS line ${line}: ${what} needs [x,y,z], got ${v}') }
+		else {
+			panic('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
+		}
 	}
 }
 
@@ -187,18 +188,18 @@ fn cgs_opt_num(v CgsValue, def f64) f64 {
 			}
 			return v
 		}
-		else { return def }
+		else {
+			return def
+		}
 	}
 }
 
 fn translate4(t [3]f64) [16]f64 {
-	return [1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2], 0.0,
-		0.0, 0.0, 1.0]!
+	return [1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2], 0.0, 0.0, 0.0, 1.0]!
 }
 
 fn scale4(s [3]f64) [16]f64 {
-	return [s[0], 0.0, 0.0, 0.0, 0.0, s[1], 0.0, 0.0, 0.0, 0.0, s[2], 0.0, 0.0,
-		0.0, 0.0, 1.0]!
+	return [s[0], 0.0, 0.0, 0.0, 0.0, s[1], 0.0, 0.0, 0.0, 0.0, s[2], 0.0, 0.0, 0.0, 0.0, 1.0]!
 }
 
 fn mirror4(ax [3]f64) [16]f64 {
@@ -209,9 +210,9 @@ fn mirror4(ax [3]f64) [16]f64 {
 	ux := ax[0] / n
 	uy := ax[1] / n
 	uz := ax[2] / n
-	return [1.0 - 2.0 * ux * ux, -2.0 * ux * uy, -2.0 * ux * uz, 0.0, -2.0 * uy *
-		ux, 1.0 - 2.0 * uy * uy, -2.0 * uy * uz, 0.0, -2.0 * uz * ux, -2.0 * uz *
-		uy, 1.0 - 2.0 * uz * uz, 0.0, 0.0, 0.0, 0.0, 1.0]!
+	return [1.0 - 2.0 * ux * ux, -2.0 * ux * uy, -2.0 * ux * uz, 0.0, -2.0 * uy * ux,
+		1.0 - 2.0 * uy * uy, -2.0 * uy * uz, 0.0, -2.0 * uz * ux, -2.0 * uz * uy, 1.0 - 2.0 * uz * uz,
+		0.0, 0.0, 0.0, 0.0, 1.0]!
 }
 
 fn cgs_truthy(v CgsValue) bool {
@@ -236,7 +237,9 @@ fn cgs_neg(v CgsValue, line int) CgsValue {
 			}
 			return out
 		}
-		else { panic('CGS line ${line}: unary minus needs number/vector') }
+		else {
+			panic('CGS line ${line}: unary minus needs number/vector')
+		}
 	}
 }
 
@@ -306,8 +309,9 @@ fn cgs_binop(op string, a CgsValue, b CgsValue) CgsValue {
 					}
 					return out
 				}
-				else { return cgs_scalar_arith(op, cgs_num(a, 0, 'arith'), cgs_num(b,
-						0, 'arith')) }
+				else {
+					return cgs_scalar_arith(op, cgs_num(a, 0, 'arith'), cgs_num(b, 0, 'arith'))
+				}
 			}
 		}
 	}
@@ -331,7 +335,9 @@ fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
 				}
 				return math.sqrt(s)
 			}
-			else { panic('CGS line ${line}: norm needs a vector') }
+			else {
+				panic('CGS line ${line}: norm needs a vector')
+			}
 		}
 	}
 	if name == 'cross' {
@@ -344,7 +350,9 @@ fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
 	if args.len == 1 {
 		x := cgs_num(args[0], line, name)
 		v := match name {
-			'abs' { math.abs(x) }
+			'abs' {
+				math.abs(x)
+			}
 			'sign' {
 				if x > 0 {
 					1.0
@@ -354,20 +362,48 @@ fn cgs_call_fn(name string, args []CgsValue, line int) CgsValue {
 					0.0
 				}
 			}
-			'sin' { math.sin(x) }
-			'cos' { math.cos(x) }
-			'tan' { math.tan(x) }
-			'asin' { math.asin(x) }
-			'acos' { math.acos(x) }
-			'atan' { math.atan(x) }
-			'sqrt' { math.sqrt(x) }
-			'exp' { math.exp(x) }
-			'ln' { math.log(x) }
-			'log' { math.log10(x) }
-			'floor' { math.floor(x) }
-			'ceil' { math.ceil(x) }
-			'round' { math.round(x) }
-			else { panic('CGS line ${line}: unknown function ${name}') }
+			'sin' {
+				math.sin(x)
+			}
+			'cos' {
+				math.cos(x)
+			}
+			'tan' {
+				math.tan(x)
+			}
+			'asin' {
+				math.asin(x)
+			}
+			'acos' {
+				math.acos(x)
+			}
+			'atan' {
+				math.atan(x)
+			}
+			'sqrt' {
+				math.sqrt(x)
+			}
+			'exp' {
+				math.exp(x)
+			}
+			'ln' {
+				math.log(x)
+			}
+			'log' {
+				math.log10(x)
+			}
+			'floor' {
+				math.floor(x)
+			}
+			'ceil' {
+				math.ceil(x)
+			}
+			'round' {
+				math.round(x)
+			}
+			else {
+				panic('CGS line ${line}: unknown function ${name}')
+			}
 		}
 		return v
 	}
@@ -407,11 +443,11 @@ struct CollectedGeom {
 // cgs_load parses CGS text into (Scene, PerspectiveCamera).
 pub fn cgs_load(text string, asset_root string) (Scene, PerspectiveCamera) {
 	mut l := SceneLoader{
-		toks: cgs_lex(text)
+		toks:       cgs_lex(text)
 		asset_root: asset_root
-		scene: scene(none)
-		modules: map[string][]CgsToken{}
-		params: map[string][]CgsToken{}
+		scene:      scene(none)
+		modules:    map[string][]CgsToken{}
+		params:     map[string][]CgsToken{}
 	}
 	mut root_scope := map[string]CgsValue{}
 	root_scope['pi'] = f64(math.pi)
@@ -419,8 +455,11 @@ pub fn cgs_load(text string, asset_root string) (Scene, PerspectiveCamera) {
 	mut cam := if c := l.camera {
 		c
 	} else {
-		mut c2 := perspective_camera(50.0, 16.0 / 9.0, 0.1, 100.0, [0.0, 0.0, 5.0]!,
-			[0.0, 0.0, 0.0]!, [0.0, 1.0, 0.0]!)
+		mut c2 := perspective_camera(50.0, 16.0 / 9.0, 0.1, 100.0, [0.0, 0.0, 5.0]!, [
+			0.0,
+			0.0,
+			0.0,
+		]!, [0.0, 1.0, 0.0]!)
 		c2.look_at([0.0, 0.0, 0.0]!, none)
 		c2
 	}
@@ -733,10 +772,14 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 	}
 	if name == 'camera' {
 		l.expect(';')
-		mut cam := perspective_camera(cgs_num(args['fov'] or { f64(0.0) }, t.line, 'fov'), cgs_num(args['aspect'] or { f64(0.0) },
-			t.line, 'aspect'), 0.1, 100.0, cgs_vec3(args['position'] or { f64(0.0) }, t.line,
-			'camera.position'), cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target'),
-			[0.0, 1.0, 0.0]!)
+		mut cam := perspective_camera(cgs_num(args['fov'] or { f64(0.0) }, t.line, 'fov'), cgs_num(args['aspect'] or {
+			f64(0.0)
+		}, t.line, 'aspect'), 0.1, 100.0, cgs_vec3(args['position'] or { f64(0.0) }, t.line,
+			'camera.position'), cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target'), [
+			0.0,
+			1.0,
+			0.0,
+		]!)
 		cam.look_at(cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target'), none)
 		l.camera = cam
 		return
@@ -750,7 +793,9 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 					panic('CGS line ${t.line}: precision.mode needs "float32" or "float64"')
 				}
 			}
-			else { panic('CGS line ${t.line}: precision.mode needs a string') }
+			else {
+				panic('CGS line ${t.line}: precision.mode needs a string')
+			}
 		}
 		return
 	}
@@ -796,7 +841,9 @@ fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope 
 				l.run_tokens(body, ctx, mat, mut scope)
 			}
 		}
-		else { panic('CGS line ${vt.line}: for needs a list') }
+		else {
+			panic('CGS line ${vt.line}: for needs a list')
+		}
 	}
 }
 
@@ -1084,7 +1131,7 @@ fn (mut l SceneLoader) resolve(name string, pos []CgsValue, kw map[string]CgsVal
 		if v := merged[pname] {
 			match v {
 				f64 {
-					if math.is_nan(v) && pname in ['cylinder.h'] {
+					if math.is_nan(v) && pname == 'cylinder.h' {
 						// h may be None -> use -1 sentinel
 						merged[pname] = f64(-1.0)
 					}
@@ -1130,8 +1177,12 @@ fn cgs_sig_names(name string) []string {
 fn cgs_sig_defaults(name string) map[string]CgsValue {
 	mut m := map[string]CgsValue{}
 	match name {
-		'plane' { m['d'] = f64(0.0) }
-		'cylinder' { m['h'] = f64(-1.0) }
+		'plane' {
+			m['d'] = f64(0.0)
+		}
+		'cylinder' {
+			m['h'] = f64(-1.0)
+		}
 		'directional_light', 'point_light' {
 			m['intensity'] = f64(1.0)
 			m['color'] = f64(0xFFFFFF)
@@ -1166,14 +1217,13 @@ fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]Cg
 	if l.collecting {
 		l.collect << CollectedGeom{
 			geo: geo
-			m4: ctx
+			m4:  ctx
 		}
 		return
 	}
 	motor, lin := decompose_rigid(ctx)
 	g2 := if is_identity3(lin) { geo } else { affine_geometry(geo, lin) }
-	l.scene.add_mesh(mesh(g2, l.build_material(mat), [0.0, 0.0, 0.0]!, [0.0, 0.0,
-		1.0]!, 0.0, motor))
+	l.scene.add_mesh(mesh(g2, l.build_material(mat), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, motor))
 }
 
 fn (mut l SceneLoader) csg_block(op string, ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
@@ -1193,37 +1243,56 @@ fn (mut l SceneLoader) csg_block(op string, ctx [16]f64, mat map[string]CgsValue
 		cm, cl := decompose_rigid(c.m4)
 		kids << transformed_geometry(c.geo, cm, cl)
 	}
-	l.scene.add_mesh(mesh(csg_geometry(op, kids), l.build_material(mat), [0.0, 0.0,
-		0.0]!, [0.0, 0.0, 1.0]!, 0.0, motor_identity()))
+	l.scene.add_mesh(mesh(csg_geometry(op, kids), l.build_material(mat), [0.0, 0.0, 0.0]!, [
+		0.0,
+		0.0,
+		1.0,
+	]!, 0.0, motor_identity()))
 }
 
 fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, line int) Geometry {
 	match name {
-		'sphere' { return sphere_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'sphere.r')) }
-		'plane' { return plane_geometry(cgs_vec3(args['n'] or { f64(0.0) }, line, 'plane.n'), cgs_num(args['d'] or { f64(0.0) },
-				line, 'plane.d')) }
+		'sphere' {
+			return sphere_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'sphere.r'))
+		}
+		'plane' {
+			return plane_geometry(cgs_vec3(args['n'] or { f64(0.0) }, line, 'plane.n'), cgs_num(args['d'] or {
+				f64(0.0)
+			}, line, 'plane.d'))
+		}
 		'cylinder' {
 			h := cgs_num(args['h'] or { f64(0.0) }, line, 'cylinder.h')
-			return cylinder_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cylinder.r'), if h <
-				0.0 { -1.0 } else { h })
+			return cylinder_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cylinder.r'), if h < 0.0 {
+				-1.0
+			} else {
+				h
+			})
 		}
 		'box' {
 			s := cgs_vec3(args['s'] or { f64(0.0) }, line, 'box.s')
 			return box_geometry(s[0], s[1], s[2])
 		}
-		'circle' { return circle_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'circle.r')) }
+		'circle' {
+			return circle_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'circle.r'))
+		}
 		'cone' {
-			return cone_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cone.r'), cgs_num(args['h'] or { f64(0.0) },
-				line, 'cone.h'))
+			return cone_geometry(cgs_num(args['r'] or { f64(0.0) }, line, 'cone.r'), cgs_num(args['h'] or {
+				f64(0.0)
+			}, line, 'cone.h'))
 		}
 		'torus' {
-			return torus_geometry(cgs_num(args['R'] or { f64(0.0) }, line, 'torus.R'), cgs_num(args['r'] or { f64(0.0) },
-				line, 'torus.r'))
+			return torus_geometry(cgs_num(args['R'] or { f64(0.0) }, line, 'torus.R'), cgs_num(args['r'] or {
+				f64(0.0)
+			}, line, 'torus.r'))
 		}
 		'cyclide' {
-			return cyclide_geometry(cgs_num(args['a'] or { f64(0.0) }, line, 'cyclide.a'), cgs_num(args['b'] or { f64(0.0) },
-				line, 'cyclide.b'), cgs_num(args['d'] or { f64(0.0) }, line, 'cyclide.d'), [0.0,
-				0.0, 0.0]!)
+			return cyclide_geometry(cgs_num(args['a'] or { f64(0.0) }, line, 'cyclide.a'), cgs_num(args['b'] or {
+				f64(0.0)
+			}, line, 'cyclide.b'), cgs_num(args['d'] or { f64(0.0) }, line, 'cyclide.d'), [
+				0.0,
+				0.0,
+				0.0,
+			]!)
 		}
 		'ellipsoid' {
 			r := cgs_vec3(args['radii'] or { f64(0.0) }, line, 'ellipsoid.radii')
@@ -1256,10 +1325,14 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 							v, f := loft(profiles, zs)
 							return trimesh_geometry(v, f)
 						}
-						else { panic('CGS line ${line}: loft.zs needs a list') }
+						else {
+							panic('CGS line ${line}: loft.zs needs a list')
+						}
 					}
 				}
-				else { panic('CGS line ${line}: loft.profiles needs a list') }
+				else {
+					panic('CGS line ${line}: loft.profiles needs a list')
+				}
 			}
 		}
 		'mesh' {
@@ -1279,10 +1352,14 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 					}
 					panic('CGS line ${line}: unsupported mesh file "${p}" (use .obj/.glb/.gltf)')
 				}
-				else { panic('CGS line ${line}: mesh.file needs a string path') }
+				else {
+					panic('CGS line ${line}: mesh.file needs a string path')
+				}
 			}
 		}
-		else { panic('CGS line ${line}: unknown primitive ${name}') }
+		else {
+			panic('CGS line ${line}: unknown primitive ${name}')
+		}
 	}
 }
 
@@ -1301,12 +1378,16 @@ fn (mut l SceneLoader) profile2d(v CgsValue, line int, what string) [][2]f64 {
 						}
 						pts << [cgs_num(p[0], line, what), cgs_num(p[1], line, what)]!
 					}
-					else { panic('CGS line ${line}: ${what} items must be [x,y]') }
+					else {
+						panic('CGS line ${line}: ${what} items must be [x,y]')
+					}
 				}
 			}
 			return pts
 		}
-		else { panic('CGS line ${line}: ${what} needs a list') }
+		else {
+			panic('CGS line ${line}: ${what} needs a list')
+		}
 	}
 }
 
@@ -1327,7 +1408,9 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 					tex = texture_load(l.asset_root + '/' + v)
 				}
 			}
-			else { panic('CGS material.map needs a string path') }
+			else {
+				panic('CGS material.map needs a string path')
+			}
 		}
 	}
 	if u := mat['unlit'] {
@@ -1340,15 +1423,18 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 	metalness := cgs_opt_num(mat['metalness'] or { f64(-1.0) }, 0.0)
 	emissive := if v := mat['emissive'] {
 		ev := cgs_num(v, 0, 'emissive')
-		if ev < 0.0 { color_hex(0x000000) } else { color_hex(int(ev)) }
+		if ev < 0.0 {
+			color_hex(0x000000)
+		} else {
+			color_hex(int(ev))
+		}
 	} else {
 		color_hex(0x000000)
 	}
 	opacity := cgs_opt_num(mat['opacity'] or { f64(-1.0) }, 1.0)
 	ior := cgs_opt_num(mat['ior'] or { f64(-1.0) }, 1.5)
 	absorption := cgs_opt_num(mat['absorption'] or { f64(-1.0) }, 0.0)
-	mut m := standard_material(color, roughness, metalness, emissive, opacity, ior,
-		absorption)
+	mut m := standard_material(color, roughness, metalness, emissive, opacity, ior, absorption)
 	if t := tex {
 		m.map = t
 	}

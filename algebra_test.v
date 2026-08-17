@@ -63,8 +63,7 @@ fn test_meet_line_sphere() {
 }
 
 fn test_far_from_origin_dist() {
-	assert close(point_dist(point(1000.0, 0.0, 0.0), point(1001.0, 0.0, 0.0)), 1.0,
-		1e-2)
+	assert close(point_dist(point(1000.0, 0.0, 0.0), point(1001.0, 0.0, 0.0)), 1.0, 1e-2)
 }
 
 fn test_cylinder_distances() {

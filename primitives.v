@@ -9,7 +9,6 @@ module cga
 //
 // In V the primitives are plain `Multivector` values (a motor is also just a
 // multivector), so all algebra (gp/ip/op/dual/meet) composes freely.
-
 import math
 
 // point returns the conformal point p = e0 + x e1 + y e2 + z e3 + 0.5 r^2 einf.
@@ -46,8 +45,7 @@ pub fn plane(normal [3]f64, distance f64) Multivector {
 // sphere returns the dual sphere s = up(c) - 0.5 rho^2 einf.
 pub fn sphere(center [3]f64, radius f64) Multivector {
 	half := 0.5 * radius * radius
-	return point(center[0], center[1], center[2]).sub(mv_vector(0.0, 0.0, 0.0, 0.0,
-		half))
+	return point(center[0], center[1], center[2]).sub(mv_vector(0.0, 0.0, 0.0, 0.0, half))
 }
 
 // sphere_from_dual extracts (center, radius) from a dual sphere blade.
@@ -61,7 +59,7 @@ pub fn sphere_from_dual(s Multivector) ([3]f64, f64) {
 	cx := v[0] / w
 	cy := v[1] / w
 	cz := v[2] / w
-	mut rho_sq := (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) / (w * w) - 2.0 * f / w
+	mut rho_sq := (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) / (w * w) - 2.0 * f / w
 	if rho_sq < 0.0 {
 		rho_sq = 0.0
 	}
@@ -106,9 +104,9 @@ pub fn cylinder(axis_point [3]f64, axis_dir [3]f64, radius f64) Cylinder {
 	q := point(axis_point[0], axis_point[1], axis_point[2])
 	q2 := point(axis_point[0] + ux, axis_point[1] + uy, axis_point[2] + uz)
 	return Cylinder{
-		blade: line(q, q2)
-		radius: radius
-		axis_dir: [ux, uy, uz]!
+		blade:      line(q, q2)
+		radius:     radius
+		axis_dir:   [ux, uy, uz]!
 		axis_point: axis_point
 	}
 }
@@ -135,7 +133,7 @@ pub fn plane_dist(pi Multivector, p Multivector) f64 {
 	if nl < 1e-12 {
 		return 1e300
 	}
-	return (v[0]*c[0] + v[1]*c[1] + v[2]*c[2] - d) / nl
+	return (v[0] * c[0] + v[1] * c[1] + v[2] * c[2] - d) / nl
 }
 
 // sphere_dist returns the signed distance from point p to sphere s

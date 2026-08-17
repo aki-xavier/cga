@@ -1,7 +1,6 @@
 module cga
 
 // Materials and lights plus the batched Blinn-Phong shading kernel.
-
 import mlx
 import math
 
@@ -29,13 +28,13 @@ pub mut:
 // standard_material builds a MeshStandardMaterial (Lambert + Blinn-Phong).
 pub fn standard_material(color Color, roughness f64, metalness f64, emissive Color, opacity f64, ior f64, absorption f64) Material {
 	return Material{
-		kind: .standard
-		color: color
-		roughness: clamp01(roughness)
-		metalness: clamp01(metalness)
-		emissive: emissive
-		opacity: clamp01(opacity)
-		ior: math.max(1.0, ior)
+		kind:       .standard
+		color:      color
+		roughness:  clamp01(roughness)
+		metalness:  clamp01(metalness)
+		emissive:   emissive
+		opacity:    clamp01(opacity)
+		ior:        math.max(1.0, ior)
 		absorption: math.max(0.0, absorption)
 	}
 }
@@ -43,13 +42,13 @@ pub fn standard_material(color Color, roughness f64, metalness f64, emissive Col
 // basic_material builds a MeshBasicMaterial (unlit flat colour).
 pub fn basic_material(color Color, opacity f64) Material {
 	return Material{
-		kind: .basic
-		color: color
-		roughness: 0.0
-		metalness: 0.0
-		emissive: color_rgb(0.0, 0.0, 0.0)
-		opacity: clamp01(opacity)
-		ior: 1.5 // matches the Python Material base default (used for Fresnel)
+		kind:       .basic
+		color:      color
+		roughness:  0.0
+		metalness:  0.0
+		emissive:   color_rgb(0.0, 0.0, 0.0)
+		opacity:    clamp01(opacity)
+		ior:        1.5 // matches the Python Material base default (used for Fresnel)
 		absorption: 0.0
 	}
 }
@@ -63,8 +62,7 @@ pub fn (m Material) shade_params() ([3]f64, [3]f64, [3]f64, f64) {
 	}
 	inv := 1.0 - m.metalness
 	diff := [crgb[0] * inv, crgb[1] * inv, crgb[2] * inv]!
-	spec := [inv + crgb[0] * m.metalness, inv + crgb[1] * m.metalness,
-		inv + crgb[2] * m.metalness]!
+	spec := [inv + crgb[0] * m.metalness, inv + crgb[1] * m.metalness, inv + crgb[2] * m.metalness]!
 	em := m.emissive.rgb()
 	k := 1.0 - m.roughness
 	expo := 4.0 + 196.0 * k * k
@@ -90,16 +88,16 @@ pub:
 
 pub fn ambient_light(color Color, intensity f64) Light {
 	return Light{
-		kind: .ambient
-		color: color
+		kind:      .ambient
+		color:     color
 		intensity: intensity
 	}
 }
 
 pub fn directional_light(color Color, intensity f64, direction [3]f64) Light {
 	return Light{
-		kind: .directional
-		color: color
+		kind:      .directional
+		color:     color
 		intensity: intensity
 		direction: vec3_unit(direction)
 	}
@@ -107,10 +105,10 @@ pub fn directional_light(color Color, intensity f64, direction [3]f64) Light {
 
 pub fn point_light(color Color, intensity f64, position [3]f64) Light {
 	return Light{
-		kind: .point
-		color: color
+		kind:      .point
+		color:     color
 		intensity: intensity
-		position: position
+		position:  position
 	}
 }
 
@@ -118,8 +116,7 @@ pub fn point_light(color Color, intensity f64, position [3]f64) Light {
 pub fn light_to_camera(l Light, m Multivector) Light {
 	match l.kind {
 		.directional {
-			d := m.apply(mv_vector(l.direction[0], l.direction[1], l.direction[2], 0.0,
-				0.0))
+			d := m.apply(mv_vector(l.direction[0], l.direction[1], l.direction[2], 0.0, 0.0))
 			return directional_light(l.color, l.intensity, dir3(d))
 		}
 		.point {
@@ -184,7 +181,8 @@ pub fn shade_batched(emissive mlx.Array, diff mlx.Array, spec mlx.Array, expo ml
 		hn := h.multiply(h).sum_axis(-1, true).sqrt()
 		h = h.divide(s_max(hn, 1e-12))
 		spec_t := s_max(n.multiply(h).sum_axis(-1, true), 0.0).power(expo)
-		mut contrib := lc.multiply(atten).multiply(diff.multiply(nl).add(spec.multiply(spec_t).multiply(ndv)))
+		mut contrib :=
+			lc.multiply(atten).multiply(diff.multiply(nl).add(spec.multiply(spec_t).multiply(ndv)))
 		if vis.len > 0 {
 			contrib = contrib.multiply(vis[i].expand_dims(1))
 		}

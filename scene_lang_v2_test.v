@@ -13,8 +13,8 @@ fn sl_sphere_radius(g Geometry) f64 {
 }
 
 fn test_cgs_variables_and_expressions() {
-	sc, _ := cgs_load('r = 0.4 + 0.1;\n' + 'x = 2 * (r + 0.5);\n' +
-		'translate([x, 0, 0]) sphere(r=r);', '')
+	sc, _ := cgs_load('r = 0.4 + 0.1;\n' +
+		'x = 2 * (r + 0.5);\n' + 'translate([x, 0, 0]) sphere(r=r);', '')
 	assert sc.objects.len == 1
 	assert sl_sphere_radius(sc.objects[0].geometry) == 0.5
 	assert math.abs(sc.objects[0].position[0] - 2.0) < 1e-9

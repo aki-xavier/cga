@@ -33,8 +33,11 @@ fn rq_wall_scene() Scene {
 }
 
 fn rq_head_on_cam() PerspectiveCamera {
-	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 0.0]!, [0.0, 0.0,
-		1.0]!, [0.0, 1.0, 0.0]!)
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
 	cam.look_at([0.0, 0.0, 1.0]!, none)
 	return cam
 }
@@ -57,9 +60,8 @@ fn test_render_srgb_roundtrip() {
 fn test_render_ior1_invisible() {
 	mut sc := rq_wall_scene()
 	// ior=1 & opacity=0 & absorption=0 -> exactly invisible (F=0, no bending)
-	sc.add_mesh(mesh(sphere_geometry(0.8), standard_material(color_hex(0xAAD4FF), 0.5,
-		0.0, color_hex(0x000000), 0.0, 1.0, 0.0), [0.0, 0.0, 2.2]!, [0.0, 0.0,
-		1.0]!, 0.0, none))
+	sc.add_mesh(mesh(sphere_geometry(0.8), standard_material(color_hex(0xAAD4FF), 0.5, 0.0,
+		color_hex(0x000000), 0.0, 1.0, 0.0), [0.0, 0.0, 2.2]!, [0.0, 0.0, 1.0]!, 0.0, none))
 	mut r := renderer(64, 64, 1, 3)
 	cam := rq_head_on_cam()
 	a := rq_px(r.render(sc, cam), 64, 32, 32)
@@ -71,9 +73,9 @@ fn test_render_ior1_invisible() {
 
 fn rq_slab(depth f64, absorption f64) [3]f32 {
 	mut sc := rq_wall_scene()
-	sc.add_mesh(mesh(box_geometry(3.0, 3.0, depth), standard_material(color_hex(0xFFFFFF),
-		0.5, 0.0, color_hex(0x000000), 0.0, 1.0, absorption), [0.0, 0.0, 2.5]!,
-		[0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(box_geometry(3.0, 3.0, depth), standard_material(color_hex(0xFFFFFF), 0.5,
+		0.0, color_hex(0x000000), 0.0, 1.0, absorption), [0.0, 0.0, 2.5]!, [0.0, 0.0, 1.0]!, 0.0,
+		none))
 	mut r := renderer(64, 64, 1, 3)
 	return rq_px(r.render(sc, rq_head_on_cam()), 64, 32, 32)
 }
@@ -96,21 +98,23 @@ fn test_render_beer_absorption() {
 fn rq_shadow_scene(opacity ?f64) Scene {
 	mut sc := scene(none)
 	sc.add_mesh(mesh(plane_geometry([0.0, 1.0, 0.0]!, 0.0), standard_material(color_hex(0xFFFFFF),
-		1.0, 0.0, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0,
-		1.0]!, 0.0, none))
+		1.0, 0.0, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0,
+		none))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.0, 1.0, 0.0]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.2))
 	if o := opacity {
-		sc.add_mesh(mesh(sphere_geometry(0.5), standard_material(color_hex(0xFFFFFF),
-			1.0, 0.0, color_hex(0x000000), o, 1.0, 0.0), [2.0, 1.5, 3.0]!, [0.0,
-			0.0, 1.0]!, 0.0, none))
+		sc.add_mesh(mesh(sphere_geometry(0.5), standard_material(color_hex(0xFFFFFF), 1.0, 0.0,
+			color_hex(0x000000), o, 1.0, 0.0), [2.0, 1.5, 3.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
 	}
 	return sc
 }
 
 fn rq_shadow_cam() PerspectiveCamera {
-	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.8, -1.0]!, [2.0, 0.0,
-		3.0]!, [0.0, 1.0, 0.0]!)
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.8, -1.0]!, [2.0, 0.0, 3.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
 	cam.look_at([2.0, 0.0, 3.0]!, none)
 	return cam
 }
