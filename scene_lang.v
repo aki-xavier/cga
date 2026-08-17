@@ -3,9 +3,10 @@ module cga
 // CGS (CGA Scene) language: lexer + single-pass parser/evaluator producing an
 // engine Scene + PerspectiveCamera.  Port of cga_py/scene_lang.
 //
-// V-port scope: translate/rotate modifiers, for/if/echo/module, all primitives,
-// lights, camera, background, precision, CSG (difference/intersection/union).
-// scale/mirror and .glb/.gltf mesh are not yet supported (see panics).
+// Supports translate/rotate/scale/mirror modifiers, for/if/echo/module,
+// variables/expressions/math functions, all primitives, lights, camera,
+// background, precision, CSG (difference/intersection/union), and
+// extrude/loft/mesh(.obj/.glb/.gltf).
 
 import math
 

@@ -1,7 +1,7 @@
 module cga
 
 // mesh_io: Wavefront OBJ read/write plus 4x4 (row-major) matrix helpers.
-// (glTF/GLB import/export is a follow-up.)
+// (glTF/GLB lives in mesh_io_gltf.v.)
 
 import os
 import math

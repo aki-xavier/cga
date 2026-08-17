@@ -3,6 +3,7 @@ module cga
 // glTF 2.0 read + GLB write (geometry only: TRIANGLES primitives).
 
 import encoding.binary
+import encoding.base64
 import json
 import os
 import math
@@ -126,6 +127,7 @@ pub fn save_glb(path string, meshes []GltfMeshIn) {
 	mut meshes_j := []string{}
 	mut accessors := []string{}
 	mut views := []string{}
+	mut materials := []string{}
 	for mi, m in meshes {
 		if m.vertices.len == 0 || m.faces.len == 0 {
 			panic('mesh ${mi}: empty vertices/faces')
@@ -164,7 +166,13 @@ pub fn save_glb(path string, meshes []GltfMeshIn) {
 		iaa := accessors.len + 1
 		accessors << '{"bufferView":${views.len - 2},"componentType":5126,"count":${m.vertices.len},"type":"VEC3","min":[${mn[0]},${mn[1]},${mn[2]}],"max":[${mx[0]},${mx[1]},${mx[2]}]}'
 		accessors << '{"bufferView":${views.len - 1},"componentType":5125,"count":${m.faces.len * 3},"type":"SCALAR"}'
-		meshes_j << '{"primitives":[{"attributes":{"POSITION":${pa}},"indices":${iaa},"mode":4}]}'
+		mut mat_ref := ''
+		if c := m.color {
+			mat_idx := materials.len
+			materials << '{"pbrMetallicRoughness":{"baseColorFactor":[${c[0]},${c[1]},${c[2]},1.0]}}'
+			mat_ref = ',"material":${mat_idx}'
+		}
+		meshes_j << '{"primitives":[{"attributes":{"POSITION":${pa}},"indices":${iaa},"mode":4${mat_ref}}]}'
 		mut node_extra := ''
 		if tr := m.transform {
 			cm := to_column_major(tr)
@@ -172,7 +180,8 @@ pub fn save_glb(path string, meshes []GltfMeshIn) {
 		}
 		nodes << '{"mesh":${mi},"name":"mesh_${mi}"${node_extra}}'
 	}
-	json_str := '{"asset":{"version":"2.0","generator":"cga.mesh_io"},"scene":0,"scenes":[{"nodes":[${nodes.join(',')}]}],"nodes":[${nodes.join(',')}],"meshes":[${meshes_j.join(',')}],"accessors":[${accessors.join(',')}],"bufferViews":[${views.join(',')}],"buffers":[{"byteLength":${blob.len}}]}'
+	mat_json := if materials.len > 0 { ',"materials":[${materials.join(',')}]' } else { '' }
+	json_str := '{"asset":{"version":"2.0","generator":"cga.mesh_io"},"scene":0,"scenes":[{"nodes":[${nodes.join(',')}]}],"nodes":[${nodes.join(',')}],"meshes":[${meshes_j.join(',')}],"accessors":[${accessors.join(',')}],"bufferViews":[${views.join(',')}],"buffers":[{"byteLength":${blob.len}}]${mat_json}}'
 	mut out := []u8{}
 	push_u32(mut out, u32(0x46546C67))
 	push_u32(mut out, u32(2))
@@ -194,9 +203,13 @@ pub fn save_glb(path string, meshes []GltfMeshIn) {
 	os.write_file(path, out.bytestr()) or { panic('cannot write ${path}') }
 }
 
-fn read_accessor(gltf &GltfRoot, bin_chunk []u8, idx int) []f64 {
+fn read_accessor(gltf &GltfRoot, bins [][]u8, idx int) []f64 {
 	acc := gltf.accessors[idx]
 	bv := gltf.buffer_views[acc.buffer_view]
+	if bv.buffer < 0 || bv.buffer >= bins.len {
+		panic('accessor ${idx} references missing buffer ${bv.buffer}')
+	}
+	buf := bins[bv.buffer]
 	ncomp := match acc.typ {
 		'SCALAR' { 1 }
 		'VEC2' { 2 }
@@ -212,10 +225,10 @@ fn read_accessor(gltf &GltfRoot, bin_chunk []u8, idx int) []f64 {
 		for c in 0 .. ncomp {
 			off := o + c * acc.component_type_bytes()
 			v := match acc.component_type {
-				5126 { f64(f32_at(bin_chunk, off)) }
-				5125 { f64(binary.little_endian_u32_at(bin_chunk, off)) }
-				5123 { f64(binary.little_endian_u16_at(bin_chunk, off)) }
-				5121 { f64(bin_chunk[off]) }
+				5126 { f64(f32_at(buf, off)) }
+				5125 { f64(binary.little_endian_u32_at(buf, off)) }
+				5123 { f64(binary.little_endian_u16_at(buf, off)) }
+				5121 { f64(buf[off]) }
 				else { panic('unsupported componentType ${acc.component_type}') }
 			}
 			out << v
@@ -234,7 +247,7 @@ fn (a GltfAccessor) component_type_bytes() int {
 	}
 }
 
-fn load_gltf_visit(gltf &GltfRoot, bin_chunk []u8, idx int, parent [16]f64, mut out []GltfMeshOut) {
+fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out []GltfMeshOut) {
 	node := gltf.nodes[idx]
 	world := mat4_mul(parent, node_local_matrix(node))
 	if m := node.mesh {
@@ -244,14 +257,14 @@ fn load_gltf_visit(gltf &GltfRoot, bin_chunk []u8, idx int, parent [16]f64, mut 
 				continue
 			}
 			pos_idx := prim.attributes['POSITION'] or { panic('primitive missing POSITION') }
-			pos := read_accessor(gltf, bin_chunk, pos_idx)
+			pos := read_accessor(gltf, bins, pos_idx)
 			mut verts := [][3]f64{}
 			for i := 0; i < pos.len; i += 3 {
 				verts << [pos[i], pos[i + 1], pos[i + 2]]!
 			}
 			mut raw_idx := []int{}
 			if ii := prim.indices {
-				idx_acc := read_accessor(gltf, bin_chunk, ii)
+				idx_acc := read_accessor(gltf, bins, ii)
 				for v in idx_acc {
 					raw_idx << int(v)
 				}
@@ -275,7 +288,7 @@ fn load_gltf_visit(gltf &GltfRoot, bin_chunk []u8, idx int, parent [16]f64, mut 
 		}
 	}
 	for child in node.children {
-		load_gltf_visit(gltf, bin_chunk, child, world, mut out)
+		load_gltf_visit(gltf, bins, child, world, mut out)
 	}
 }
 
@@ -299,37 +312,62 @@ pub fn gltf_to_geometry(outs []GltfMeshOut) Geometry {
 	return csg_geometry('union', kids)
 }
 
-// load_gltf reads a .glb and returns [(vertices, faces, world_transform)].
+// resolve_gltf_buffer returns the bytes for one glTF buffer.  `uri` may be empty
+// (GLB embedded BIN chunk), a data URI (base64), or a path relative to the
+// containing .gltf file.
+fn resolve_gltf_buffer(path string, uri string, embedded []u8) []u8 {
+	if uri == '' {
+		return embedded
+	}
+	if uri.starts_with('data:') {
+		comma := uri.index(',') or { panic('malformed data URI in glTF buffer') }
+		return base64.decode(uri[comma + 1..])
+	}
+	dir := os.dir(path)
+	full := if dir == '' || dir == '.' { uri } else { dir + '/' + uri }
+	return os.read_bytes(full) or { panic('cannot read glTF buffer ${full}') }
+}
+
+// load_gltf reads a .glb (binary) or .gltf (JSON) file and returns
+// [(vertices, faces, world_transform)].
 pub fn load_gltf(path string) []GltfMeshOut {
 	data := os.read_bytes(path) or { panic('cannot read ${path}') }
-	if data.len < 20 || binary.little_endian_u32(data) != 0x46546C67 {
-		panic('${path}: not a GLB file')
-	}
-	if binary.little_endian_u32_at(data, 4) != 2 {
-		panic('${path}: only glTF 2.0 supported')
-	}
-	mut offset := 12
 	mut json_text := ''
 	mut bin_chunk := []u8{}
-	for offset + 8 <= data.len {
-		clen := int(binary.little_endian_u32_at(data, offset))
-		ctype := binary.little_endian_u32_at(data, offset + 4)
-		chunk := data[offset + 8..offset + 8 + clen]
-		if ctype == 0x4E4F534A {
-			json_text = chunk.bytestr()
-		} else if ctype == 0x004E4942 {
-			bin_chunk = chunk.clone()
+	if data.len >= 4 && binary.little_endian_u32(data) == 0x46546C67 {
+		// GLB binary container: 12-byte header + JSON + optional BIN chunks.
+		if binary.little_endian_u32_at(data, 4) != 2 {
+			panic('${path}: only glTF 2.0 supported')
 		}
-		offset += 8 + clen
+		mut offset := 12
+		for offset + 8 <= data.len {
+			clen := int(binary.little_endian_u32_at(data, offset))
+			ctype := binary.little_endian_u32_at(data, offset + 4)
+			chunk := data[offset + 8..offset + 8 + clen]
+			if ctype == 0x4E4F534A {
+				json_text = chunk.bytestr()
+			} else if ctype == 0x004E4942 {
+				bin_chunk = chunk.clone()
+			}
+			offset += 8 + clen
+		}
+	} else {
+		// Plain .gltf JSON document.
+		json_text = data.bytestr()
 	}
 	gltf := json.decode(GltfRoot, json_text) or { panic('bad glTF JSON: ${err}') }
 	if gltf.scenes.len == 0 {
 		return []
 	}
+	// Resolve every buffer once (bufferView.buffer indexes into this list).
+	mut bins := [][]u8{len: gltf.buffers.len}
+	for i, buf in gltf.buffers {
+		bins[i] = resolve_gltf_buffer(path, buf.uri, bin_chunk)
+	}
 	scene_idx := if gltf.scene < gltf.scenes.len { gltf.scene } else { 0 }
 	mut out := []GltfMeshOut{}
 	for root in gltf.scenes[scene_idx].nodes {
-		load_gltf_visit(&gltf, bin_chunk, root, mat4_identity(), mut out)
+		load_gltf_visit(&gltf, bins, root, mat4_identity(), mut out)
 	}
 	return out
 }

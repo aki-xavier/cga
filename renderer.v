@@ -1,8 +1,9 @@
 module cga
 
 // Off-screen ray tracing renderer (MLX batch).  render(scene, camera) returns
-// an (H, W, 4) uint8 RGBA frame.  This port renders opaque materials; the
-// Whitted refraction recursion (Fresnel/Beer) is a follow-up.
+// an (H, W, 4) float32 RGBA frame (0..255).  Supports opaque + transparent
+// materials (Whitted Fresnel reflection / Beer refraction), hard shadows, SSAA
+// and sRGB encode.
 
 import mlx
 import math
