@@ -66,6 +66,7 @@ fn main() {
 		img := renderer.render(scene, camera)
 		p := '${out_dir}/frame_${i:03d}.png'
 		cga.save_frame_png(p, img)
+		img.free()
 		println('frame ${i + 1}/${frames} saved ${p}')
 	}
 }

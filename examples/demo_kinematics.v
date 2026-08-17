@@ -150,6 +150,7 @@ fn main() {
 			s))
 		img := renderer.render(ks.scene, cam)
 		cga.save_frame_png('artifacts/kinematics/frame_${f:03d}.png', img)
+		img.free()
 	}
 	println('saved ${n_frames} frames to artifacts/kinematics/')
 }
