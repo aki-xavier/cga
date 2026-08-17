@@ -19,6 +19,7 @@ from cga.engine import (
     CircleGeometry,
     Color,
     ConeGeometry,
+    CyclideGeometry,
     CylinderGeometry,
     DirectionalLight,
     EllipsoidGeometry,
@@ -66,6 +67,7 @@ class SceneLoader:
         "circle": (["r"], {}),
         "cone": (["r", "h"], {}),  # 局部轴 +Z, 顶点 +h/2 (非 blade)
         "torus": (["R", "r"], {}),  # 主半径 R, 截面半径 r, 局部轴 +Z
+        "cyclide": (["a", "b", "d"], {}),  # Dupin cyclide (设计参数 a>b>0, d>0)
         "ellipsoid": (["radii"], {}),  # [rx, ry, rz] 半轴
         "extrude": (["profile", "h"], {}),  # 轮廓 [[x,y],...] 沿 +Z 0..h
         "loft": (["profiles", "zs"], {}),  # 等点数多截面放样
@@ -841,6 +843,12 @@ class SceneLoader:
             return TorusGeometry(
                 self.num(args["R"], line, "torus.R"),
                 self.num(args["r"], line, "torus.r"),
+            )
+        if name == "cyclide":
+            return CyclideGeometry(
+                self.num(args["a"], line, "cyclide.a"),
+                self.num(args["b"], line, "cyclide.b"),
+                self.num(args["d"], line, "cyclide.d"),
             )
         if name == "ellipsoid":
             return EllipsoidGeometry(*self.vec3(args["radii"], line, "ellipsoid.radii"))

@@ -105,8 +105,10 @@ loft/mesh 与 plane 半空间 —— 半空间交 = 剖切视图)。机械装配
 ![机械装配体](docs/mechanical.png)
 
 **新图元** — cone (凸体区间裁剪) / torus (Durand-Kerner 复数迭代解射线
-四次方程) / ellipsoid (= 仿射缩放球, 零新求交数学)。三者非 CGA blade,
-经射线逆变换接入 (如实标注)。
+四次方程) / ellipsoid (= 仿射缩放球, 零新求交数学) / **cyclide** (Dupin
+cyclide, 四次曲面, Durand-Kerner 求根)。四者非 CGA blade, 经射线逆变换
+接入 (如实标注); cyclide 的 blade 构造 (球族包络 / versor 反演) 见
+`cga.algebra.cyclide`。
 
 **仿射扩展** — `Object3D.linear` (3x3): scale/mirror/shear 经
 AffineGeometry 射线逆变换 (非 versor 可达; 法向走逆置变换, det<0
@@ -244,7 +246,9 @@ motor 给出 —— 无矩阵分解、无位置/四元数换算层。
   仿射扩展); blade 语义 (meet/关联判据) 不适用于仿射形变后的图元。
 - CSG: 相切/共面退化配置依赖 δ=1e-4 双侧采样 (间距 < 2δ 可能漏翻转);
   CSG 节点单材质; circle 非实体不能作叶子。
-- cone/torus/ellipsoid/网格非 CGA blade, 经射线逆变换接入。
+- cone/torus/ellipsoid/cyclide/网格非 CGA blade, 经射线逆变换接入。
+- cyclide: 环型 (c<d<a) 是光滑亏格-1 曲面 (圆角/混合/变径管的自然
+  图元); 尖型自交, CSG 成员性语义退化 (如实标注)。
 - 网格: 暴力 O(N·F) 无 BVH (定位中小网格); 平坦法向; 无纹理坐标;
   glTF 导入暂限单 primitive; 无 IFC/STEP (B-rep 内核超出范围, 交换
   格式走网格)。
@@ -331,12 +335,13 @@ Motor 是 SE(3) 的 versor 表示, 本包已有 `exp` / `log` / `velocity_bivect
 cga/
   multivector.py   32 分量多重向量, 代数运算 (gp/ip/op/dual/meet/norm/...);
                    积表/掩码/基向量全是类属性; DTYPE 精度开关 + wrap_cpu_f64
-  algebra/         图元类与距离 (point/line/plane/sphere/cylinder/circle, 每类一文件)
+  algebra/         图元类与距离 (point/line/plane/sphere/cylinder/circle, 每类一文件);
+                   cyclide (四次曲面模型: 球族包络 + versor 反演 blade 构造)
   motors.py        Motor: 刚体变换 versor, exp/log/插值/速度提取
   engine/          three.js 风格渲染引擎 (MLX 批量光线追踪, 每类一文件):
                    scene/mesh/camera/renderer + 5 种 blade 几何 + 材质 + 灯光
                    + affine_geometry (scale/mirror 射线逆变换, 极分解)
-                   + csg (递归布尔) + cone/torus/ellipsoid/trimesh 图元
+                   + csg (递归布尔) + cone/torus/ellipsoid/cyclide/trimesh 图元
   modeling/        网格构建器: 耳切三角化 + extrude + loft (纯数据变换)
   mesh_io/         OBJ / glTF/GLB 读写 (纯 stdlib, 无第三方依赖)
   render/          逆渲染: 图元场景 → 2D 深度/颜色 (PrimitiveRenderer)
@@ -351,9 +356,10 @@ demo_kinematics.py 运动学 demo (齿轮副/曲柄滑块/螺旋插值) → GIF
 
 ## 质量
 
-- `uv run pytest`: 106 项测试全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+- `uv run pytest`: 127 项测试全过 (代数恒等式 / 图元关联判据 / versor 往返 /
   exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染与 Whitted 管线定量 / CSG 区间
-  布尔 / 仿射 / 新图元 / 网格与互操作 / CGS v3, 见 `tests/`)。
+  布尔 / 仿射 / 新图元 / cyclide (blade 构造 + 解析求交) / 网格与互操作 /
+  CGS v3, 见 `tests/`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 
 ## License

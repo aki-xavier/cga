@@ -47,6 +47,7 @@ from cga.engine.circle_geometry import CircleGeometry
 from cga.engine.color import Color
 from cga.engine.cone_geometry import ConeGeometry
 from cga.engine.csg import CsgGeometry
+from cga.engine.cyclide_geometry import CyclideGeometry
 from cga.engine.cylinder_geometry import CylinderGeometry
 from cga.engine.directional_light import DirectionalLight
 from cga.engine.ellipsoid_geometry import EllipsoidGeometry
@@ -77,6 +78,7 @@ __all__ = [
     "Color",
     "ConeGeometry",
     "CsgGeometry",
+    "CyclideGeometry",
     "CylinderGeometry",
     "DirectionalLight",
     "EllipsoidGeometry",

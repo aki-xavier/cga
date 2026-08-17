@@ -19,6 +19,7 @@
 """
 
 from cga.algebra.circle import Circle
+from cga.algebra.cyclide import DupinCyclide
 from cga.algebra.cylinder import Cylinder
 from cga.algebra.line import Line
 from cga.algebra.plane import Plane
@@ -36,6 +37,7 @@ del _cls
 __all__ = [
     "Circle",
     "Cylinder",
+    "DupinCyclide",
     "Line",
     "Plane",
     "Point",

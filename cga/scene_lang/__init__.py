@@ -25,6 +25,7 @@
     图元:  sphere(r=1)  plane(n=[0,1,0], d=0)  cylinder(r=0.5[, h=2])
            box(s=[w,h,d])  circle(r=0.9)              // 圆盘, 局部法向 +Z
            cone(r, h)  torus(R, r)  ellipsoid(radii=[rx,ry,rz])
+           cyclide(a=.., b=.., d=..)                  // Dupin cyclide (环型/尖型)
            extrude(profile=[[x,y],...], h=..)          // 沿 +Z 0..h
            loft(profiles=[...], zs=[...])              // 等点数多截面
            mesh(file="x.obj"|"x.glb"|"x.gltf")         // asset_root 相对
@@ -54,10 +55,12 @@
     材质按字段合并, 内层覆盖外层, 块外不泄漏。
   - 修饰符只作用于几何; 灯光/background/camera 出现在块内不吃变换。
   - CSG: 子节点须为实体 (sphere/box/cylinder/cone/torus/ellipsoid/
-    extrude/loft/mesh/plane 半空间; circle 非实体)。子节点材质被
-    丢弃 —— 整个 CSG 节点共享当前材质 (单材质, 如实标注)。
+    cyclide/extrude/loft/mesh/plane 半空间; circle 非实体)。子节点材质
+    被丢弃 —— 整个 CSG 节点共享当前材质 (单材质, 如实标注)。
   - cone/torus/cylinder 局部轴 = +Z; 竖直放置需
     rotate(axis=[1,0,0], angle=-pi/2)。
+  - cyclide 是四次曲面 (非 blade), 经 Durand-Kerner 四次求根解析求交;
+    环型 (c<d<a) 是光滑亏格-1 曲面, 尖型自交 (CSG 成员性语义退化)。
   - precision("float64") 切换代数核心到 CPU float64 (大坐标场景,
     请在几何创建前调用); 渲染内核仍 float32。
   - v3 范围 (如实标注): 无字符串变量/include/children, 无 $fn
