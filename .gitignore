@@ -221,3 +221,11 @@ __marimo__/
 # Rust (editor/)
 target/
 .vmodules
+# compiled demo binaries (`v run` leaves these next to the .v source)
+/examples/render_cgs
+/examples/demo_engine
+/examples/demo_advantage
+/examples/demo_kinematics
+/examples/demo_csg
+/examples/demo_gltf
+/examples/render_smoke
