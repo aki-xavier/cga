@@ -194,20 +194,59 @@ int ccga_render_spheres(
     mlx_array_free(idx);
   }
 
-  /* color = take(colors(S,3), best_idx) -> (N,3) */
+  /* Gather per-hit color/center/radius by best_idx, compute normal + Lambert. */
   int shp_s3[2] = {(int)num_spheres, 3};
+  int shp_s[1] = {(int)num_spheres};
   mlx_array col_arr = mk_f32(colors, shp_s3, 2);
+  mlx_array cen_arr = mk_f32(centers, shp_s3, 2);
+  mlx_array rad_arr = mk_f32(radii, shp_s, 1);
+
   mlx_array color = mlx_array_new();
   mlx_take_axis(&color, col_arr, best_idx, 0, s);
+  mlx_array c_hit = mlx_array_new();
+  mlx_take_axis(&c_hit, cen_arr, best_idx, 0, s);
+  mlx_array r_hit = mlx_array_new();
+  mlx_take_axis(&r_hit, rad_arr, best_idx, 0, s);
 
-  /* hit = isfinite(best_t); out = where(hit[:,None], color, bg) */
+  /* hit point p = o + best_t[:,None] * d */
+  mlx_array bt2 = mlx_array_new();
+  mlx_expand_dims(&bt2, best_t, -1, s);
+  mlx_array pd = binop(mlx_multiply, bt2, d, s);
+  mlx_array p = binop(mlx_add, o, pd, s);
+
+  /* normal n = (p - c_hit) / r_hit[:,None] */
+  mlx_array pc = binop(mlx_subtract, p, c_hit, s);
+  mlx_array rh2 = mlx_array_new();
+  mlx_expand_dims(&rh2, r_hit, -1, s);
+  mlx_array nrm = binop(mlx_divide, pc, rh2, s);
+
+  /* Lambert: shade = 0.35 + 0.65 * max(dot(n, light), 0); light = norm(0.3,0.6,1.0) */
+  float l[3] = {0.3f, 0.6f, 1.0f};
+  float ll = sqrtf(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+  l[0] /= ll;
+  l[1] /= ll;
+  l[2] /= ll;
+  mlx_array light = mk_f32(l, shp_3, 1);
+  mlx_array zero_f = mlx_array_new_float(0.0f);
+  mlx_array k065 = mlx_array_new_float(0.65f);
+  mlx_array k035 = mlx_array_new_float(0.35f);
+  mlx_array nd = binop(mlx_multiply, nrm, light, s);
+  mlx_array lam = sum_last(nd, s, 0);
+  mlx_array lam_c = binop(mlx_maximum, lam, zero_f, s);
+  mlx_array wt = binop(mlx_multiply, k065, lam_c, s);
+  mlx_array wt2 = binop(mlx_add, k035, wt, s);
+  mlx_array wt3 = mlx_array_new();
+  mlx_expand_dims(&wt3, wt2, -1, s);
+  mlx_array shaded = binop(mlx_multiply, color, wt3, s);
+
+  /* hit = isfinite(best_t); out = where(hit[:,None], shaded, bg) */
   mlx_array hit = mlx_array_new();
   mlx_isfinite(&hit, best_t, s);
   mlx_array hit2 = mlx_array_new();
   mlx_expand_dims(&hit2, hit, -1, s);
   mlx_array bg_arr = mk_f32(bg, shp_3, 1);
   mlx_array out = mlx_array_new();
-  mlx_where(&out, hit2, color, bg_arr, s);
+  mlx_where(&out, hit2, shaded, bg_arr, s);
 
   mlx_array_eval(out);
   const float *res = mlx_array_data_float32(out);
@@ -219,7 +258,28 @@ int ccga_render_spheres(
   mlx_array_free(best_t);
   mlx_array_free(best_idx);
   mlx_array_free(col_arr);
+  mlx_array_free(cen_arr);
+  mlx_array_free(rad_arr);
   mlx_array_free(color);
+  mlx_array_free(c_hit);
+  mlx_array_free(r_hit);
+  mlx_array_free(bt2);
+  mlx_array_free(pd);
+  mlx_array_free(p);
+  mlx_array_free(pc);
+  mlx_array_free(rh2);
+  mlx_array_free(nrm);
+  mlx_array_free(light);
+  mlx_array_free(zero_f);
+  mlx_array_free(k065);
+  mlx_array_free(k035);
+  mlx_array_free(nd);
+  mlx_array_free(lam);
+  mlx_array_free(lam_c);
+  mlx_array_free(wt);
+  mlx_array_free(wt2);
+  mlx_array_free(wt3);
+  mlx_array_free(shaded);
   mlx_array_free(hit);
   mlx_array_free(hit2);
   mlx_array_free(bg_arr);
