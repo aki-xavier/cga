@@ -2,7 +2,6 @@ module cga
 
 // Immutable linear RGBA texture sampled on the MLX device.  Source images are
 // decoded from PNG (sRGB -> linear) before entering the renderer.
-
 import mlx
 
 pub enum WrapMode {
@@ -19,8 +18,8 @@ pub:
 
 // sRGB -> linear on an (N,3) encoded float array.
 fn srgb_to_linear_arr(rgb mlx.Array) mlx.Array {
-	return mlx.where(s_le(rgb, 0.04045), s_div(rgb, 12.92), s_pow(s_div(s_add(rgb,
-		0.055), 1.055), 2.4))
+	return mlx.where(s_le(rgb, 0.04045), s_div(rgb, 12.92), s_pow(s_div(s_add(rgb, 0.055), 1.055),
+		2.4))
 }
 
 // texture_from_rgba builds a texture from encoded sRGB RGBA floats (0..1).
@@ -50,7 +49,7 @@ pub fn texture_from_rgba(rgba [][][]f64) Texture {
 	return Texture{
 		pixels: mlx.concatenate([lin, a], 2)
 		height: h
-		width: w
+		width:  w
 	}
 }
 
@@ -68,7 +67,7 @@ pub fn texture_load(path string) Texture {
 	return Texture{
 		pixels: mlx.concatenate([lin, a], 2)
 		height: h
-		width: w
+		width:  w
 	}
 }
 

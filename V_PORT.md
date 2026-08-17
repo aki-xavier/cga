@@ -22,7 +22,7 @@ bindings at `~/code/mlx-v`.
 | **Inverse rendering** | ✅ `render.v` — `PrimitiveRenderer.render_scene` (plane/sphere/cylinder blades → depth + RGB, motor + regions + alpha compositing) |
 | **CSG** | ✅ `csg.v` + `csg_node.v` — `crossings`/`contains` solid protocol + recursive `CsgGeometry` (union/intersection/difference) |
 | **scene_lang** | ✅ `scene_lang.v` — CGS lexer + single-pass parser/evaluator (translate/rotate/scale/mirror, for/if/echo/module, variables/expressions/math functions, primitives, lights, camera, material, precision, CSG with transformed children, extrude/loft/mesh(.obj/.glb/.gltf)) |
-| **Tests** | ✅ 14 files — `multivector_test.v`, `motors_test.v`, `algebra_test.v`, `modeling_test.v`, `engine_test.v`, `texture_test.v`, `render_test.v`, `csg_test.v`, `scene_lang_test.v`, `scene_lang_v2_test.v`, `gltf_test.v`, `cyclide_test.v`, `extended_modeling_test.v`, `render_quantitative_test.v` (render smoke saves PNGs to `artifacts/tests/`) |
+| **Tests** | ✅ 16 files — `multivector_test.v`, `motors_test.v`, `algebra_test.v`, `modeling_test.v`, `engine_test.v`, `texture_test.v`, `render_test.v`, `csg_test.v`, `csg_contains_test.v`, `trimesh_test.v`, `scene_lang_test.v`, `scene_lang_v2_test.v`, `gltf_test.v`, `cyclide_test.v`, `extended_modeling_test.v`, `render_quantitative_test.v` (render smoke saves PNGs to `artifacts/tests/`) |
 
 **Not yet ported** (editor preview only):
 
@@ -32,7 +32,8 @@ bindings at `~/code/mlx-v`.
   migrated to a V backend.
 
 **Demos** — all ported and building: `examples/demo_engine.v`,
-`demo_advantage.v`, `demo_kinematics.v`, `render_smoke.v`, `render_cgs.v`.
+`demo_advantage.v`, `demo_kinematics.v`, `demo_csg.v`, `demo_gltf.v`,
+`render_smoke.v`, `render_cgs.v`.
 They render correctly but are slower than the Python reference (~3 s/frame vs
 ~30 ms) — the V renderer recurses full-frame for refraction and does not yet
 free MLX intermediate handles.
