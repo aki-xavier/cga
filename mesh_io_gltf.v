@@ -188,8 +188,13 @@ pub fn save_glb(path string, meshes []GltfMeshIn) {
 		}
 		nodes << '{"mesh":${mi},"name":"mesh_${mi}"${node_extra}}'
 	}
+	// The scene's `nodes` must be node *indices*, not the node objects.
+	mut node_indices := []string{cap: nodes.len}
+	for i in 0 .. nodes.len {
+		node_indices << i.str()
+	}
 	mat_json := if materials.len > 0 { ',"materials":[${materials.join(',')}]' } else { '' }
-	json_str := '{"asset":{"version":"2.0","generator":"cga.mesh_io"},"scene":0,"scenes":[{"nodes":[${nodes.join(',')}]}],"nodes":[${nodes.join(',')}],"meshes":[${meshes_j.join(',')}],"accessors":[${accessors.join(',')}],"bufferViews":[${views.join(',')}],"buffers":[{"byteLength":${blob.len}}]${mat_json}}'
+	json_str := '{"asset":{"version":"2.0","generator":"cga.mesh_io"},"scene":0,"scenes":[{"nodes":[${node_indices.join(',')}]}],"nodes":[${nodes.join(',')}],"meshes":[${meshes_j.join(',')}],"accessors":[${accessors.join(',')}],"bufferViews":[${views.join(',')}],"buffers":[{"byteLength":${blob.len}}]${mat_json}}'
 	mut out := []u8{}
 	push_u32(mut out, u32(0x46546C67))
 	push_u32(mut out, u32(2))
@@ -363,7 +368,9 @@ pub fn load_gltf(path string) []GltfMeshOut {
 		// Plain .gltf JSON document.
 		json_text = data.bytestr()
 	}
-	gltf := json2.decode[GltfRoot](json_text) or { panic('bad glTF JSON: ${err}') }
+	gltf := json2.decode[GltfRoot](json_text, json2.DecoderOptions{}) or {
+		panic('bad glTF JSON: ${err.msg()}')
+	}
 	if gltf.scenes.len == 0 {
 		return []
 	}

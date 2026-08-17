@@ -16,8 +16,17 @@ pub fn save_frame_png(path string, img mlx.Array) {
 	save_png_rgba(path, w, h, f32_rgba_to_u8(data))
 }
 
-// save_png_rgba writes an RGBA image (row-major bytes) as a PNG file.
-pub fn save_png_rgba(path string, width int, height int, rgba []u8) {
+// frame_to_png_bytes encodes an (H, W, 4) float32 render frame as PNG bytes.
+pub fn frame_to_png_bytes(img mlx.Array) []u8 {
+	sh := img.shape()
+	h := sh[0]
+	w := sh[1]
+	data := img.data_f32()
+	return encode_png_rgba(w, h, f32_rgba_to_u8(data))
+}
+
+// encode_png_rgba encodes an RGBA image (row-major bytes) as PNG bytes.
+pub fn encode_png_rgba(width int, height int, rgba []u8) []u8 {
 	// each scanline is prefixed with a 0 filter byte
 	mut raw := []u8{len: height * (width * 4 + 1)}
 	for y in 0 .. height {
@@ -37,7 +46,14 @@ pub fn save_png_rgba(path string, width int, height int, rgba []u8) {
 	out << png_chunk('IHDR', ihdr)
 	out << png_chunk('IDAT', idat)
 	out << png_chunk('IEND', [])
-	os.write_file(path, out.bytestr()) or { panic('cannot write ${path}') }
+	return out
+}
+
+// save_png_rgba writes an RGBA image (row-major bytes) as a PNG file.
+pub fn save_png_rgba(path string, width int, height int, rgba []u8) {
+	os.write_file(path, encode_png_rgba(width, height, rgba).bytestr()) or {
+		panic('cannot write ${path}')
+	}
 }
 
 // f32_rgba_to_u8 converts float RGBA (0..255) to byte RGBA.
