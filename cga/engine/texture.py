@@ -30,9 +30,12 @@ class Texture:
     def load(cls, path: str | Path) -> Texture:
         """Load an sRGB PNG/JPEG/WebP image and decode it to linear RGBA."""
         image = Image.open(path).convert("RGBA")
-        rgba = mx.array(bytearray(image.tobytes()), dtype=mx.uint8).reshape(
-            image.height, image.width, 4
-        ).astype(mx.float32) / 255.0
+        rgba = (
+            mx.array(bytearray(image.tobytes()), dtype=mx.uint8)
+            .reshape(image.height, image.width, 4)
+            .astype(mx.float32)
+            / 255.0
+        )
         rgb = rgba[..., :3]
         linear = mx.where(
             rgb <= 0.04045,

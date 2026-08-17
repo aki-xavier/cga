@@ -18,10 +18,13 @@ from cga.engine import (
     BoxGeometry,
     CircleGeometry,
     Color,
+    ConeGeometry,
     CylinderGeometry,
     DirectionalLight,
+    EllipsoidGeometry,
     Mesh,
     MeshBasicMaterial,
+    MeshGeometry,
     MeshStandardMaterial,
     PerspectiveCamera,
     PlaneGeometry,
@@ -29,9 +32,26 @@ from cga.engine import (
     Scene,
     SphereGeometry,
     Texture,
+    TorusGeometry,
 )
+from cga.engine.affine_geometry import (
+    TransformedGeometry,
+    decompose_rigid,
+)
+from cga.engine.csg import CsgGeometry
+from cga.mesh_io import load_gltf, load_obj
+from cga.modeling import extrude as modeling_extrude
+from cga.modeling import loft as modeling_loft
 from cga.motors import Motor
+from cga.multivector import set_precision
 from cga.scene_lang.lexer import Lexer
+
+_IDENTITY4 = (
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
 
 
 class SceneLoader:
@@ -44,9 +64,22 @@ class SceneLoader:
         "cylinder": (["r"], {"h": None}),  # h 给定 → 有限圆柱 (带端盖)
         "box": (["s"], {}),
         "circle": (["r"], {}),
+        "cone": (["r", "h"], {}),  # 局部轴 +Z, 顶点 +h/2 (非 blade)
+        "torus": (["R", "r"], {}),  # 主半径 R, 截面半径 r, 局部轴 +Z
+        "ellipsoid": (["radii"], {}),  # [rx, ry, rz] 半轴
+        "extrude": (["profile", "h"], {}),  # 轮廓 [[x,y],...] 沿 +Z 0..h
+        "loft": (["profiles", "zs"], {}),  # 等点数多截面放样
+        "mesh": (["file"], {}),  # .obj / .glb / .gltf (asset_root 相对)
         # 修饰符
         "translate": (["t"], {}),
         "rotate": (["axis", "angle"], {}),
+        "scale": (["s"], {}),  # 标量或 [sx,sy,sz] (仿射扩展, 非 versor)
+        "mirror": (["axis"], {}),  # 过原点垂直 axis 的镜像平面
+        # CSG (真布尔, 子节点共享节点材质)
+        "difference": ([], {}),
+        "intersection": ([], {}),
+        # 精度
+        "precision": (["mode"], {}),  # "float32" | "float64"
         "material": (
             [],
             {
@@ -126,6 +159,7 @@ class SceneLoader:
         self.scene = Scene()
         self.camera: PerspectiveCamera | None = None
         self.modules: dict[str, tuple[list[tuple[str, list | None]], list]] = {}
+        self._collect: list | None = None  # CSG 子几何收集器 (None = 直接进场景)
 
     @staticmethod
     def load(
@@ -134,7 +168,7 @@ class SceneLoader:
         """Parse CGS text with optional root for relative texture assets."""
         root = None if asset_root is None else Path(asset_root).resolve()
         loader = SceneLoader(Lexer.tokenize(text), root)
-        loader.run_tokens(loader.toks, Motor.identity(), {}, {"pi": math.pi})
+        loader.run_tokens(loader.toks, _IDENTITY4, {}, {"pi": math.pi})
         if loader.camera is None:
             loader.camera = PerspectiveCamera()
             loader.camera.look_at((0.0, 0.0, 0.0))
@@ -159,12 +193,12 @@ class SceneLoader:
             raise ValueError(f"CGS 第{line}行: 期望 {sym!r}, 得到 {kind!r}")
         return line
 
-    def run_tokens(self, toks: list, motor: Motor, mat: dict, scope: dict) -> None:
+    def run_tokens(self, toks: list, ctx: tuple, mat: dict, scope: dict) -> None:
         """在指定上下文求值一段 token 流 (顶层 / for 体 / module 体共用)。"""
         saved_toks, saved_pos = self.toks, self.pos
         self.toks, self.pos = toks, 0
         while self.pos < len(self.toks):
-            self.statement(motor, mat, scope)
+            self.statement(ctx, mat, scope)
         self.toks, self.pos = saved_toks, saved_pos
 
     # ── 表达式 (优先级爬升) ────────────────────────────────────────
@@ -338,29 +372,36 @@ class SceneLoader:
 
     # ── 语句 ──────────────────────────────────────────────────────
 
-    def statement(self, motor: Motor, mat: dict, scope: dict) -> None:
+    def statement(self, ctx: tuple, mat: dict, scope: dict) -> None:
         kind, name, line = self.peek()
         if kind == "{":  # 块语句 (if/for 分支可以直接是 {} 块)
             self.expect("{")
             while self.peek()[0] != "}":
-                self.statement(motor, mat, scope)
+                self.statement(ctx, mat, scope)
             self.expect("}")
             return None
         if kind == "ident":
             if name == "module":
                 return self.module_def()
             if name == "for":
-                return self.for_loop(motor, mat, scope)
+                return self.for_loop(ctx, mat, scope)
             if name == "if":
-                return self.if_stmt(motor, mat, scope)
+                return self.if_stmt(ctx, mat, scope)
             if name == "echo":
                 return self.echo_stmt(scope)
             if name == "union":
-                # OpenSCAD 习惯写法; 本引擎无布尔, union = 分组别名
+                # OpenSCAD 习惯写法; 本引擎 union = 分组别名 (各子节点
+                # 保留各自材质; 真·单材质 CSG 并集对不透明体视觉等价)
                 self.take()
                 self.expect("(")
                 self.expect(")")
-                return self.body(motor, mat, scope, line)
+                return self.body(ctx, mat, scope, line)
+            if name in ("difference", "intersection"):
+                # 真 CSG 布尔: 收集子几何 → CsgGeometry (见 csg_block)
+                self.take()
+                self.expect("(")
+                self.expect(")")
+                return self.csg_block(name, ctx, mat, scope, line)
             if self.peek(1)[0] == "=":  # 赋值
                 self.take()
                 self.take()
@@ -373,24 +414,57 @@ class SceneLoader:
             raise ValueError(f"CGS 第{line}行: 期望语句名, 得到 {name!r}")
         pos_args, kw_args = self.call_args(scope)
         if name in self.modules:
-            return self.module_call(name, pos_args, kw_args, motor, mat, line)
+            return self.module_call(name, pos_args, kw_args, ctx, mat, line)
         if name not in self.SIGNATURES:
             raise ValueError(f"CGS 第{line}行: 未知语句 {name!r}")
         args = self.resolve(name, pos_args, kw_args, line)
         if name == "translate":
-            m = motor.gp(Motor.translator(self.vec3(args["t"], line, "translate.t")))
-            return self.body(m, mat, scope, line)
-        if name == "rotate":
-            m = motor.gp(
-                Motor.rotor(
-                    self.vec3(args["axis"], line, "rotate.axis"),
-                    self.num(args["angle"], line, "rotate.angle"),
-                )
+            tx, ty, tz = self.vec3(args["t"], line, "translate.t")
+            t4 = (
+                (1.0, 0.0, 0.0, tx),
+                (0.0, 1.0, 0.0, ty),
+                (0.0, 0.0, 1.0, tz),
+                (0.0, 0.0, 0.0, 1.0),
             )
-            return self.body(m, mat, scope, line)
+            return self.body(self._mat4_mul(ctx, t4), mat, scope, line)
+        if name == "rotate":
+            r4 = Motor.rotor(
+                self.vec3(args["axis"], line, "rotate.axis"),
+                self.num(args["angle"], line, "rotate.angle"),
+            ).to_matrix()
+            r4 = tuple(tuple(float(v) for v in row) for row in r4)
+            return self.body(self._mat4_mul(ctx, r4), mat, scope, line)
+        if name == "scale":
+            s = args["s"]
+            if isinstance(s, list):
+                sx, sy, sz = self.vec3(s, line, "scale.s")
+            else:
+                sx = sy = sz = self.num(s, line, "scale.s")
+            s4 = (
+                (sx, 0.0, 0.0, 0.0),
+                (0.0, sy, 0.0, 0.0),
+                (0.0, 0.0, sz, 0.0),
+                (0.0, 0.0, 0.0, 1.0),
+            )
+            return self.body(self._mat4_mul(ctx, s4), mat, scope, line)
+        if name == "mirror":
+            ax = self.vec3(args["axis"], line, "mirror.axis")
+            n = math.sqrt(ax[0] ** 2 + ax[1] ** 2 + ax[2] ** 2)
+            if n < 1e-12:
+                raise ValueError(f"CGS 第{line}行: mirror.axis 不能为零向量")
+            ux, uy, uz = ax[0] / n, ax[1] / n, ax[2] / n
+            householder = (
+                (1.0 - 2 * ux * ux, -2 * ux * uy, -2 * ux * uz),
+                (-2 * uy * ux, 1.0 - 2 * uy * uy, -2 * uy * uz),
+                (-2 * uz * ux, -2 * uz * uy, 1.0 - 2 * uz * uz),
+            )
+            h4 = tuple(tuple(float(v) for v in row) + (0.0,) for row in householder) + (
+                (0.0, 0.0, 0.0, 1.0),
+            )
+            return self.body(self._mat4_mul(ctx, h4), mat, scope, line)
         if name == "material":
             merged = {**mat, **{k: v for k, v in args.items() if v is not None}}
-            return self.body(motor, merged, scope, line)
+            return self.body(ctx, merged, scope, line)
         if name == "background":
             self.expect(";")
             self.scene.background = Color(int(self.num(args["color"], line, "color")))
@@ -405,6 +479,16 @@ class SceneLoader:
             )
             self.camera.look_at(self.vec3(args["target"], line, "camera.target"))
             return None
+        if name == "precision":
+            self.expect(";")
+            mode = args["mode"]
+            if not isinstance(mode, str):
+                raise ValueError(
+                    f"CGS 第{line}行: precision.mode 需要字符串 "
+                    '("float32" 或 "float64")'
+                )
+            set_precision(mode)
+            return None
         if name.endswith("_light"):
             self.expect(";")
             self.add_light(name, args, line)
@@ -412,30 +496,66 @@ class SceneLoader:
         # 图元
         self.expect(";")
         geo = self.build_geometry(name, args, line)
-        self.scene.add(Mesh(geo, self.build_material(mat), motor=motor))
+        self.add_geometry(geo, ctx, mat)
         return None
 
-    def body(self, motor: Motor, mat: dict, scope: dict, line: int) -> None:
+    # ── 变换上下文 (4x4 仿射, 修饰符右乘; 落点极分解为 motor·linear) ──
+
+    @staticmethod
+    def _mat4_mul(a: tuple, b: tuple) -> tuple:
+        return tuple(
+            tuple(sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4))
+            for i in range(4)
+        )
+
+    def add_geometry(self, geo, ctx: tuple, mat: dict) -> None:
+        """几何落点: CSG 收集模式 → 收集器, 否则极分解上下文建 Mesh。"""
+        if self._collect is not None:
+            self._collect.append((geo, ctx))
+            return
+        motor, lin = decompose_rigid(ctx)
+        self.scene.add(Mesh(geo, self.build_material(mat), motor=motor, linear=lin))
+
+    def csg_block(self, op: str, ctx: tuple, mat: dict, scope: dict, line: int) -> None:
+        """difference/intersection: 收集体块内全部几何 → CsgGeometry。
+
+        子节点经 TransformedGeometry 烘到根坐标系, 节点自身放恒等变换
+        (避免外层上下文双重施加; 嵌套 CSG 自然成立)。子节点材质被丢弃
+        —— 整个 CSG 节点共享当前材质上下文 (单材质, 如实标注)。
+        """
+        saved = self._collect
+        self._collect = []
+        try:
+            self.body(ctx, mat, scope, line)
+        finally:
+            children = self._collect
+            self._collect = saved
+        if len(children) < 2:
+            raise ValueError(f"CGS 第{line}行: {op} 需要 ≥2 个几何子节点")
+        kids = [TransformedGeometry(g, *decompose_rigid(a)) for g, a in children]
+        self.add_geometry(CsgGeometry(op, kids), _IDENTITY4, mat)
+
+    def body(self, ctx: tuple, mat: dict, scope: dict, line: int) -> None:
         """修饰符/控制流目标: 下一条语句或 {} 块。"""
         if self.peek()[0] == "{":
             self.expect("{")
             while self.peek()[0] != "}":
-                self.statement(motor, mat, scope)
+                self.statement(ctx, mat, scope)
             self.expect("}")
         elif self.peek()[0] == ";":
             raise ValueError(f"CGS 第{line}行: 修饰语句缺少目标语句")
         else:
-            self.statement(motor, mat, scope)
+            self.statement(ctx, mat, scope)
 
     # ── 控制流 ────────────────────────────────────────────────────
 
-    def if_stmt(self, motor: Motor, mat: dict, scope: dict) -> None:
+    def if_stmt(self, ctx: tuple, mat: dict, scope: dict) -> None:
         self.take()  # if
         self.expect("(")
         cond = self.truthy(self.expr(scope))
         self.expect(")")
         if cond:
-            self.statement(motor, mat, scope)
+            self.statement(ctx, mat, scope)
             if self.peek()[:2] == ("ident", "else"):
                 self.take()
                 self.skip_statement()
@@ -443,9 +563,9 @@ class SceneLoader:
             self.skip_statement()
             if self.peek()[:2] == ("ident", "else"):
                 self.take()
-                self.statement(motor, mat, scope)
+                self.statement(ctx, mat, scope)
 
-    def for_loop(self, motor: Motor, mat: dict, scope: dict) -> None:
+    def for_loop(self, ctx: tuple, mat: dict, scope: dict) -> None:
         self.take()  # for
         self.expect("(")
         kind, var, line = self.take()
@@ -459,7 +579,7 @@ class SceneLoader:
         body = self.capture_statement()
         for v in values:
             scope[var] = v
-            self.run_tokens(body, motor, mat, scope)
+            self.run_tokens(body, ctx, mat, scope)
 
     def echo_stmt(self, scope: dict) -> None:
         self.take()  # echo
@@ -517,7 +637,7 @@ class SceneLoader:
         name: str,
         pos_args: list,
         kw_args: dict,
-        motor: Motor,
+        ctx: tuple,
         mat: dict,
         line: int,
     ) -> None:
@@ -537,7 +657,7 @@ class SceneLoader:
                 if default is None:
                     raise ValueError(f"CGS 第{line}行: module {name} 缺参数 {pname!r}")
                 scope[pname] = self.eval_tokens(default, scope)
-        self.run_tokens(body, motor, mat, scope)
+        self.run_tokens(body, ctx, mat, scope)
 
     # ── token 捕获与重放 ───────────────────────────────────────────
 
@@ -712,7 +832,67 @@ class SceneLoader:
             return BoxGeometry(*self.vec3(args["s"], line, "box.s"))
         if name == "circle":
             return CircleGeometry(self.num(args["r"], line, "circle.r"))
+        if name == "cone":
+            return ConeGeometry(
+                self.num(args["r"], line, "cone.r"),
+                self.num(args["h"], line, "cone.h"),
+            )
+        if name == "torus":
+            return TorusGeometry(
+                self.num(args["R"], line, "torus.R"),
+                self.num(args["r"], line, "torus.r"),
+            )
+        if name == "ellipsoid":
+            return EllipsoidGeometry(*self.vec3(args["radii"], line, "ellipsoid.radii"))
+        if name == "extrude":
+            profile = self.profile2d(args["profile"], line, "extrude.profile")
+            h = self.num(args["h"], line, "extrude.h")
+            return MeshGeometry(*modeling_extrude(profile, h))
+        if name == "loft":
+            raw = args["profiles"]
+            if not isinstance(raw, list) or len(raw) < 2:
+                raise ValueError(f"CGS 第{line}行: loft.profiles 需要 ≥2 个截面")
+            profiles = [self.profile2d(p, line, "loft.profiles[i]") for p in raw]
+            zs_raw = args["zs"]
+            if not isinstance(zs_raw, list):
+                raise ValueError(f"CGS 第{line}行: loft.zs 需要列表")
+            zs = [self.num(z, line, "loft.zs[i]") for z in zs_raw]
+            return MeshGeometry(*modeling_loft(profiles, zs))
+        if name == "mesh":
+            path = args["file"]
+            if not isinstance(path, str):
+                raise ValueError(f"CGS 第{line}行: mesh.file 需要字符串路径")
+            if self.asset_root is None:
+                raise ValueError(f"CGS 第{line}行: mesh 需要显式 asset_root")
+            full = self.asset_root / path
+            suffix = full.suffix.lower()
+            if suffix == ".obj":
+                return MeshGeometry(*load_obj(full))
+            if suffix in (".glb", ".gltf"):
+                meshes = load_gltf(full)
+                if len(meshes) != 1:
+                    raise ValueError(
+                        f"CGS 第{line}行: mesh 暂只支持单 primitive 的 glTF "
+                        f"(得到 {len(meshes)} 个, 可先用 OBJ 合并导入)"
+                    )
+                verts, faces, m4 = meshes[0]
+                motor, lin = decompose_rigid(m4)
+                return TransformedGeometry(MeshGeometry(verts, faces), motor, lin)
+            raise ValueError(
+                f"CGS 第{line}行: mesh 支持 .obj/.glb/.gltf, 得到 {suffix!r}"
+            )
         raise ValueError(f"CGS 第{line}行: 未知图元 {name!r}")
+
+    def profile2d(self, v, line: int, what: str) -> list[tuple[float, float]]:
+        """[[x, y], ...] 轮廓参数校验 (≥3 点)。"""
+        if not isinstance(v, list) or len(v) < 3:
+            raise ValueError(f"CGS 第{line}行: {what} 需要 ≥3 个 [x,y] 点")
+        pts = []
+        for p in v:
+            if not isinstance(p, list) or len(p) != 2:
+                raise ValueError(f"CGS 第{line}行: {what} 的每项需为 [x,y]")
+            pts.append((self.num(p[0], line, what), self.num(p[1], line, what)))
+        return pts
 
     def build_material(self, mat: dict):
         """材质字段 dict → Material (unlit=true → Basic, 否则 Standard)。"""

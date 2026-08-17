@@ -18,6 +18,7 @@ e0·e∞ = -1。e0 与 e∞ 非正交, 故 blade 的几何积不能用正交基�
 在类定义后由文件末尾的初始化块填充 (构建函数是静态方法)。
 """
 
+import functools
 import math
 from typing import ClassVar
 
@@ -39,6 +40,13 @@ class Multivector:
     """
 
     __slots__ = ("values",)
+
+    # 值数组精度: 默认 float32 (GPU 友好); set_precision("float64") 切换
+    # 后, 新创建的值数组走 float64 —— blade 共轭的远原点 conformal 抵消
+    # 显著缓解 (场景坐标可远超 ±20)。积表/掩码是精确 ±1, 始终保持
+    # float32: MLX 类型提升 (float64 × float32 → float64) 自动接力,
+    # 不损精度。类属性 E1/E2/... 在模块加载时按默认精度构建, 同理无碍。
+    DTYPE: ClassVar[mx.Dtype] = mx.float32
 
     # ── 类属性声明 (值在文件末尾初始化块填充) ─────────────────────
     BASIS_BLADES: ClassVar[list[tuple[int, ...]]]
@@ -215,7 +223,7 @@ class Multivector:
                     signs_list[i][j][k] = float(sign)
                     indices_list[i][j][k] = dst
         return (
-            mx.array(signs_list, dtype=mx.float32),
+            mx.array(signs_list, dtype=Multivector.DTYPE),
             mx.array(indices_list, dtype=mx.int32),
             mx.array(counts_list, dtype=mx.int32),
         )
@@ -229,7 +237,7 @@ class Multivector:
                 1.0 if i in Multivector.GRADE_INDICES[g] else 0.0
                 for i in range(Multivector.NUM_COMPONENTS)
             ]
-            masks.append(mx.array(vals, dtype=mx.float32))
+            masks.append(mx.array(vals, dtype=Multivector.DTYPE))
         return masks
 
     @staticmethod
@@ -239,7 +247,7 @@ class Multivector:
         for g in range(Multivector.NUM_GRADES):
             for idx in Multivector.GRADE_INDICES[g]:
                 vals[idx] = float(sign_of_grade(g))
-        return mx.array(vals, dtype=mx.float32)
+        return mx.array(vals, dtype=Multivector.DTYPE)
 
     @staticmethod
     def build_gp_sparse() -> tuple[mx.array, mx.array, mx.array]:
@@ -257,7 +265,7 @@ class Multivector:
                 for sign, dst in table[i][j]:
                     mask_list[i][j][dst] += float(sign)
         return (
-            mx.array(mask_list, dtype=mx.float32),
+            mx.array(mask_list, dtype=Multivector.DTYPE),
             mx.array(nz_i, dtype=mx.int32),
             mx.array(nz_j, dtype=mx.int32),
         )
@@ -277,13 +285,13 @@ class Multivector:
         """由 32 分量数组构造; None 表示零 multivector。"""
         n = Multivector.NUM_COMPONENTS
         if values is None:
-            self.values = mx.zeros(n, dtype=mx.float32)
+            self.values = mx.zeros(n, dtype=Multivector.DTYPE)
         elif isinstance(values, mx.array):
             if values.shape != (n,):
                 raise ValueError(f"Expected shape (32,), got {values.shape}")
             self.values = values
         else:
-            arr = mx.array(values, dtype=mx.float32)
+            arr = mx.array(values, dtype=Multivector.DTYPE)
             if arr.shape != (n,):
                 raise ValueError(f"Expected shape (32,), got {arr.shape}")
             self.values = arr
@@ -291,12 +299,14 @@ class Multivector:
     @staticmethod
     def zeros() -> Multivector:
         """零 multivector。"""
-        return Multivector(mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32))
+        return Multivector(
+            mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
+        )
 
     @staticmethod
     def scalar(s: float) -> Multivector:
         """标量 multivector (仅 grade-0 分量)。"""
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         vals[0] = s
         return Multivector(vals)
 
@@ -305,7 +315,7 @@ class Multivector:
         v1: float, v2: float, v3: float, v0: float = 0.0, ve: float = 0.0
     ) -> Multivector:
         """由欧氏分量 (v1,v2,v3) + e0/e∞ 系数 (v0/ve) 构造向量。"""
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         vals[1] = v1
         vals[2] = v2
         vals[3] = v3
@@ -318,7 +328,7 @@ class Multivector:
         """由 10 个 grade-2 分量构造二重向量。"""
         if len(components) != 10:
             raise ValueError(f"Expected 10 bivector components, got {len(components)}")
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         for i, v in enumerate(components):
             idx = Multivector.GRADE_INDICES[2][i]
             vals[idx] = v
@@ -449,7 +459,7 @@ class Multivector:
         p.ip(X) = 0 的行为不受影响。对一般混合 grade multivector
         正确。"""
         masks = Multivector.GRADE_MASKS
-        result = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        result = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         for ga in range(1, Multivector.NUM_GRADES):
             a_g = self.values * masks[ga]
             if not bool(mx.any(a_g != 0).item()):
@@ -469,7 +479,7 @@ class Multivector:
             a ∧ b = Σ_{r,s} < <a>_r * <b>_s >_{r+s}
         对一般混合 grade multivector 正确。"""
         masks = Multivector.GRADE_MASKS
-        result = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        result = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         for ga in range(Multivector.NUM_GRADES):
             a_g = self.values * masks[ga]
             if not bool(mx.any(a_g != 0).item()):
@@ -502,7 +512,7 @@ class Multivector:
         故 I⁻¹ = −I, dual(A) = A · I⁻¹。
         """
         # I = e123∧e∞∧e0 = −(规范 blade 31);  I⁻¹ = −I = +blade31
-        i_inv_vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        i_inv_vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         i_inv_vals[31] = 1.0
         return self.gp(Multivector(i_inv_vals))
 
@@ -536,7 +546,7 @@ class Multivector:
     def bulk(self) -> Multivector:
         """欧氏 (bulk) 部分: 不含 e0/e∞ 的分量。"""
         euc_indices = [0, 1, 2, 3, 6, 7, 10, 16]
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         for idx in euc_indices:
             vals[idx] = self.values[idx]
         return Multivector(vals)
@@ -610,7 +620,7 @@ Multivector.VECTOR_METRIC = mx.array(
         [0, 0, 0, 0, -1],
         [0, 0, 0, -1, 0],
     ],
-    dtype=mx.float32,
+    dtype=Multivector.DTYPE,
 )
 
 Multivector.GP_TABLE = Multivector.build_gp_table()
@@ -654,3 +664,61 @@ mx.eval(
     Multivector.E0.values,
     Multivector.EINF.values,
 )
+
+
+def set_precision(dtype: str) -> None:
+    """全局代数精度: "float32" (默认) 或 "float64"。
+
+    float64 把 blade 共轭/motor 复合的远原点 conformal 抵消压到
+    ~1e-13 相对量级, 场景坐标可远超 ±20 (渲染内核仍按 float32
+    求交 —— 图元参数共轭进相机空间后已 near-origin, 足够)。
+    在创建场景对象前调用; 只影响之后创建的值数组 (积表/基向量是
+    精确 ±1, 任何精度下无损)。
+
+    Metal GPU 不支持 float64: DTYPE=float64 时 Multivector/Motor
+    的全部方法自动切到 CPU stream 执行 (见 _cpu_stream_guard),
+    调用方无需手工包 stream 上下文。
+    """
+    if dtype == "float32":
+        Multivector.DTYPE = mx.float32
+    elif dtype == "float64":
+        Multivector.DTYPE = mx.float64
+    else:
+        raise ValueError(f"precision must be 'float32' or 'float64', got {dtype!r}")
+
+
+def _cpu_stream_guard(fn):
+    """方法守卫: DTYPE=float64 时在 CPU stream 执行 (Metal 无 f64)。
+
+    float32 (默认) 时纯直通, 零行为变化。嵌套包装幂等
+    (mx.stream 上下文可嵌套)。
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if Multivector.DTYPE == mx.float64:
+            with mx.stream(mx.cpu):
+                return fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def wrap_cpu_f64(cls: type) -> type:
+    """把 cls 全部方法包上 _cpu_stream_guard (含 classmethod/staticmethod)。
+
+    运算符 dunder (__sub__/__add__/...) 同样创建 MLX 图, 一并包装;
+    不触碰数组的 dunder 被包也无害 (float32 下纯直通)。
+    在类定义后应用一次即可。
+    """
+    for name, member in list(vars(cls).items()):
+        if isinstance(member, staticmethod):
+            setattr(cls, name, staticmethod(_cpu_stream_guard(member.__func__)))
+        elif isinstance(member, classmethod):
+            setattr(cls, name, classmethod(_cpu_stream_guard(member.__func__)))
+        elif callable(member):
+            setattr(cls, name, _cpu_stream_guard(member))
+    return cls
+
+
+wrap_cpu_f64(Multivector)

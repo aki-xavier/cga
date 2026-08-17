@@ -191,3 +191,81 @@ class CylinderGeometry(GeometryBase):
         t_min = mx.min(t_eff, axis=-1)
         fin = mx.logical_and(mx.isfinite(t_min), t_min > 1e-6)
         return mx.where(fin, t_min, t), fin
+
+    # ── 实体协议 (CSG 叶子) ────────────────────────────────────────
+
+    def crossings(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """全部边界穿越: ts (N,2) 升序, ns (N,2,3) 外法向, valid (N,2)。
+
+        有限圆柱 = 侧区间 ∩ 轴向区间 (凸体区间裁剪); 无限圆柱只有侧区间。
+        """
+        q = mx.array(params[0], dtype=mx.float32)
+        u = mx.array(params[1], dtype=mx.float32)
+        r = params[2]
+        h = params[3]
+        oc = o - q
+        d_par = mx.sum(d * u, axis=-1, keepdims=True)
+        o_par = mx.sum(oc * u, axis=-1, keepdims=True)
+        d_p = d - d_par * u
+        o_p = oc - o_par * u
+        a = mx.sum(d_p * d_p, axis=-1)
+        b = 2.0 * mx.sum(o_p * d_p, axis=-1)
+        cq = mx.sum(o_p * o_p, axis=-1) - r * r
+        disc = b * b - 4.0 * a * cq
+        side_valid = mx.logical_and(a > 1e-12, disc > 1e-12)
+        sq = mx.sqrt(mx.maximum(disc, 0.0))
+        st0 = (-b - sq) / (2.0 * a)
+        st1 = (-b + sq) / (2.0 * a)
+        # 侧面穿越点的径向外法向
+        p0 = o_p + st0[:, None] * d_p
+        p1 = o_p + st1[:, None] * d_p
+        n_s0 = p0 / r
+        n_s1 = p1 / r
+        if h is None:
+            inf = mx.full_like(st0, float("inf"))
+            ts = mx.stack(
+                [mx.where(side_valid, st0, inf), mx.where(side_valid, st1, inf)],
+                axis=-1,
+            )
+            v2 = mx.stack([side_valid, side_valid], axis=-1)
+            return ts, mx.stack([n_s0, n_s1], axis=1), v2
+        # 轴向区间: 端盖平面 s = ±h
+        denom = d_par[:, 0]
+        safe = mx.where(mx.abs(denom) > 1e-9, denom, mx.full_like(denom, 1e-9))
+        t_plus = (h - o_par[:, 0]) / safe
+        t_minus = (-h - o_par[:, 0]) / safe
+        at0 = mx.minimum(t_plus, t_minus)
+        at1 = mx.maximum(t_plus, t_minus)
+        # 凸体区间裁剪
+        enter = mx.maximum(st0, at0)
+        exit_ = mx.minimum(st1, at1)
+        valid = mx.logical_and(side_valid, enter < exit_)
+        # 进入/退出发生在侧面还是端盖: 外法向随之
+        enter_cap = at0 > st0
+        exit_cap = at1 < st1
+        # 进入端盖 = 先穿过的那个平面: t_plus < t_minus → +h 平面, 法向 +u
+        n_cap0 = mx.where((t_plus < t_minus)[:, None], u[None, :], -u[None, :])
+        n_cap1 = mx.where((t_plus > t_minus)[:, None], u[None, :], -u[None, :])
+        n0 = mx.where(enter_cap[:, None], n_cap0, n_s0)
+        n1 = mx.where(exit_cap[:, None], n_cap1, n_s1)
+        inf = mx.full_like(enter, float("inf"))
+        ts = mx.stack(
+            [mx.where(valid, enter, inf), mx.where(valid, exit_, inf)], axis=-1
+        )
+        return ts, mx.stack([n0, n1], axis=1), mx.stack([valid, valid], axis=-1)
+
+    def contains(self, params: tuple, p: mx.array) -> mx.array:
+        """点成员测试: 径向距离 < r 且 (有限时) 轴向 |s| ≤ h (任意前导维度)。"""
+        q = mx.array(params[0], dtype=mx.float32)
+        u = mx.array(params[1], dtype=mx.float32)
+        r = params[2]
+        h = params[3]
+        rel = p - q
+        s = mx.sum(rel * u, axis=-1, keepdims=True)
+        radial = rel - s * u
+        inside = mx.sum(radial * radial, axis=-1) < r * r
+        if h is not None:
+            inside = mx.logical_and(inside, mx.abs(s[..., 0]) <= h)
+        return inside

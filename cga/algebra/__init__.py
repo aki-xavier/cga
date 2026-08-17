@@ -25,6 +25,13 @@ from cga.algebra.plane import Plane
 from cga.algebra.point import Point
 from cga.algebra.point_pair import PointPair
 from cga.algebra.sphere import Sphere
+from cga.multivector import wrap_cpu_f64
+
+# 图元自有方法 (coords/from_dual/distance 等直接索引 .values) 在
+# float64 模式下同样需 CPU stream —— 与 Multivector/Motor 同一守卫。
+for _cls in (Point, PointPair, Line, Plane, Sphere, Circle, Cylinder):
+    wrap_cpu_f64(_cls)
+del _cls
 
 __all__ = [
     "Circle",

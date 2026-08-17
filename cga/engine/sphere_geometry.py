@@ -68,6 +68,37 @@ class SphereGeometry(GeometryBase):
         v = mx.acos(z) / math.pi
         return mx.stack([u, v], axis=-1)
 
+    # ── 实体协议 (CSG 叶子) ────────────────────────────────────────
+
+    def crossings(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """全部边界穿越: ts (N,2) 升序, ns (N,2,3) 外法向, valid (N,2)。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        r = params[1]
+        oc = o - c
+        b = 2.0 * mx.sum(oc * d, axis=-1)
+        cq = mx.sum(oc * oc, axis=-1) - r * r
+        disc = b * b - 4.0 * cq
+        valid = disc > 1e-12
+        sq = mx.sqrt(mx.maximum(disc, 0.0))
+        t1 = (-b - sq) / 2.0
+        t2 = (-b + sq) / 2.0
+        p1 = o + t1[:, None] * d
+        p2 = o + t2[:, None] * d
+        n1 = (p1 - c) / r
+        n2 = (p2 - c) / r
+        inf = mx.full_like(t1, float("inf"))
+        ts = mx.stack([mx.where(valid, t1, inf), mx.where(valid, t2, inf)], axis=-1)
+        return ts, mx.stack([n1, n2], axis=1), mx.stack([valid, valid], axis=-1)
+
+    def contains(self, params: tuple, p: mx.array) -> mx.array:
+        """点成员测试: |p − c| < r (任意前导维度)。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        r = params[1]
+        q = p - c
+        return mx.sum(q * q, axis=-1) < r * r
+
     def intersect_shadow(
         self, params: tuple, o: mx.array, d: mx.array
     ) -> tuple[mx.array, mx.array]:

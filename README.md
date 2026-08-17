@@ -20,9 +20,10 @@ OrbitControls 环绕一周:
 
 | 层 | 内容 |
 | --- | --- |
-| **CGA 核心** | 32 分量 multivector; 图元类 Point / PointPair / Line / Plane / Sphere / Circle / Cylinder; Motor versor 变换 (gp/reverse/log/velocity_bivector); exp/log/插值; 直接形式 `op` 与对偶形式 `ip` 两种关联判据 |
-| **渲染引擎** | three.js 命名 API: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshBasic·Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls; 场景对象 = CGA blade, 变换 = Motor 共轭 (相机也是 Motor); 超采样抗锯齿 `Renderer(aa=N)` (每像素 N×N 条亚像素射线平均) |
-| **MLX GPU** | 每像素向量化解析求交 (5 种隐式几何), 全分辨率单帧一次 kernel 批量; 相机空间 X 右 / Y 下 / Z 前 |
+| **CGA 核心** | 32 分量 multivector; 图元类 Point / PointPair / Line / Plane / Sphere / Circle / Cylinder; Motor versor 变换 (gp/reverse/log/velocity_bivector); exp/log/插值; 直接形式 `op` 与对偶形式 `ip` 两种关联判据; **float32/float64 双精度** (`set_precision`, 见下) |
+| **渲染引擎** | three.js 命名 API: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshBasic·Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls; 场景对象 = CGA blade, 变换 = Motor 共轭 (相机也是 Motor); 超采样抗锯齿 `Renderer(aa=N)` |
+| **复杂建模** | **CSG** (difference/intersection 递归真布尔, 实体协议 crossings/contains); **仿射扩展** (scale/mirror/shear 射线逆变换); **新图元** cone/torus/ellipsoid; **网格** (Möller–Trumbore 批量求交 + extrude/loft 构建器 + OBJ/glTF 互操作) |
+| **MLX GPU** | 每像素向量化解析求交, 全分辨率单帧一次 kernel 批量; 相机空间 X 右 / Y 下 / Z 前 |
 
 ## 快速开始
 
@@ -52,8 +53,11 @@ uv run python -m cga.scene_lang examples/orbit.cgs orbit.png 640 480 2
 ```
 
 支持变量/表达式/数学函数/for+range/module/if-else/echo;
-完整语法见 `cga/scene_lang/__init__.py` 文档头 (无 CSG 布尔/scale, 见范围声明)。
-阵列示例: `examples/grid.cgs` (module + for 的 3×3 球阵)。
+完整语法见 `cga/scene_lang/__init__.py` 文档头 (v3: scale/mirror/
+difference/intersection/cone/torus/ellipsoid/extrude/loft/mesh/precision)。
+阵列示例: `examples/grid.cgs` (module + for 的 3×3 球阵);
+领域示例: `examples/building.cgs` (CSG 开窗建筑) /
+`examples/mechanical.cgs` (CSG 钻孔装配)。
 
 ### 实时预览编辑器 (Rust/GPUI)
 
@@ -75,6 +79,59 @@ cd editor && cargo run    # 首次构建较久; 渲染服务自动拉起
 架构: 编辑器 (Rust) ↔ HTTP ↔ `cga.scene_lang.render_server` (Python/MLX
 常驻进程, 避免冷启动)。需要 Xcode 的 metal 工具链:
 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run`。
+
+## 复杂建模能力 (v3)
+
+面向建筑/机械参数化建模的完整工具链:
+
+**CSG 真布尔** — `difference()` / `intersection()` 递归组合 (任意嵌套):
+收集子树全部边界穿越点 → 逐段成员测试 (δ 双侧采样) → 最近实体表面。
+叶子 = 全部实体图元 (sphere/box/cylinder/cone/torus/ellipsoid/extrude/
+loft/mesh 与 plane 半空间 —— 半空间交 = 剖切视图)。机械装配体的
+钻孔/沉头孔/键槽由此解锁:
+
+![CSG 球减三向方孔](docs/csg.png)
+
+**建筑: CSG 开窗 + 纹理** — `examples/building.cgs`: 参数化板式办公楼
+(层数/开间/进深全参数), 砖墙用 `difference()` 开真窗洞,
+`material(map=...)` 贴砖纹 (box 立方体投影 UV):
+
+![参数化建筑](docs/building.png)
+
+**机械: CSG 钻孔装配** — `examples/mechanical.cgs`: 法兰螺栓节圆阵列
+真钻孔 + 中心孔、沉头锥孔、环面垫圈、花纹板贴图、径向齿阵列
+(rotate+translate 的 Motor 复合):
+
+![机械装配体](docs/mechanical.png)
+
+**新图元** — cone (凸体区间裁剪) / torus (Durand-Kerner 复数迭代解射线
+四次方程) / ellipsoid (= 仿射缩放球, 零新求交数学)。三者非 CGA blade,
+经射线逆变换接入 (如实标注)。
+
+**仿射扩展** — `Object3D.linear` (3x3): scale/mirror/shear 经
+AffineGeometry 射线逆变换 (非 versor 可达; 法向走逆置变换, det<0
+镜像自动正确)。CGS 里 `scale(s)` / `mirror(axis=...)` 修饰符,
+上下文为全 4x4 仿射, 几何落点 Newton 极分解为 motor·linear,
+rotate 与 scale/mirror 任意嵌套顺序均正确。
+
+**网格与互操作** — MeshGeometry (Möller–Trumbore 分块批量求交, 平坦
+法向, 无 BVH 如实标注); `cga.modeling` 的 extrude (耳切凹轮廓三角化)
+与 loft (等点数多截面); `cga.mesh_io` 纯 stdlib OBJ 与 glTF/GLB 读写
+(节点变换/层级/材质色)。
+
+**精度** — `set_precision("float64")` (或 CGS `precision("float64");`):
+代数核心 (multivector/motor/图元) 切到 CPU float64 —— 远原点 conformal
+抵消从 ~1e-4 压到 ~1e-13 相对量级, 场景坐标可远超 ±20 (实测 x=±400
+渲染与原点渲染逐像素差 ≤1/255); 渲染内核仍 float32 (参数进相机空间后
+near-origin)。Metal 无 float64: Multivector/Motor/图元的全部方法经
+`wrap_cpu_f64` 守卫自动切 CPU stream, 调用方透明。
+
+**运动学** — `demo_kinematics.py` (`.venv/bin/python demo_kinematics.py`):
+齿轮副 (16:8 齿数比 → 角速度比精确 −1:2)、曲柄滑块 (连杆 pose 每帧由
+两端点轴角转子解算)、螺旋轨迹 `M(s) = M₀·exp(s·log(M₀⁻¹M₁))` ——
+全部 Motor 直写, 无矩阵分解/四元数换算层:
+
+![运动学 demo](docs/kinematics.gif)
 
 ## 场景代码
 
@@ -176,15 +233,25 @@ motor 给出 —— 无矩阵分解、无位置/四元数换算层。
 
 ![变换与几何同构](docs/advantage_c.png)
 
-## 范围声明 (v1 与 three.js 的差距)
+## 范围声明 (与 three.js 的差距)
 
-如实标注, 见 `cga/engine.py` 顶部注释:
+如实标注, 见 `cga/engine/__init__.py` 顶部注释:
 
-- 无阴影 / 纹理 / 后处理 / tonemap; 颜色线性 I/O, 不做 sRGB 编码。
-- Object3D 无 scale: motor 是刚体变换, 尺寸全走 geometry 参数。
+- 阴影: 每光源一条遮挡射线 (硬阴影); 无软阴影。无后处理 / tonemap;
+  >1 高光硬截断。
+- 纹理: `material(map=...)` 解析 UV (v3 起); 无 mipmap/过滤控制。
+- scale/mirror: v3 起经 AffineGeometry 射线逆变换 (非 versor 可达的
+  仿射扩展); blade 语义 (meet/关联判据) 不适用于仿射形变后的图元。
+- CSG: 相切/共面退化配置依赖 δ=1e-4 双侧采样 (间距 < 2δ 可能漏翻转);
+  CSG 节点单材质; circle 非实体不能作叶子。
+- cone/torus/ellipsoid/网格非 CGA blade, 经射线逆变换接入。
+- 网格: 暴力 O(N·F) 无 BVH (定位中小网格); 平坦法向; 无纹理坐标;
+  glTF 导入暂限单 primitive; 无 IFC/STEP (B-rep 内核超出范围, 交换
+  格式走网格)。
 - 无限平面 / 圆柱无面片裁剪; 相机在柱内等退化情形按内核处理。
-- float32: blade 共轭在 float32 下进行, 场景坐标宜控制在 ±20 内 (远原点
-  conformal 抵消是本包已知限制)。
+- 精度: 默认 float32 (blade 共轭场景坐标宜 ±20); `set_precision`
+  ("float64") 后代数核心走 CPU float64, 坐标可远超 ±20 (渲染内核仍
+  float32)。
 - 无 envMap/IBL: 高 metalness 材质会显黑 (three.js 同样问题), demo 因此压低金属度。
 
 ## 机器人领域潜在应用
@@ -263,23 +330,30 @@ Motor 是 SE(3) 的 versor 表示, 本包已有 `exp` / `log` / `velocity_bivect
 ```text
 cga/
   multivector.py   32 分量多重向量, 代数运算 (gp/ip/op/dual/meet/norm/...);
-                   积表/掩码/基向量全是类属性
+                   积表/掩码/基向量全是类属性; DTYPE 精度开关 + wrap_cpu_f64
   algebra/         图元类与距离 (point/line/plane/sphere/cylinder/circle, 每类一文件)
   motors.py        Motor: 刚体变换 versor, exp/log/插值/速度提取
   engine/          three.js 风格渲染引擎 (MLX 批量光线追踪, 每类一文件):
-                   scene/mesh/camera/renderer + 5 种几何 + 材质 + 灯光
+                   scene/mesh/camera/renderer + 5 种 blade 几何 + 材质 + 灯光
+                   + affine_geometry (scale/mirror 射线逆变换, 极分解)
+                   + csg (递归布尔) + cone/torus/ellipsoid/trimesh 图元
+  modeling/        网格构建器: 耳切三角化 + extrude + loft (纯数据变换)
+  mesh_io/         OBJ / glTF/GLB 读写 (纯 stdlib, 无第三方依赖)
   render/          逆渲染: 图元场景 → 2D 深度/颜色 (PrimitiveRenderer)
   scene_lang/      CGS 场景语言 (OpenSCAD 风格, Lexer + SceneLoader + 渲染服务)
 tests/           pytest 测试套件 (checks.py 共享断言 + test_* 每类一文件)
 editor/            cgs-editor (Rust/GPUI): .cgs 实时预览编辑器 (左代码右渲染)
+examples/          .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
 demo_engine.py     轨道动画 demo (OrbitDemo) → PNG 帧 + GIF
 demo_advantage.py  优势渲染 demo (AdvantageDemo) → 三张独立图
+demo_kinematics.py 运动学 demo (齿轮副/曲柄滑块/螺旋插值) → GIF
 ```
 
 ## 质量
 
-- `uv run pytest`: 50 项测试全过 (代数恒等式 / 图元关联判据 / versor 往返 /
-  exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染与 Whitted 管线定量, 见 `tests/`)。
+- `uv run pytest`: 106 项测试全过 (代数恒等式 / 图元关联判据 / versor 往返 /
+  exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染与 Whitted 管线定量 / CSG 区间
+  布尔 / 仿射 / 新图元 / 网格与互操作 / CGS v3, 见 `tests/`)。
 - ruff (E/F/I/UP) 与 pyright (strict) 零告警。
 
 ## License

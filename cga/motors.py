@@ -18,7 +18,7 @@ import math
 import mlx.core as mx
 
 from cga.algebra import Point
-from cga.multivector import Multivector
+from cga.multivector import Multivector, wrap_cpu_f64
 
 
 class Motor(Multivector):
@@ -81,7 +81,7 @@ class Motor(Multivector):
         s = math.cos(half_angle)
         sf = math.sin(half_angle)
 
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         vals[0] = s  # cos(θ/2)
         vals[6] = -sf * az  # e12: -nz
         vals[7] = sf * ay  # e13: +ny  (since -ny*e31 = +ny*e13)
@@ -110,7 +110,7 @@ class Motor(Multivector):
     def from_matrix(cls, R, t) -> Motor:
         """由 3x3 旋转矩阵与平移向量构造: M = T(t)·R,
         保证 Motor.from_matrix(R, t).to_matrix() == [R|t]。"""
-        tv = tuple(float(x) for x in mx.array(t, dtype=mx.float32))
+        tv = tuple(float(x) for x in mx.array(t, dtype=Multivector.DTYPE))
         return cls.wrap(
             cls.translator(tv).gp(cls.from_quaternion(cls.matrix_to_quaternion(R)))
         )
@@ -133,8 +133,8 @@ class Motor(Multivector):
         wx, wy, wz = float(vals[10]), -float(vals[7]), float(vals[6])  # e23,e31,e12
         vx, vy, vz = float(vals[9]), float(vals[12]), float(vals[14])  # e_i∧e∞
 
-        w_bar = mx.array([2.0 * wx, 2.0 * wy, 2.0 * wz], dtype=mx.float32)
-        v_bar = mx.array([2.0 * vx, 2.0 * vy, 2.0 * vz], dtype=mx.float32)
+        w_bar = mx.array([2.0 * wx, 2.0 * wy, 2.0 * wz], dtype=Multivector.DTYPE)
+        v_bar = mx.array([2.0 * vx, 2.0 * vy, 2.0 * vz], dtype=Multivector.DTYPE)
 
         theta = float(mx.sqrt((w_bar * w_bar).sum()))
         v_norm = float(mx.sqrt((v_bar * v_bar).sum()))
@@ -156,7 +156,7 @@ class Motor(Multivector):
                 [bz, 0.0, -bx],
                 [-by, bx, 0.0],
             ],
-            dtype=mx.float32,
+            dtype=Multivector.DTYPE,
         )
         WW = mx.matmul(W, W, stream=mx.cpu)  # CPU stream: GPU matmul 降精度
         theta2 = theta * theta
@@ -190,7 +190,7 @@ class Motor(Multivector):
         纯平移 (幂零) 还会整体归零。结果分量约定为半 twist:
         Bv = ½(ω̄_bivector + v̄∧e∞), 与 dM/dt = −½·V·M 一致。
         """
-        T = mx.array(self.to_matrix(), dtype=mx.float32)
+        T = mx.array(self.to_matrix(), dtype=Multivector.DTYPE)
         R = T[:3, :3]
         t = T[:3, 3]
 
@@ -210,7 +210,7 @@ class Motor(Multivector):
 
         if theta < 1e-9:
             # 纯平移: v̄ = t
-            w_bar = mx.zeros(3, dtype=mx.float32)
+            w_bar = mx.zeros(3, dtype=Multivector.DTYPE)
             v_bar = t
         else:
             sin_theta = math.sin(theta)
@@ -234,7 +234,7 @@ class Motor(Multivector):
                 else:
                     axis_l[0] = math.copysign(axis_l[0], R_l[0][2])
                     axis_l[1] = math.copysign(axis_l[1], R_l[1][2])
-                w_bar = mx.array(axis_l, dtype=mx.float32) * theta
+                w_bar = mx.array(axis_l, dtype=Multivector.DTYPE) * theta
 
             # SO(3) 左雅可比的逆: v̄ = V̄⁻¹·t
             bx, by, bz = float(w_bar[0]), float(w_bar[1]), float(w_bar[2])
@@ -244,7 +244,7 @@ class Motor(Multivector):
                     [bz, 0.0, -bx],
                     [-by, bx, 0.0],
                 ],
-                dtype=mx.float32,
+                dtype=Multivector.DTYPE,
             )
             wx2 = mx.matmul(wxm, wxm, stream=mx.cpu)
             theta2 = theta * theta
@@ -320,7 +320,7 @@ class Motor(Multivector):
         wx, wy, wz = angular
         vx_val, vy_val, vz_val = linear
 
-        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=mx.float32)
+        vals = mx.zeros(Multivector.NUM_COMPONENTS, dtype=Multivector.DTYPE)
         # 角速度部分 (二重向量):
         vals[6] = wz  # e12
         vals[7] = -wy  # e13 (from ωy*e31 = -ωy*e13)
@@ -367,7 +367,7 @@ class Motor(Multivector):
     @staticmethod
     def matrix_to_quaternion(matrix) -> tuple[float, float, float, float]:
         """3x3 旋转矩阵 → (w, x, y, z) 四元数。"""
-        m = mx.array(matrix, dtype=mx.float32)
+        m = mx.array(matrix, dtype=Multivector.DTYPE)
         if m.ndim == 1 and m.size == 9:
             m = m.reshape(3, 3)
         trace = float(mx.diagonal(m).sum())
@@ -402,3 +402,6 @@ class Motor(Multivector):
             float(m[1, 2] + m[2, 1]) / s,
             0.25 * s,
         )
+
+
+wrap_cpu_f64(Motor)  # float64 模式下 Motor 自有方法同样走 CPU stream

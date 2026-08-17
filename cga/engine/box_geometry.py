@@ -1,7 +1,7 @@
 import mlx.core as mx
 
 from cga.algebra import Point
-from cga.engine.geometry_base import GeometryBase
+from cga.engine.geometry_base import GeometryBase, vecmat
 from cga.engine.vec3 import Vec3
 from cga.motors import Motor
 from cga.multivector import Multivector
@@ -127,3 +127,56 @@ class BoxGeometry(GeometryBase):
         inside_hit = mx.logical_and(valid, t_entry <= 1e-6)
         t = mx.where(mx.logical_and(valid, ~inside_hit), t_entry, t_exit)
         return t, valid
+
+    # ── 实体协议 (CSG 叶子) ────────────────────────────────────────
+
+    def crossings(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """全部边界穿越: ts (N,2), ns (N,2,3) 相机空间外法向, valid (N,2)。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        axes = params[1]
+        half = params[2]
+        oc = o - c
+        ax = [mx.array(a, dtype=mx.float32) for a in axes]
+        op = mx.stack([mx.sum(oc * a, axis=-1) for a in ax], axis=-1)
+        dp = mx.stack([mx.sum(d * a, axis=-1) for a in ax], axis=-1)
+        inv = 1.0 / dp
+        half_a = mx.array(half, dtype=mx.float32)
+        t0 = -inv * (op + half_a)
+        t1 = -inv * (op - half_a)
+        tmin = mx.minimum(t0, t1)
+        tmax = mx.maximum(t0, t1)
+        t_entry = mx.max(tmin, axis=-1)
+        t_exit = mx.min(tmax, axis=-1)
+        valid = t_entry < t_exit
+        i_e = mx.argmax(tmin, axis=-1)
+        i_x = mx.argmin(tmax, axis=-1)
+        eye = mx.eye(3, dtype=mx.float32)
+        dp_e = mx.take_along_axis(dp, i_e[:, None], axis=-1)
+        dp_x = mx.take_along_axis(dp, i_x[:, None], axis=-1)
+        # 盒框架外法向: 进入面 −sign(dp)·e_i, 退出面 +sign(dp)·e_i
+        n_e = mx.take(eye, i_e, axis=0) * (-mx.sign(dp_e))
+        n_x = mx.take(eye, i_x, axis=0) * mx.sign(dp_x)
+        # 盒框架 → 相机空间: n_cam = Σ n_box_i · axes_i
+        rot = mx.stack(ax, axis=0)  # (3,3) 行 = 盒轴
+        n_e = vecmat(n_e, rot)
+        n_x = vecmat(n_x, rot)
+        inf = mx.full_like(t_entry, float("inf"))
+        ts = mx.stack(
+            [mx.where(valid, t_entry, inf), mx.where(valid, t_exit, inf)], axis=-1
+        )
+        return ts, mx.stack([n_e, n_x], axis=1), mx.stack([valid, valid], axis=-1)
+
+    def contains(self, params: tuple, p: mx.array) -> mx.array:
+        """点成员测试: 盒框架逐轴 |q_i| ≤ half_i (任意前导维度)。"""
+        c = mx.array(params[0], dtype=mx.float32)
+        axes = params[1]
+        half = params[2]
+        q = p - c
+        inside = mx.ones(q.shape[:-1], dtype=mx.bool_)
+        for i in range(3):
+            a = mx.array(axes[i], dtype=mx.float32)
+            qi = mx.sum(q * a, axis=-1)
+            inside = mx.logical_and(inside, mx.abs(qi) <= half[i])
+        return inside

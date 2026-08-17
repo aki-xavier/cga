@@ -1,6 +1,51 @@
+from typing import Protocol, runtime_checkable
+
 import mlx.core as mx
 
 from cga.motors import Motor
+
+
+def vecmat(v: mx.array, m: mx.array) -> mx.array:
+    """(…,3) 行向量 × (3,3) 矩阵 → (…,3), 广播-求和实现。
+
+    不用 mx.matmul: 其 GPU float32 路径 (Metal GEMM) 小矩阵降精度到
+    ~bfloat16 (1.0001 → 1.0, 误差 1e-4 级), 坐标/法向变换不可用;
+    逐元素乘 + 求和保持全精度 (motors.py 的 3x3 matmul 走 CPU stream,
+    不受影响)。
+    """
+    return mx.sum(v[..., :, None] * m, axis=-2)
+
+
+@runtime_checkable
+class Solid(Protocol):
+    """实体协议 (CSG 叶子): 几何接口 + 边界穿越点 + 点成员测试。
+
+    实体图元 (sphere/box/cylinder/cone/torus/ellipsoid/plane 半空间/
+    网格/affine 包装/CSG 节点) 隐式实现; circle 圆盘非实体 (无 crossings,
+    isinstance 校验为 False)。
+    """
+
+    def to_camera(self, motor: Motor) -> tuple:
+        """见 GeometryBase.to_camera。"""
+        ...
+
+    def uv_at(self, params: tuple, p: mx.array, n: mx.array) -> mx.array:
+        """见 GeometryBase.uv_at。"""
+        ...
+
+    def bounds_camera(self, params: tuple) -> tuple[tuple, tuple] | None:
+        """见 GeometryBase.bounds_camera。"""
+        ...
+
+    def crossings(
+        self, params: tuple, o: mx.array, d: mx.array
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """全部边界穿越: ts (N,K) 升序, ns (N,K,3) 外法向, valid (N,K)。"""
+        ...
+
+    def contains(self, params: tuple, p: mx.array) -> mx.array:
+        """点成员测试 (任意前导维度) → bool 数组。"""
+        ...
 
 
 class GeometryBase:

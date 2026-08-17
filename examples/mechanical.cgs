@@ -1,0 +1,94 @@
+// 机械装配体 v2: CSG 钻孔 + 环面垫圈 + 沉头孔 + 径向齿阵列
+// 验证点: difference() 真布尔 (法兰螺栓孔/中心孔/沉头孔),
+//         torus/cone 新图元, rotate+translate 径向阵列 (Motor 复合)
+// 注: cylinder/cone/torus 局部轴 = +Z, 竖直放置需 rotate(axis=[1,0,0], angle=-pi/2)
+
+background(color=0x2B3138);
+camera(fov=45, position=[7.5, 6.5, 9.5], target=[0, 1.8, 0]);
+
+module post(r, h) {   // 竖直圆柱 (局部 +Z → 全局 +Y)
+  rotate(axis=[1, 0, 0], angle=-pi / 2) cylinder(r=r, h=h);
+}
+
+// ---- 法兰盘: 8 螺栓孔 + 中心孔 (真 CSG 钻孔) ----
+// difference 子节点共享法兰局部系: 盘用 post() 放平 (轴+Y), 孔轴同为 +Y
+module flange() {
+  material(color=0x9BA1A6, roughness=0.35, metalness=0.75)
+  difference() {
+    post(2.6, 0.5);
+    for (i = [0:7]) {
+      rotate(axis=[0, 1, 0], angle=i * 2 * pi / 8)
+        translate([2.0, 0, 0]) post(0.16, 2.0);
+    }
+    post(0.58, 2.0);
+  }
+}
+
+// ---- 螺栓 (杆 + 六角头近似), 圆周阵列 ----
+module bolt_circle(n, radius, y, bolt_r, bolt_h) {
+  for (i = [0:n - 1]) {
+    rotate(axis=[0, 1, 0], angle=i * 2 * pi / n)
+      translate([radius, y, 0]) {
+        material(color=0x6E747A, roughness=0.4, metalness=0.7) post(bolt_r, bolt_h);
+        translate([0, bolt_h / 2 + 0.09, 0])
+          material(color=0x6E747A, roughness=0.4, metalness=0.7)
+          box(s=[bolt_r * 3.2, 0.18, bolt_r * 3.2]);
+      }
+  }
+}
+
+// ---- 齿轮: 轮毂 + 径向齿 ----
+module gear(y, r_hub, r_teeth, n_teeth, thick) {
+  translate([0, y, 0])
+    material(color=0xC8A24A, roughness=0.3, metalness=0.8) post(r_hub, thick);
+  for (i = [0:n_teeth - 1]) {
+    rotate(axis=[0, 1, 0], angle=i * 2 * pi / n_teeth)
+      translate([r_hub + (r_teeth - r_hub) / 2, y, 0])
+        material(color=0xC8A24A, roughness=0.3, metalness=0.8)
+        box(s=[r_teeth - r_hub + 0.12, thick, 0.22]);
+  }
+}
+
+// ---- 底座板: 4 角沉头孔 (cone 作 CSG 减体) ----
+module base_plate() {
+  material(color=0x4A4F54, roughness=0.5, metalness=0.6, map="assets/treadplate.png")
+  difference() {
+    box(s=[7.0, 0.3, 7.0]);
+    for (i = [0:3]) {
+      rotate(axis=[0, 1, 0], angle=i * pi / 2 + pi / 4)
+        translate([2.9, 0, 0])
+        rotate(axis=[1, 0, 0], angle=pi / 2)   // 锥尖朝下 (+Z→−Y)
+        cone(r=0.32, h=0.35);
+    }
+  }
+}
+
+// ---- 装配 ----
+translate([0, 0.15, 0]) base_plate();
+translate([0, 0.55, 0]) flange();
+bolt_circle(8, 2.0, 0.55, 0.13, 0.7);
+
+translate([0, 2.9, 0])
+  material(color=0x9BA1A6, roughness=0.3, metalness=0.8) post(0.55, 4.2);   // 主轴
+translate([0, 1.25, 0])
+  material(color=0x9BA1A6, roughness=0.3, metalness=0.8) post(0.85, 0.9);   // 轴肩
+
+gear(2.6, 1.15, 1.75, 16, 0.45);
+
+// 环面垫圈 (torus 平放) + 螺母
+translate([0, 4.45, 0]) rotate(axis=[1, 0, 0], angle=-pi / 2)
+  material(color=0x4A4F54, roughness=0.45, metalness=0.65) torus(R=0.72, r=0.16);
+translate([0, 4.85, 0])
+  material(color=0x6E747A, roughness=0.4, metalness=0.7)
+  box(s=[0.95, 0.5, 0.95]);
+
+// 平键
+translate([0.62, 3.6, 0])
+  material(color=0xC8A24A, roughness=0.35, metalness=0.75)
+  box(s=[0.18, 0.9, 0.18]);
+
+material(color=0x3A4046, roughness=0.9) plane(n=[0, 1, 0], d=0);
+
+directional_light(direction=[0.4, 1.0, 0.5], intensity=0.5);
+point_light(position=[-5, 6, 4], intensity=0.55);
+ambient_light(intensity=0.38);
