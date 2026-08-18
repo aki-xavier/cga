@@ -107,10 +107,10 @@ fn paeth(a int, b int, c int) int {
 
 // load_png_rgba decodes an 8-bit non-interlaced PNG (greyscale / RGB / RGBA /
 // greyscale+alpha) into RGBA bytes, returning (pixels, width, height).
-pub fn load_png_rgba(path string) ([]u8, int, int) {
-	data := os.read_bytes(path) or { panic('cannot read ${path}') }
+pub fn load_png_rgba(path string) !([]u8, int, int) {
+	data := os.read_bytes(path) or { return error('cannot read ${path}') }
 	if data.len < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 {
-		panic('${path} is not a PNG')
+		return error('${path} is not a PNG')
 	}
 	mut pos := 8
 	mut width := 0
@@ -139,19 +139,19 @@ pub fn load_png_rgba(path string) ([]u8, int, int) {
 		}
 	}
 	if bit_depth != 8 {
-		panic('only 8-bit PNG supported (got ${bit_depth})')
+		return error('only 8-bit PNG supported (got ${bit_depth})')
 	}
 	if interlace != 0 {
-		panic('interlaced PNG not supported')
+		return error('interlaced PNG not supported')
 	}
 	bpp := match color_type {
 		0 { 1 }
 		2 { 3 }
 		4 { 2 }
 		6 { 4 }
-		else { panic('unsupported PNG colour type ${color_type}') }
+		else { return error('unsupported PNG colour type ${color_type}') }
 	}
-	raw := zlib.decompress(idat) or { panic('PNG inflate failed: ${err}') }
+	raw := zlib.decompress(idat) or { return error('PNG inflate failed: ${err}') }
 	stride := width * bpp
 	mut img := []u8{len: height * stride}
 	for y in 0 .. height {

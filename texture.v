@@ -54,8 +54,8 @@ pub fn texture_from_rgba(rgba [][][]f64) Texture {
 }
 
 // texture_load loads a PNG and decodes it to linear RGBA.
-pub fn texture_load(path string) Texture {
-	rgba, w, h := load_png_rgba(path)
+pub fn texture_load(path string) !Texture {
+	rgba, w, h := load_png_rgba(path)!
 	mut flat := []f32{len: rgba.len}
 	for i, b in rgba {
 		flat[i] = f32(b) / 255.0

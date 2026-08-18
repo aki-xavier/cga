@@ -69,7 +69,7 @@ fn test_obj_roundtrip() {
 		[0.0, 0.0, 1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
 	save_obj('/tmp/cga_obj_roundtrip.obj', [ObjMesh{ vertices: verts, faces: faces }])
-	v2, f2 := load_obj('/tmp/cga_obj_roundtrip.obj')
+	v2, f2 := load_obj('/tmp/cga_obj_roundtrip.obj')!
 	assert v2.len == verts.len
 	assert f2.len == faces.len
 	for i in 0 .. verts.len {

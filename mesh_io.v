@@ -99,24 +99,24 @@ pub:
 	transform     [16]f64
 }
 
-fn resolve_obj_index(ref string, vertex_count int, lineno int) int {
+fn resolve_obj_index(ref string, vertex_count int, lineno int) !int {
 	if ref == '' {
-		panic('line ${lineno}: empty face vertex reference')
+		return error('line ${lineno}: empty face vertex reference')
 	}
-	raw := strconv.atoi(ref) or { panic('line ${lineno}: illegal vertex index "${ref}"') }
+	raw := strconv.atoi(ref) or { return error('line ${lineno}: illegal vertex index "${ref}"') }
 	if raw == 0 {
-		panic('line ${lineno}: OBJ indices are 1-based, 0 not allowed')
+		return error('line ${lineno}: OBJ indices are 1-based, 0 not allowed')
 	}
 	idx := if raw < 0 { vertex_count + raw } else { raw - 1 }
 	if idx < 0 || idx >= vertex_count {
-		panic('line ${lineno}: vertex index ${raw} out of range (${vertex_count} vertices)')
+		return error('line ${lineno}: vertex index ${raw} out of range (${vertex_count} vertices)')
 	}
 	return idx
 }
 
 // load_obj parses a Wavefront OBJ file (v / f lines only).
-pub fn load_obj(path string) ([][3]f64, [][3]int) {
-	text := os.read_file(path) or { panic('cannot read ${path}') }
+pub fn load_obj(path string) !([][3]f64, [][3]int) {
+	text := os.read_file(path) or { return error('cannot read ${path}') }
 	mut vertices := [][3]f64{}
 	mut faces := [][3]int{}
 	for lineno, raw_line in text.split_into_lines() {
@@ -132,20 +132,20 @@ pub fn load_obj(path string) ([][3]f64, [][3]int) {
 		fields := parts[1..]
 		if keyword == 'v' {
 			if fields.len < 3 {
-				panic('line ${lineno + 1}: v needs at least 3 coordinates')
+				return error('line ${lineno + 1}: v needs at least 3 coordinates')
 			}
-			x := strconv.atof64(fields[0]) or { panic('bad coordinate') }
-			y := strconv.atof64(fields[1]) or { panic('bad coordinate') }
-			z := strconv.atof64(fields[2]) or { panic('bad coordinate') }
+			x := strconv.atof64(fields[0]) or { return error('bad coordinate') }
+			y := strconv.atof64(fields[1]) or { return error('bad coordinate') }
+			z := strconv.atof64(fields[2]) or { return error('bad coordinate') }
 			vertices << [x, y, z]!
 		} else if keyword == 'f' {
 			mut indices := []int{}
 			for tok in fields {
 				ref := tok.all_before('/')
-				indices << resolve_obj_index(ref, vertices.len, lineno + 1)
+				indices << resolve_obj_index(ref, vertices.len, lineno + 1)!
 			}
 			if indices.len < 3 {
-				panic('line ${lineno + 1}: face with < 3 vertices')
+				return error('line ${lineno + 1}: face with < 3 vertices')
 			}
 			for i in 1 .. indices.len - 1 {
 				faces << [indices[0], indices[i], indices[i + 1]]!

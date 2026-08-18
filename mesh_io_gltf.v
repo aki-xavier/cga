@@ -328,29 +328,29 @@ pub fn gltf_to_geometry(outs []GltfMeshOut) Geometry {
 // resolve_gltf_buffer returns the bytes for one glTF buffer.  `uri` may be empty
 // (GLB embedded BIN chunk), a data URI (base64), or a path relative to the
 // containing .gltf file.
-fn resolve_gltf_buffer(path string, uri string, embedded []u8) []u8 {
+fn resolve_gltf_buffer(path string, uri string, embedded []u8) ![]u8 {
 	if uri == '' {
 		return embedded
 	}
 	if uri.starts_with('data:') {
-		comma := uri.index(',') or { panic('malformed data URI in glTF buffer') }
+		comma := uri.index(',') or { return error('malformed data URI in glTF buffer') }
 		return base64.decode(uri[comma + 1..])
 	}
 	dir := os.dir(path)
 	full := if dir == '' || dir == '.' { uri } else { dir + '/' + uri }
-	return os.read_bytes(full) or { panic('cannot read glTF buffer ${full}') }
+	return os.read_bytes(full) or { return error('cannot read glTF buffer ${full}') }
 }
 
 // load_gltf reads a .glb (binary) or .gltf (JSON) file and returns
 // [(vertices, faces, world_transform)].
-pub fn load_gltf(path string) []GltfMeshOut {
-	data := os.read_bytes(path) or { panic('cannot read ${path}') }
+pub fn load_gltf(path string) ![]GltfMeshOut {
+	data := os.read_bytes(path) or { return error('cannot read ${path}') }
 	mut json_text := ''
 	mut bin_chunk := []u8{}
 	if data.len >= 4 && binary.little_endian_u32(data) == 0x46546C67 {
 		// GLB binary container: 12-byte header + JSON + optional BIN chunks.
 		if binary.little_endian_u32_at(data, 4) != 2 {
-			panic('${path}: only glTF 2.0 supported')
+			return error('${path}: only glTF 2.0 supported')
 		}
 		mut offset := 12
 		for offset + 8 <= data.len {
@@ -369,7 +369,7 @@ pub fn load_gltf(path string) []GltfMeshOut {
 		json_text = data.bytestr()
 	}
 	gltf := json2.decode[GltfRoot](json_text, json2.DecoderOptions{}) or {
-		panic('bad glTF JSON: ${err.msg()}')
+		return error('bad glTF JSON: ${err.msg()}')
 	}
 	if gltf.scenes.len == 0 {
 		return []
@@ -377,7 +377,7 @@ pub fn load_gltf(path string) []GltfMeshOut {
 	// Resolve every buffer once (bufferView.buffer indexes into this list).
 	mut bins := [][]u8{len: gltf.buffers.len}
 	for i, buf in gltf.buffers {
-		bins[i] = resolve_gltf_buffer(path, buf.uri, bin_chunk)
+		bins[i] = resolve_gltf_buffer(path, buf.uri, bin_chunk)!
 	}
 	scene_idx := if gltf.scene < gltf.scenes.len { gltf.scene } else { 0 }
 	mut out := []GltfMeshOut{}

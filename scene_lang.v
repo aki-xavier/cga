@@ -1596,11 +1596,18 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 					}
 					full := l.asset_root + '/' + p
 					if full.ends_with('.obj') {
-						v, f := load_obj(full)
+						v, f := load_obj(full) or {
+							l.fail(err.msg())
+							return sphere_geometry(1.0)
+						}
 						return trimesh_geometry(v, f)
 					}
 					if full.ends_with('.glb') || full.ends_with('.gltf') {
-						return gltf_to_geometry(load_gltf(full))
+						loaded := load_gltf(full) or {
+							l.fail(err.msg())
+							return sphere_geometry(1.0)
+						}
+						return gltf_to_geometry(loaded)
 					}
 					l.fail('CGS line ${line}: unsupported mesh file "${p}" (use .obj/.glb/.gltf)')
 					return sphere_geometry(1.0)
@@ -1683,7 +1690,10 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 						l.fail('CGS material.map needs an explicit asset_root')
 						return basic_material(color_hex(0xFFFFFF), 1.0)
 					}
-					tex = texture_load(l.asset_root + '/' + v)
+					tex = texture_load(l.asset_root + '/' + v) or {
+					l.fail(err.msg())
+					return basic_material(color_hex(0xFFFFFF), 1.0)
+				}
 				}
 			}
 			else {

@@ -13,7 +13,7 @@ fn test_glb_roundtrip() {
 			faces:    faces
 		},
 	])
-	out := load_gltf('/tmp/cga_roundtrip.glb')
+	out := load_gltf('/tmp/cga_roundtrip.glb')!
 	assert out.len == 1
 	assert out[0].vertices.len == 4
 	assert out[0].faces.len == 4
@@ -49,7 +49,7 @@ fn test_gltf_json_roundtrip() {
 	os.write_file('/tmp/cga_tetra.bin', bin.bytestr()) or { panic('write bin') }
 	json_str := '{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"mode":4}]}],"buffers":[{"uri":"cga_tetra.bin","byteLength":${bin.len}}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":${pos_len}},{"buffer":0,"byteOffset":${pos_len},"byteLength":${idx_len}}],"accessors":[{"bufferView":0,"componentType":5126,"count":${verts.len},"type":"VEC3"},{"bufferView":1,"componentType":5125,"count":${faces.len * 3},"type":"SCALAR"}]}'
 	os.write_file('/tmp/cga_tetra.gltf', json_str) or { panic('write gltf') }
-	out := load_gltf('/tmp/cga_tetra.gltf')
+	out := load_gltf('/tmp/cga_tetra.gltf')!
 	assert out.len == 1
 	assert out[0].vertices.len == 4
 	assert out[0].faces.len == 4
@@ -81,7 +81,7 @@ fn test_glb_color_material() {
 	assert data.bytestr().contains('baseColorFactor')
 	assert data.bytestr().contains('0.8,0.2,0.2')
 	// and the file must still load back
-	out := load_gltf('/tmp/cga_color.glb')
+	out := load_gltf('/tmp/cga_color.glb')!
 	assert out.len == 1
 	assert out[0].vertices.len == 4
 	os.rm('/tmp/cga_color.glb') or {}

@@ -166,7 +166,7 @@ fn test_obj_roundtrip() {
 	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,
 		[0.0, 2.0]!], 1.0)
 	save_obj('/tmp/cga_em_obj.obj', [ObjMesh{ vertices: verts, faces: faces }])
-	v2, f2 := load_obj('/tmp/cga_em_obj.obj')
+	v2, f2 := load_obj('/tmp/cga_em_obj.obj')!
 	assert v2.len == verts.len
 	assert f2.len == faces.len
 	for i in 0 .. verts.len {
@@ -192,7 +192,7 @@ fn test_glb_roundtrip_with_transform() {
 			color:     [0.8, 0.2, 0.2]!
 		},
 	])
-	loaded := load_gltf('/tmp/cga_em.glb')
+	loaded := load_gltf('/tmp/cga_em.glb')!
 	assert loaded.len == 1
 	assert loaded[0].faces.len == faces.len
 	for i in 0 .. faces.len {

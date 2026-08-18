@@ -24,7 +24,7 @@ fn main() {
 	])
 
 	// reload and render the loaded mesh(es) (world transform baked in)
-	loaded := cga.load_gltf('examples/artifacts/demo_gltf.glb')
+	loaded := cga.load_gltf('examples/artifacts/demo_gltf.glb')!
 	mut scene := cga.scene(none)
 	scene.add_mesh(cga.mesh(cga.MeshParams{
 		geometry:       cga.gltf_to_geometry(loaded)

@@ -4,10 +4,10 @@ import mlx
 import os
 
 fn test_png_decode_and_sample() {
-	rgba, w, h := load_png_rgba('examples/assets/brick.png')
+	rgba, w, h := load_png_rgba('examples/assets/brick.png')!
 	assert w == 256 && h == 256
 	assert rgba.len == 256 * 256 * 4
-	tex := texture_load('examples/assets/brick.png')
+	tex := texture_load('examples/assets/brick.png')!
 	assert tex.width == 256 && tex.height == 256
 	uv := mlx.array_f32([f32(0.5), 0.5], [1, 2])
 	s := tex.sample(uv, .repeat, .repeat)
@@ -17,7 +17,7 @@ fn test_png_decode_and_sample() {
 }
 
 fn test_textured_render() {
-	tex := texture_load('examples/assets/brick.png')
+	tex := texture_load('examples/assets/brick.png')!
 	mut sc := scene(none)
 	mut mat := standard_material(MaterialParams{
 		color:      color_hex(0xFFFFFF)
