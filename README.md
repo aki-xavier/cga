@@ -18,7 +18,7 @@
 重新生成（直接由 V 合成 `examples/artifacts/orbit.gif`，不落 PNG，见 `gif.v`）：
 
 ```bash
-VMODULES=$(pwd)/.vmodules v -gc boehm run examples/demo_engine.v 90
+v -gc boehm run examples/demo_engine.v 90
 ```
 
 ## 特性
@@ -33,12 +33,13 @@ VMODULES=$(pwd)/.vmodules v -gc boehm run examples/demo_engine.v 90
 ## 快速开始
 
 要求：V 0.5.x、macOS Apple Silicon、`mlx-c`（Homebrew）与 `mlx-v` 仓库
-（见 `~/code/mlx-v/README.md`）。本项目的 `mlx` / `cga` 模块经项目内
-`.vmodules/` 解析，所有构建都设置 `VMODULES`。
+（见 `~/code/mlx-v/README.md`）。`mlx` / `cga` 模块经 V 默认模块路径
+`~/.vmodules` 解析，一次性链好符号链接后**无需任何环境变量**：
 
 ```bash
-# 一次性：把 mlx-v 链进本项目的模块路径（cga -> .. 已就绪）
-ln -s ~/code/mlx-v .vmodules/mlx
+# 一次性：把两个模块链进 V 的默认模块路径
+ln -s ~/code/mlx-v ~/.vmodules/mlx
+ln -s "$(pwd)"     ~/.vmodules/cga
 
 make test     # 跑全部 19 个测试文件（-no-memory-limit，见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.ppm
@@ -46,8 +47,7 @@ make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
 ```
 
-直接调用 `v` 时需带同一环境变量，例如
-`VMODULES=$(pwd)/.vmodules v -no-memory-limit test .`。构建可执行文件
+直接调用 `v` 即可（例如 `v -no-memory-limit test .`）。构建可执行文件
 （demo / `render_cgs` / `render_smoke`）请加 `-gc boehm`：V 0.5.2 默认的
 `boehm_full_opt` GC 生成的 closure 代码在 macOS 上编译失败，会触发一次
 虚假的「C compiler bug report」与回退重编译（产物仍正确，但很吵）。
@@ -70,7 +70,7 @@ camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 ellipsoid/extrude/loft/mesh。渲染：
 
 ```bash
-VMODULES=$(pwd)/.vmodules v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
+v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 ```
 
 支持变量/表达式/数学函数/for+range/module/if-else/echo，以及 CSG
@@ -93,7 +93,7 @@ HTTP 400 并在界面提示（Result 式解析，不会崩掉服务）。
   `POST /params`（提取可拖动参数 JSON）、`GET /health`。
 
 ```bash
-make editor     # 或：VMODULES=$(pwd)/.vmodules v -gc boehm run editor/
+make editor     # 或：v -gc boehm run editor/
 # open http://127.0.0.1:8123
 ```
 
@@ -306,7 +306,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   artifacts/tests/         测试金样图（cgs_orbit / cone / cyclide / ...）
 ```
 
-演示 CLI（`VMODULES=$(pwd)/.vmodules v -gc boehm run examples/<name>.v`）：
+演示 CLI（`v -gc boehm run examples/<name>.v`）：
 
 - `demo_engine.v` —— 轨道动画 → `orbit.gif`
 - `demo_advantage.v` —— 无多边形/无限几何/变换同构三面板 → `advantage_{a,b,c}.png`
