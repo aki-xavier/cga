@@ -8,6 +8,7 @@ module cga
 // background, CSG (difference/intersection/union), and
 // extrude/loft/mesh(.obj/.glb/.gltf).
 import math
+import strconv
 
 // TokenKind classifies a lexed token.
 enum TokenKind {
@@ -122,7 +123,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 		} else if ch >= `0` && ch <= `9` {
 			if text[i..].starts_with('0x') || text[i..].starts_with('0X') {
 				mut j := i + 2
-				for j < n && is_hex_digit(text[j]) {
+				for j < n && text[j].is_hex_digit() {
 					j++
 				}
 				if j == i + 2 {
@@ -130,7 +131,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				}
 				toks << CgsToken{
 					kind: .number
-					num:  f64(strconv_hex(text[i + 2..j]))
+					num:  f64(strconv.parse_uint(text[i + 2..j], 16, 32) or { 0 })
 					line: ln
 				}
 				i = j
@@ -166,25 +167,6 @@ pub fn cgs_lex(text string) ![]CgsToken {
 		}
 	}
 	return toks
-}
-
-fn is_hex_digit(c u8) bool {
-	return (c >= `0` && c <= `9`) || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`)
-}
-
-fn strconv_hex(s string) int {
-	mut v := 0
-	for c in s {
-		d := if c >= `0` && c <= `9` {
-			int(c - `0`)
-		} else if c >= `a` && c <= `f` {
-			int(c - `a`) + 10
-		} else {
-			int(c - `A`) + 10
-		}
-		v = v * 16 + d
-	}
-	return v
 }
 
 // CgsValue is the dynamic value of the language (number / bool / string / list).
