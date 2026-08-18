@@ -146,14 +146,14 @@ pub fn light_to_camera(l Light, m Multivector) Light {
 pub fn light_direction_at(l Light, p mlx.Array) (mlx.Array, mlx.Array) {
 	match l.kind {
 		.directional {
-			ld := arr3v(l.direction).broadcast_to(p.shape())
-			return ld, fs(l.intensity)
+			ld := mlx.arr3v(l.direction).broadcast_to(p.shape())
+			return ld, mlx.fs(l.intensity)
 		}
 		.point {
-			lv := arr3v(l.position).broadcast_to(p.shape()).subtract(p)
+			lv := mlx.arr3v(l.position).broadcast_to(p.shape()).subtract(p)
 			dist2 := lv.multiply(lv).sum_axis(-1, true)
 			ld := lv.divide(dist2.sqrt())
-			atten := s_rdiv(s_add(s_div(dist2, 8.0), 1.0), l.intensity)
+			atten := mlx.s_rdiv(mlx.s_add(mlx.s_div(dist2, 8.0), 1.0), l.intensity)
 			return ld, atten
 		}
 		.ambient {
@@ -166,10 +166,10 @@ pub fn light_direction_at(l Light, p mlx.Array) (mlx.Array, mlx.Array) {
 // directional lights, a (N,) array for point lights).
 pub fn light_far(l Light, p mlx.Array) mlx.Array {
 	if l.kind == .point {
-		lv := arr3v(l.position).broadcast_to(p.shape()).subtract(p)
+		lv := mlx.arr3v(l.position).broadcast_to(p.shape()).subtract(p)
 		return lv.multiply(lv).sum_axis(-1, false).sqrt()
 	}
-	return fs(math.inf(1))
+	return mlx.fs(math.inf(1))
 }
 
 // --- batched shading --------------------------------------------------------
@@ -181,18 +181,18 @@ pub fn shade_batched(emissive mlx.Array, diff mlx.Array, spec mlx.Array, expo ml
 	v := d.negative()
 	mut out := emissive
 	if amb := ambient {
-		ambc := s_mul(arr3v(amb.color.rgb()), amb.intensity)
+		ambc := mlx.s_mul(mlx.arr3v(amb.color.rgb()), amb.intensity)
 		out = out.add(ambc.broadcast_to(p.shape()).multiply(diff))
 	}
-	ndv := s_max(n.multiply(v).sum_axis(-1, true), 0.0)
+	ndv := mlx.s_max(n.multiply(v).sum_axis(-1, true), 0.0)
 	for i, light in lights {
-		lc := arr3v(light.color.rgb())
+		lc := mlx.arr3v(light.color.rgb())
 		ld, atten := light_direction_at(light, p)
-		nl := s_max(n.multiply(ld).sum_axis(-1, true), 0.0)
+		nl := mlx.s_max(n.multiply(ld).sum_axis(-1, true), 0.0)
 		mut h := ld.add(v)
 		hn := h.multiply(h).sum_axis(-1, true).sqrt()
-		h = h.divide(s_max(hn, 1e-12))
-		spec_t := s_max(n.multiply(h).sum_axis(-1, true), 0.0).power(expo)
+		h = h.divide(mlx.s_max(hn, 1e-12))
+		spec_t := mlx.s_max(n.multiply(h).sum_axis(-1, true), 0.0).power(expo)
 		mut contrib :=
 			lc.multiply(atten).multiply(diff.multiply(nl).add(spec.multiply(spec_t).multiply(ndv)))
 		if vis.len > 0 {

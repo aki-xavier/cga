@@ -19,7 +19,7 @@ fn test_render_masked_sphere_plane() {
 	prims := [render_primitive(.plane, pl, 1, 1.0), render_primitive(.sphere, sp, 2, 1.0)]
 	yy := mlx.arange(0, h, 1, .float32).expand_dims(1).broadcast_to([h, w])
 	xx := mlx.arange(0, w, 1, .float32).expand_dims(0).broadcast_to([h, w])
-	disc := s_le(s_sub(xx, 64.0).square().add(s_sub(yy, 48.0).square()), 40.0 * 40.0)
+	disc := mlx.s_le(mlx.s_sub(xx, 64.0).square().add(mlx.s_sub(yy, 48.0).square()), 40.0 * 40.0)
 	regions := mlx.where(disc, mlx.int_scalar(2), mlx.int_scalar(1))
 	out := render_scene(prims, fx, fy, cx, cy, h, w, regions, none, 0.1, 1e4)
 	assert math.abs(depth_at(out.depth, 48, 64, w) - 2.5) < 1e-3

@@ -78,11 +78,11 @@ pub fn affine_from_motor(m Multivector, linear Mat3) (Mat3, [3]f64, [16]f64) {
 // o_l = o·a_inv3^T + t_inv, d_l = d·a_inv3^T, returns unit d and |d_l|.
 pub fn affine_to_local(a_inv3 Mat3, t_inv [3]f64, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, mlx.Array) {
 	a3t := mat3_transpose(a_inv3)
-	t3 := arr3v(t_inv)
+	t3 := mlx.arr3v(t_inv)
 	o_l := vecmat(o, a3t).add(t3)
 	d_l := vecmat(d, a3t)
 	mut lam := d_l.multiply(d_l).sum_axis(-1, true).sqrt()
-	lam = mlx.where(s_gt(lam, 1e-12), lam, mlx.ones_like(lam))
+	lam = mlx.where(mlx.s_gt(lam, 1e-12), lam, mlx.ones_like(lam))
 	return o_l, d_l.divide(lam), lam
 }
 
@@ -90,7 +90,7 @@ pub fn affine_to_local(a_inv3 Mat3, t_inv [3]f64, o mlx.Array, d mlx.Array) (mlx
 pub fn affine_normal(n_l mlx.Array, a_inv3 Mat3) mlx.Array {
 	n := vecmat(n_l, a_inv3)
 	norm := n.multiply(n).sum_axis(-1, true).sqrt()
-	return n.divide(mlx.where(s_gt(norm, 1e-12), norm, mlx.ones_like(norm)))
+	return n.divide(mlx.where(mlx.s_gt(norm, 1e-12), norm, mlx.ones_like(norm)))
 }
 
 // decompose_rigid factors a 4x4 affine into (motor, linear): A = motor . linear

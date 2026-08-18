@@ -80,11 +80,11 @@ fn csg_nearest_surface(p CsgParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Ar
 	ns_s := ns.take_along_axis(order.expand_dims(2), 1)
 	ts_f := mlx.where(ts_s.isfinite(), ts_s, mlx.zeros_like(ts_s))
 	delta := 1e-4
-	p_plus := o.expand_dims(1).add(s_add(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
-	p_minus := o.expand_dims(1).add(s_sub(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
+	p_plus := o.expand_dims(1).add(mlx.s_add(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
+	p_minus := o.expand_dims(1).add(mlx.s_sub(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
 	in_plus := csg_contains(p, p_plus)
 	in_minus := csg_contains(p, p_minus)
-	flip := in_plus.not_equal(in_minus).logical_and(s_gt(ts_s, 1e-6)).logical_and(ts_s.isfinite())
+	flip := in_plus.not_equal(in_minus).logical_and(mlx.s_gt(ts_s, 1e-6)).logical_and(ts_s.isfinite())
 	cand := mlx.where(flip, ts_s, inf_like(ts_s))
 	t := cand.min_axis(1, false)
 	mask := t.isfinite()
@@ -109,8 +109,8 @@ pub fn csg_uv(p CsgParams, pos mlx.Array, n mlx.Array) mlx.Array {
 	mut found := mlx.zeros([pos.shape()[0]], .bool_)
 	delta := 1e-4
 	for cp in p.children {
-		bp := pos.add(s_mul(n, delta))
-		bm := pos.subtract(s_mul(n, delta))
+		bp := pos.add(mlx.s_mul(n, delta))
+		bm := pos.subtract(mlx.s_mul(n, delta))
 		boundary := geom_contains(cp, bp).not_equal(geom_contains(cp, bm))
 		pick := boundary.logical_and(found.logical_not())
 		uv_c := geom_uv(cp, pos, n)

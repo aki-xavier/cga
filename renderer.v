@@ -38,8 +38,8 @@ fn (mut r Renderer) build_rays() mlx.Array {
 	fx := fy * cam.aspect
 	cx := f64(ww - 1) / 2.0
 	cy := f64(hh - 1) / 2.0
-	u0 := s_div(s_sub(mlx.arange(0, ww, 1, .float32), cx), fx)
-	v0 := s_div(s_sub(mlx.arange(0, hh, 1, .float32), cy), fy)
+	u0 := mlx.s_div(mlx.s_sub(mlx.arange(0, ww, 1, .float32), cx), fx)
+	v0 := mlx.s_div(mlx.s_sub(mlx.arange(0, hh, 1, .float32), cy), fy)
 	z := mlx.ones([hh, ww], .float32)
 	mut dirs := []mlx.Array{}
 	k := r.aa
@@ -49,8 +49,8 @@ fn (mut r Renderer) build_rays() mlx.Array {
 			off_v := (f64(j) + 0.5) / f64(k) - 0.5
 			du := off_u / fx
 			dv := off_v / fy
-			u := s_add(u0, du).expand_dims(0).broadcast_to([hh, ww])
-			v := s_add(v0, dv).expand_dims(1).broadcast_to([hh, ww])
+			u := mlx.s_add(u0, du).expand_dims(0).broadcast_to([hh, ww])
+			v := mlx.s_add(v0, dv).expand_dims(1).broadcast_to([hh, ww])
 			dirs << mlx.stack([u, v, z], -1)
 		}
 	}
@@ -65,7 +65,7 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 	rays := r.build_rays()
 	o := mlx.zeros_like(rays)
 	n_rays := o.shape()[0]
-	bg := arr3v(scene.background.rgb()).broadcast_to([n_rays, 3])
+	bg := mlx.arr3v(scene.background.rgb()).broadcast_to([n_rays, 3])
 	mut lit := []Light{}
 	mut ambient := ?Light(none)
 	for light in scene.lights {
@@ -82,11 +82,11 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 	if s > 1 {
 		rgb = rgb.reshape([s, n_rays / s, 3]).mean_axis(0, false)
 	}
-	rgb = s_clip(rgb, 0.0, 1.0)
-	rgb = mlx.where(s_le(rgb, 0.0031308), s_mul(rgb, 12.92), s_sub(s_mul(s_pow(rgb, 1.0 / 2.4),
+	rgb = mlx.s_clip(rgb, 0.0, 1.0)
+	rgb = mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb, 1.0 / 2.4),
 		1.055), 0.055))
 	mut rgba := mlx.concatenate([rgb, mlx.ones([n_rays / s, 1], .float32)], -1)
-	rgba = s_clip(s_add(s_mul(rgba, 255.0), 0.5), 0.0, 255.0)
+	rgba = mlx.s_clip(mlx.s_add(mlx.s_mul(rgba, 255.0), 0.5), 0.0, 255.0)
 	return rgba.reshape([r.height, r.width, 4])
 }
 
@@ -95,42 +95,42 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) mlx.Array {
 	hit, t, n0, local, op, ior, abso := r.nearest(scene, o, d, lit, ambient, depth == 0)
 	mut cos_i := d.multiply(n0).sum_axis(-1, true).negative()
-	n := mlx.where(s_lt(cos_i, 0.0), n0.negative(), n0)
+	n := mlx.where(mlx.s_lt(cos_i, 0.0), n0.negative(), n0)
 	cos_i = cos_i.abs()
 	mut result := mlx.where(hit.expand_dims(1), local, bg)
 	if depth < r.max_depth {
-		need := hit.logical_and(s_lt(op, 1.0))
+		need := hit.logical_and(mlx.s_lt(op, 1.0))
 		if need.sum().item_f32() > 0.0 {
 			eta := mlx.where(in_medium.expand_dims(1), ior.expand_dims(1),
-				fs(1.0).divide(ior.expand_dims(1)))
+				mlx.fs(1.0).divide(ior.expand_dims(1)))
 			k :=
-				fs(1.0).subtract(eta.multiply(eta).multiply(fs(1.0).subtract(cos_i.multiply(cos_i))))
-			cos_t := s_max(k, 0.0).sqrt()
-			g := fs(1.0).divide(eta)
-			rs := cos_i.subtract(g.multiply(cos_t)).divide(s_max(cos_i.add(g.multiply(cos_t)),
+				mlx.fs(1.0).subtract(eta.multiply(eta).multiply(mlx.fs(1.0).subtract(cos_i.multiply(cos_i))))
+			cos_t := mlx.s_max(k, 0.0).sqrt()
+			g := mlx.fs(1.0).divide(eta)
+			rs := cos_i.subtract(g.multiply(cos_t)).divide(mlx.s_max(cos_i.add(g.multiply(cos_t)),
 				1e-12))
-			rp := cos_t.subtract(g.multiply(cos_i)).divide(s_max(cos_t.add(g.multiply(cos_i)),
+			rp := cos_t.subtract(g.multiply(cos_i)).divide(mlx.s_max(cos_t.add(g.multiply(cos_i)),
 				1e-12))
-			mut fres := s_mul(rs.multiply(rs).add(rp.multiply(rp)), 0.5)
-			fres = mlx.where(s_le(k, 0.0), mlx.ones_like(fres), fres)
+			mut fres := mlx.s_mul(rs.multiply(rs).add(rp.multiply(rp)), 0.5)
+			fres = mlx.where(mlx.s_le(k, 0.0), mlx.ones_like(fres), fres)
 			p := o.add(t.expand_dims(1).multiply(d))
-			d_r := d.add(n.multiply(s_mul(cos_i, 2.0)))
+			d_r := d.add(n.multiply(mlx.s_mul(cos_i, 2.0)))
 			d_t := d.multiply(eta).add(n.multiply(eta.multiply(cos_i).subtract(cos_t)))
 			entering := in_medium.logical_not()
-			sig_next := mlx.where(entering, abso, fs(0.0))
-			refl := r.trace(scene, p.add(s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
+			sig_next := mlx.where(entering, abso, mlx.fs(0.0))
+			refl := r.trace(scene, p.add(mlx.s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
 
 				depth + 1)
-			refr := r.trace(scene, p.subtract(s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
+			refr := r.trace(scene, p.subtract(mlx.s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
 				sig_next, depth + 1)
 			body :=
-				op.expand_dims(1).multiply(local).add(fs(1.0).subtract(op.expand_dims(1)).multiply(refr))
-			glass := fres.multiply(refl).add(fs(1.0).subtract(fres).multiply(body))
+				op.expand_dims(1).multiply(local).add(mlx.fs(1.0).subtract(op.expand_dims(1)).multiply(refr))
+			glass := fres.multiply(refl).add(mlx.fs(1.0).subtract(fres).multiply(body))
 			result = mlx.where(need.expand_dims(1), glass, result)
 		}
 	}
 	att := mlx.where(in_medium.logical_and(hit).expand_dims(1),
-		sigma.negative().multiply(t).expand_dims(1).exp(), fs(1.0))
+		sigma.negative().multiply(t).expand_dims(1).exp(), mlx.fs(1.0))
 	return result.multiply(att)
 }
 
@@ -173,9 +173,9 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		mut ior_arr := []mlx.Array{}
 		mut abso_arr := []mlx.Array{}
 		for obj in objs {
-			op_arr << fs(obj.material.opacity)
-			ior_arr << fs(obj.material.ior)
-			abso_arr << fs(obj.material.absorption)
+			op_arr << mlx.fs(obj.material.opacity)
+			ior_arr << mlx.fs(obj.material.ior)
+			abso_arr << mlx.fs(obj.material.absorption)
 		}
 		ops := mlx.stack(op_arr, 0)
 		iors := mlx.stack(ior_arr, 0)
@@ -185,10 +185,10 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		abso = absos.take_axis(best_idx, 0)
 	}
 	cos_i := d.multiply(best_n).sum_axis(-1, true).negative()
-	best_n = mlx.where(s_lt(cos_i, 0.0), best_n.negative(), best_n)
+	best_n = mlx.where(mlx.s_lt(cos_i, 0.0), best_n.negative(), best_n)
 	p := o.add(best_t.expand_dims(1).multiply(d))
 	// shadow rays
-	p_s := p.add(s_mul(best_n, 1e-3))
+	p_s := p.add(mlx.s_mul(best_n, 1e-3))
 	mut vis := []mlx.Array{}
 	for light in lit {
 		ld, _ := light_direction_at(light, p)
@@ -197,7 +197,7 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		for j, obj in objs {
 			st, m := geom_shadow(params_list[j], p_s, ld)
 			occ := if far.ndim() == 1 { m.logical_and(st.less(far)) } else { m }
-			v = v.multiply(mlx.where(occ, fs(1.0 - obj.material.opacity), fs(1.0)))
+			v = v.multiply(mlx.where(occ, mlx.fs(1.0 - obj.material.opacity), mlx.fs(1.0)))
 		}
 		vis << v
 	}
@@ -210,10 +210,10 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		mut expo_arr := []mlx.Array{}
 		for obj in objs {
 			em, diff, spec, expo := obj.material.shade_params()
-			em_arr << arr3v(em)
-			diff_arr << arr3v(diff)
-			spec_arr << arr3v(spec)
-			expo_arr << fs(expo)
+			em_arr << mlx.arr3v(em)
+			diff_arr << mlx.arr3v(diff)
+			spec_arr << mlx.arr3v(spec)
+			expo_arr << mlx.fs(expo)
 		}
 		emissive := mlx.stack(em_arr, 0).take_axis(best_idx, 0)
 		diff := mlx.stack(diff_arr, 0).take_axis(best_idx, 0)
