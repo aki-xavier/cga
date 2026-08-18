@@ -149,18 +149,18 @@ import cga
 
 mut scene := cga.scene(none)
 scene.add_mesh(cga.mesh(cga.plane_geometry([0.0, 1.0, 0.0]!, 0.0),
-	cga.standard_material(cga.color_hex(0xB0B0B0), 0.7, 0.0,
-	cga.color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!,
-	[0.0, 0.0, 1.0]!, 0.0, none))              // 地面: 对偶平面 blade (y=0)
+  cga.standard_material(cga.color_hex(0xB0B0B0), 0.7, 0.0,
+  cga.color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!,
+  [0.0, 0.0, 1.0]!, 0.0, none))              // 地面: 对偶平面 blade (y=0)
 scene.add_mesh(cga.mesh(cga.sphere_geometry(1.0),
-	cga.standard_material(cga.color_hex(0xC0392B), 0.25, 0.25,
-	cga.color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 1.0, 0.0]!,
-	[0.0, 0.0, 1.0]!, 0.0, none))              // 球: 对偶球 blade, 半径即尺寸
+  cga.standard_material(cga.color_hex(0xC0392B), 0.25, 0.25,
+  cga.color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 1.0, 0.0]!,
+  [0.0, 0.0, 1.0]!, 0.0, none))              // 球: 对偶球 blade, 半径即尺寸
 scene.add_light(cga.directional_light(cga.color_hex(0xFFFFFF), 0.38, [0.4, 1.0, 0.35]!))
 scene.add_light(cga.ambient_light(cga.color_hex(0xFFFFFF), 0.34))
 
 mut camera := cga.perspective_camera(50.0, 4.0 / 3.0, 0.1, 100.0,
-	[0.0, 2.4, 6.2]!, [0.0, 0.8, 0.0]!, [0.0, 1.0, 0.0]!)
+  [0.0, 2.4, 6.2]!, [0.0, 0.8, 0.0]!, [0.0, 1.0, 0.0]!)
 camera.look_at([0.0, 0.8, 0.0]!, none)
 
 mut renderer := cga.renderer(360, 270, 2, 3)

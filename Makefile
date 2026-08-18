@@ -11,7 +11,7 @@
 # parallel (the v3 compiler's default 2.3 GiB guard trips on the generated GP
 # table + 19 test files).
 test:
-	v -no-memory-limit test .
+	v -gc boehm -no-memory-limit test .
 
 # `-gc boehm` avoids V 0.5.2's default `boehm_full_opt` GC, whose generated
 # closure code fails to compile on macOS (emitting a spurious "C compiler bug
