@@ -13,8 +13,11 @@ VMODULES := $(CURDIR)/.vmodules
 test:
 	VMODULES=$(VMODULES) v -no-memory-limit test .
 
+# `-gc boehm` avoids V 0.5.2's default `boehm_full_opt` GC, whose generated
+# closure code fails to compile on macOS (emitting a spurious "C compiler bug
+# report" and a fallback rebuild).
 run:
-	VMODULES=$(VMODULES) v run examples/render_smoke.v
+	VMODULES=$(VMODULES) v -gc boehm run examples/render_smoke.v
 
 # The CGS editor web server (renders .cgs -> PNG at http://127.0.0.1:8123).
 editor:

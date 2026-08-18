@@ -22,18 +22,16 @@ bindings at `~/code/mlx-v`.
 | **Inverse rendering** | ✅ `render.v` — `PrimitiveRenderer.render_scene` (plane/sphere/cylinder blades → depth + RGB, motor + regions + alpha compositing) |
 | **CSG** | ✅ `csg.v` + `csg_node.v` — `crossings`/`contains` solid protocol + recursive `CsgGeometry` (union/intersection/difference) |
 | **scene_lang** | ✅ `scene_lang.v` — CGS lexer + single-pass parser/evaluator (translate/rotate/scale/mirror, for/if/echo/module, variables/expressions/math functions, primitives, lights, camera, material, precision, CSG with transformed children, extrude/loft/mesh(.obj/.glb/.gltf)) |
-| **Tests** | ✅ 16 files — `multivector_test.v`, `motors_test.v`, `algebra_test.v`, `modeling_test.v`, `engine_test.v`, `texture_test.v`, `render_test.v`, `csg_test.v`, `csg_contains_test.v`, `trimesh_test.v`, `scene_lang_test.v`, `scene_lang_v2_test.v`, `gltf_test.v`, `cyclide_test.v`, `extended_modeling_test.v`, `render_quantitative_test.v` (render smoke saves PNGs to `artifacts/tests/`) |
+| **Image I/O** | ✅ `image_io.v` — PNG read + write; `gif.v` — animated GIF89a encoder (median-cut palette + LZW, pure stdlib) |
+| **Tests** | ✅ 19 files — `multivector_test.v`, `motors_test.v`, `algebra_test.v`, `modeling_test.v`, `engine_test.v`, `texture_test.v`, `render_test.v`, `csg_test.v`, `csg_contains_test.v`, `trimesh_test.v`, `scene_lang_test.v`, `scene_lang_v2_test.v`, `gltf_test.v`, `cyclide_test.v`, `extended_modeling_test.v`, `render_quantitative_test.v`, `gif_test.v`, plus `editor/params_test.v` + `editor/highlight_test.v` (render smoke saves PNGs to `artifacts/tests/`) |
 
-**Not yet ported** (editor preview only):
-
-- `scene_lang/render_server.py` — the long-running HTTP preview backend for the
-  Rust editor (`POST /render` → PNG). No V equivalent; the V CLI
-  `examples/render_cgs.v` covers the CGS→PNG path. Port only if the editor is
-  migrated to a V backend.
+**Editor** — ported: `editor/` is a V `net.http` web editor (`server.v`/`params.v`/`highlight.v`/`web/index.html`), replacing the Rust gpui version. `POST /render` → PNG, `POST /params` → JSON.
 
 **Demos** — all ported and building: `examples/demo_engine.v`,
 `demo_advantage.v`, `demo_kinematics.v`, `demo_csg.v`, `demo_gltf.v`,
 `render_smoke.v`, `render_cgs.v`.
+`demo_engine.v` and `demo_kinematics.v` assemble their PNG frames into an
+animated `.gif` in V (`gif.v`).
 They render correctly but are slower than the Python reference (~3 s/frame vs
 ~30 ms) — the V renderer recurses full-frame for refraction and does not yet
 free MLX intermediate handles.

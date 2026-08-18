@@ -58,15 +58,17 @@ fn main() {
 	controls := cga.orbit_controls([0.0, 0.8, 0.0]!, 0.0, 0.42, 6.6)
 	mut renderer := cga.renderer(360, 270, 2, 3)
 
+	mut gif_frames := [][]u8{}
 	for i in 0 .. frames {
 		mut ctrl := controls
 		ctrl.azimuth = 2.0 * math.pi * f64(i) / f64(frames)
 		ctrl.elevation = 0.42 + 0.12 * math.sin(4.0 * math.pi * f64(i) / f64(frames))
 		ctrl.update(mut camera)
 		img := renderer.render(scene, camera)
-		p := '${out_dir}/frame_${i:03d}.png'
-		cga.save_frame_png(p, img)
+		gif_frames << cga.f32_rgba_to_u8(img.data_f32())
 		img.free()
-		println('frame ${i + 1}/${frames} saved ${p}')
+		println('frame ${i + 1}/${frames} rendered')
 	}
+	cga.save_gif('${out_dir}/orbit.gif', gif_frames, 360, 270, 3)
+	println('saved ${out_dir}/orbit.gif')
 }
