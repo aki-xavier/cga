@@ -9,10 +9,44 @@ module cga
 // extrude/loft/mesh(.obj/.glb/.gltf).
 import math
 
+// TokenKind classifies a lexed token.
+enum TokenKind {
+	ident
+	number
+	op
+	str
+	eof
+	lparen
+	rparen
+	lbracket
+	rbracket
+	lbrace
+	rbrace
+	comma
+	semi
+	assign
+}
+
+// punct_kind maps a single-character punctuation byte to its token kind.
+fn punct_kind(ch u8) TokenKind {
+	return match ch {
+		`(` { .lparen }
+		`)` { .rparen }
+		`[` { .lbracket }
+		`]` { .rbracket }
+		`{` { .lbrace }
+		`}` { .rbrace }
+		`,` { .comma }
+		`;` { .semi }
+		`=` { .assign }
+		else { .eof }
+	}
+}
+
 // CgsToken is one lexed token.
 pub struct CgsToken {
 pub:
-	kind string // ident | number | op | string | ( ) [ ] { } , ; = | eof
+	kind TokenKind
 	text string
 	num  f64
 	line int
@@ -37,21 +71,21 @@ pub fn cgs_lex(text string) ![]CgsToken {
 			}
 		} else if i + 1 < n && text[i..i + 2] in ['==', '!=', '<=', '>=', '&&', '||'] {
 			toks << CgsToken{
-				kind: 'op'
+				kind : .op
 				text: text[i..i + 2]
 				line: ln
 			}
 			i += 2
 		} else if ch in [`+`, `-`, `*`, `/`, `%`, `<`, `>`, `!`, `:`] {
 			toks << CgsToken{
-				kind: 'op'
+				kind : .op
 				text: ch.ascii_str()
 				line: ln
 			}
 			i++
 		} else if ch in [`[`, `]`, `{`, `}`, `,`, `;`, `=`, `(`, `)`] {
 			toks << CgsToken{
-				kind: ch.ascii_str()
+				kind: punct_kind(ch)
 				text: ch.ascii_str()
 				line: ln
 			}
@@ -69,7 +103,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				return error('CGS line ${ln}: unclosed string')
 			}
 			toks << CgsToken{
-				kind: 'string'
+				kind : .str
 				text: text[i + 1..j]
 				line: ln
 			}
@@ -80,7 +114,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				j++
 			}
 			toks << CgsToken{
-				kind: 'ident'
+				kind : .ident
 				text: text[i..j]
 				line: ln
 			}
@@ -95,7 +129,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 					return error('CGS line ${ln}: illegal hex colour')
 				}
 				toks << CgsToken{
-					kind: 'number'
+					kind : .number
 					num:  f64(strconv_hex(text[i + 2..j]))
 					line: ln
 				}
@@ -121,7 +155,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 					}
 				}
 				toks << CgsToken{
-					kind: 'number'
+					kind : .number
 					num:  text[i..j].f64()
 					line: ln
 				}
@@ -241,37 +275,74 @@ fn cgs_neg(v CgsValue, line int) !CgsValue {
 	}
 }
 
-fn cgs_scalar_arith(op string, a f64, b f64) f64 {
-	match op {
-		'+' { return a + b }
-		'-' { return a - b }
-		'*' { return a * b }
-		'/' { return a / b }
-		'%' { return math.fmod(a, b) }
+// BinOp is a binary operator in a CGS expression.
+enum BinOp {
+	or_
+	and_
+	eq
+	ne
+	lt
+	le
+	gt
+	ge
+	add
+	sub
+	mul
+	div
+	mod_
+}
+
+// cgs_binop_from_text maps an operator token's text to a BinOp.
+fn cgs_binop_from_text(text string) ?BinOp {
+	return match text {
+		'||' { .or_ }
+		'&&' { .and_ }
+		'==' { .eq }
+		'!=' { .ne }
+		'<' { .lt }
+		'<=' { .le }
+		'>' { .gt }
+		'>=' { .ge }
+		'+' { .add }
+		'-' { .sub }
+		'*' { .mul }
+		'/' { .div }
+		'%' { .mod_ }
+		else { none }
+	}
+}
+
+fn cgs_scalar_arith(op BinOp, a f64, b f64) f64 {
+	return match op {
+		.add { a + b }
+		.sub { a - b }
+		.mul { a * b }
+		.div { a / b }
+		.mod_ { math.fmod(a, b) }
 		else { panic('bad op ${op}') }
 	}
 }
 
-fn cgs_binop(op string, a CgsValue, b CgsValue) !CgsValue {
-	if op == '==' {
+fn cgs_binop(op BinOp, a CgsValue, b CgsValue) !CgsValue {
+	if op == .eq {
 		return a == b
 	}
-	if op == '!=' {
+	if op == .ne {
 		return a != b
 	}
-	if op == '&&' {
+	if op == .and_ {
 		return cgs_truthy(a) && cgs_truthy(b)
 	}
-	if op == '||' {
+	if op == .or_ {
 		return cgs_truthy(a) || cgs_truthy(b)
 	}
-	if op in ['<', '<=', '>', '>='] {
+	if op in [.lt, .le, .gt, .ge] {
 		aa := cgs_num(a, 0, 'cmp')!
 		bb := cgs_num(b, 0, 'cmp')!
 		return match op {
-			'<' { aa < bb }
-			'<=' { aa <= bb }
-			'>' { aa > bb }
+			.lt { aa < bb }
+			.le { aa <= bb }
+			.gt { aa > bb }
 			else { aa >= bb }
 		}
 	}
@@ -485,7 +556,7 @@ pub fn cgs_load_result(text string, asset_root string) !(Scene, PerspectiveCamer
 fn (mut l SceneLoader) peek() CgsToken {
 	if l.pos >= l.toks.len {
 		return CgsToken{
-			kind: 'eof'
+			kind : .eof
 			line: 1
 		}
 	}
@@ -495,7 +566,7 @@ fn (mut l SceneLoader) peek() CgsToken {
 fn (mut l SceneLoader) peek1() CgsToken {
 	if l.pos + 1 >= l.toks.len {
 		return CgsToken{
-			kind: 'eof'
+			kind : .eof
 			line: 1
 		}
 	}
@@ -508,7 +579,7 @@ fn (mut l SceneLoader) take() CgsToken {
 	return t
 }
 
-fn (mut l SceneLoader) expect(sym string) {
+fn (mut l SceneLoader) expect(sym TokenKind) {
 	t := l.take()
 	if t.kind != sym {
 		l.fail('CGS line ${t.line}: expected ${sym}, got ${t.kind}')
@@ -536,16 +607,17 @@ fn (mut l SceneLoader) expr(scope map[string]CgsValue, min_prec int) CgsValue {
 	mut lhs := l.unary(scope)
 	for {
 		t := l.peek()
-		if t.kind != 'op' {
+		if t.kind != .op {
 			return lhs
 		}
-		prec := cgs_precedence(t.text)
+		op := cgs_binop_from_text(t.text) or { return lhs }
+		prec := cgs_precedence(op)
 		if prec < min_prec {
 			return lhs
 		}
 		l.take()
 		rhs := l.expr(scope, prec + 1)
-		lhs = cgs_binop(t.text, lhs, rhs) or {
+		lhs = cgs_binop(op, lhs, rhs) or {
 			l.fail(err.msg())
 			return f64(0.0)
 		}
@@ -553,22 +625,14 @@ fn (mut l SceneLoader) expr(scope map[string]CgsValue, min_prec int) CgsValue {
 	return lhs
 }
 
-fn cgs_precedence(op string) int {
+fn cgs_precedence(op BinOp) int {
 	return match op {
-		'||' { 1 }
-		'&&' { 2 }
-		'==' { 3 }
-		'!=' { 3 }
-		'<' { 4 }
-		'<=' { 4 }
-		'>' { 4 }
-		'>=' { 4 }
-		'+' { 5 }
-		'-' { 5 }
-		'*' { 6 }
-		'/' { 6 }
-		'%' { 6 }
-		else { -1 }
+		.or_ { 1 }
+		.and_ { 2 }
+		.eq, .ne { 3 }
+		.lt, .le, .gt, .ge { 4 }
+		.add, .sub { 5 }
+		.mul, .div, .mod_ { 6 }
 	}
 }
 
@@ -577,14 +641,14 @@ fn (mut l SceneLoader) unary(scope map[string]CgsValue) CgsValue {
 		return f64(0.0)
 	}
 	t := l.peek()
-	if t.kind == 'op' && t.text == '-' {
+	if t.kind == .op && t.text == '-' {
 		l.take()
 		return cgs_neg(l.expr(scope, 7), t.line) or {
 			l.fail(err.msg())
 			return f64(0.0)
 		}
 	}
-	if t.kind == 'op' && t.text == '!' {
+	if t.kind == .op && t.text == '!' {
 		l.take()
 		return !cgs_truthy(l.expr(scope, 7))
 	}
@@ -596,35 +660,35 @@ fn (mut l SceneLoader) primary(scope map[string]CgsValue) CgsValue {
 		return f64(0.0)
 	}
 	t := l.take()
-	if t.kind == 'number' {
+	if t.kind == .number {
 		return t.num
 	}
-	if t.kind == '(' {
+	if t.kind == .lparen {
 		v := l.expr(scope, 1)
-		l.expect(')')
+		l.expect(.rparen)
 		return v
 	}
-	if t.kind == '[' {
+	if t.kind == .lbracket {
 		return l.list_literal(scope, t.line)
 	}
-	if t.kind == 'string' {
+	if t.kind == .str {
 		return t.text
 	}
-	if t.kind == 'ident' {
-		if l.peek().kind == '(' {
+	if t.kind == .ident {
+		if l.peek().kind == .lparen {
 			l.take()
 			mut args := []CgsValue{}
-			if l.peek().kind != ')' {
+			if l.peek().kind != .rparen {
 				for {
 					args << l.expr(scope, 1)
-					if l.peek().kind == ',' {
+					if l.peek().kind == .comma {
 						l.take()
 					} else {
 						break
 					}
 				}
 			}
-			l.expect(')')
+			l.expect(.rparen)
 			return cgs_call_fn(t.text, args, t.line) or {
 				l.fail(err.msg())
 				return f64(0.0)
@@ -651,7 +715,7 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 		return f64(0.0)
 	}
 	first := l.expr(scope, 1)
-	if l.peek().kind == 'op' && l.peek().text == ':' {
+	if l.peek().kind == .op && l.peek().text == ':' {
 		l.take()
 		second := l.expr(scope, 1)
 		mut step := 1.0
@@ -663,7 +727,7 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 			l.fail(err.msg())
 			return f64(0.0)
 		}
-		if l.peek().kind == 'op' && l.peek().text == ':' {
+		if l.peek().kind == .op && l.peek().text == ':' {
 			l.take()
 			third := l.expr(scope, 1)
 			start_v = cgs_num(first, line, 'range') or {
@@ -679,7 +743,7 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 				return f64(0.0)
 			}
 		}
-		l.expect(']')
+		l.expect(.rbracket)
 		if step == 0.0 {
 			l.fail('CGS line ${line}: range step must not be 0')
 			return f64(0.0)
@@ -700,11 +764,11 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 		return out
 	}
 	mut items := [first]
-	for l.peek().kind == ',' {
+	for l.peek().kind == .comma {
 		l.take()
 		items << l.expr(scope, 1)
 	}
-	l.expect(']')
+	l.expect(.rbracket)
 	return items
 }
 
@@ -715,15 +779,15 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	t := l.peek()
-	if t.kind == '{' {
-		l.expect('{')
-		for l.peek().kind != '}' && l.err == '' {
+	if t.kind == .lbrace {
+		l.expect(.lbrace)
+		for l.peek().kind != .rbrace && l.err == '' {
 			l.statement(ctx, mat, mut scope)
 		}
-		l.expect('}')
+		l.expect(.rbrace)
 		return
 	}
-	if t.kind == 'ident' {
+	if t.kind == .ident {
 		name := t.text
 		if name == 'module' {
 			l.module_def()
@@ -743,28 +807,29 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		}
 		if name == 'union' {
 			l.take()
-			l.expect('(')
-			l.expect(')')
+			l.expect(.lparen)
+			l.expect(.rparen)
 			l.body(ctx, mat, mut scope, t.line)
 			return
 		}
 		if name in ['difference', 'intersection'] {
 			l.take()
-			l.expect('(')
-			l.expect(')')
-			l.csg_block(name, ctx, mat, mut scope, t.line)
+			l.expect(.lparen)
+			l.expect(.rparen)
+			op := if name == 'difference' { CsgOp.difference } else { CsgOp.intersection }
+			l.csg_block(op, ctx, mat, mut scope, t.line)
 			return
 		}
-		if l.peek1().kind == '=' {
+		if l.peek1().kind == .assign {
 			l.take()
 			l.take()
 			scope[name] = l.expr(scope, 1)
-			l.expect(';')
+			l.expect(.semi)
 			return
 		}
 	}
 	l.take()
-	if t.kind != 'ident' {
+	if t.kind != .ident {
 		l.fail('CGS line ${t.line}: expected statement name, got ${t.kind}')
 		return
 	}
@@ -845,7 +910,7 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	if name == 'background' {
-		l.expect(';')
+		l.expect(.semi)
 		c := cgs_num(args['color'] or { f64(0.0) }, t.line, 'color') or {
 			l.fail(err.msg())
 			return
@@ -854,7 +919,7 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	if name == 'camera' {
-		l.expect(';')
+		l.expect(.semi)
 		fov := cgs_num(args['fov'] or { f64(0.0) }, t.line, 'fov') or {
 			l.fail(err.msg())
 			return
@@ -877,7 +942,7 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	if name == 'precision' {
-		l.expect(';')
+		l.expect(.semi)
 		m := args['mode'] or { f64(0.0) }
 		match m {
 			string {
@@ -894,11 +959,11 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		return
 	}
 	if name.ends_with('_light') {
-		l.expect(';')
+		l.expect(.semi)
 		l.add_light(name, args, t.line)
 		return
 	}
-	l.expect(';')
+	l.expect(.semi)
 	geo := l.build_geometry(name, args, t.line)
 	l.add_geometry(geo, ctx, mat)
 }
@@ -907,13 +972,13 @@ fn (mut l SceneLoader) body(ctx [16]f64, mat map[string]CgsValue, mut scope map[
 	if l.err != '' {
 		return
 	}
-	if l.peek().kind == '{' {
-		l.expect('{')
-		for l.peek().kind != '}' && l.err == '' {
+	if l.peek().kind == .lbrace {
+		l.expect(.lbrace)
+		for l.peek().kind != .rbrace && l.err == '' {
 			l.statement(ctx, mat, mut scope)
 		}
-		l.expect('}')
-	} else if l.peek().kind == ';' {
+		l.expect(.rbrace)
+	} else if l.peek().kind == .semi {
 		l.fail('CGS line ${line}: modifier missing target statement')
 	} else {
 		l.statement(ctx, mat, mut scope)
@@ -925,15 +990,15 @@ fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope 
 		return
 	}
 	l.take() // for
-	l.expect('(')
+	l.expect(.lparen)
 	vt := l.take()
-	if vt.kind != 'ident' || l.peek().kind != '=' {
+	if vt.kind != .ident || l.peek().kind != .assign {
 		l.fail('CGS line ${vt.line}: for needs (var = list)')
 		return
 	}
 	l.take()
 	values := l.expr(scope, 1)
-	l.expect(')')
+	l.expect(.rparen)
 	match values {
 		[]CgsValue {
 			body := l.capture_statement()
@@ -951,18 +1016,18 @@ fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope 
 
 fn (mut l SceneLoader) if_stmt(ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue) {
 	l.take() // if
-	l.expect('(')
+	l.expect(.lparen)
 	cond := cgs_truthy(l.expr(scope, 1))
-	l.expect(')')
+	l.expect(.rparen)
 	if cond {
 		l.statement(ctx, mat, mut scope)
-		if l.peek().kind == 'ident' && l.peek().text == 'else' {
+		if l.peek().kind == .ident && l.peek().text == 'else' {
 			l.take()
 			l.skip_statement()
 		}
 	} else {
 		l.skip_statement()
-		if l.peek().kind == 'ident' && l.peek().text == 'else' {
+		if l.peek().kind == .ident && l.peek().text == 'else' {
 			l.take()
 			l.statement(ctx, mat, mut scope)
 		}
@@ -971,20 +1036,20 @@ fn (mut l SceneLoader) if_stmt(ctx [16]f64, mat map[string]CgsValue, mut scope m
 
 fn (mut l SceneLoader) echo_stmt(scope map[string]CgsValue) {
 	l.take() // echo
-	l.expect('(')
+	l.expect(.lparen)
 	mut vals := []CgsValue{}
-	if l.peek().kind != ')' {
+	if l.peek().kind != .rparen {
 		for {
 			vals << l.expr(scope, 1)
-			if l.peek().kind == ',' {
+			if l.peek().kind == .comma {
 				l.take()
 			} else {
 				break
 			}
 		}
 	}
-	l.expect(')')
-	l.expect(';')
+	l.expect(.rparen)
+	l.expect(.semi)
 	print('ECHO:')
 	for v in vals {
 		print(' ${v}')
@@ -998,40 +1063,40 @@ fn (mut l SceneLoader) module_def() {
 	}
 	l.take() // module
 	nt := l.take()
-	if nt.kind != 'ident' {
+	if nt.kind != .ident {
 		l.fail('CGS line ${nt.line}: module missing name')
 		return
 	}
-	l.expect('(')
-	if l.peek().kind != ')' {
+	l.expect(.lparen)
+	if l.peek().kind != .rparen {
 		for {
 			pt := l.take()
-			if pt.kind != 'ident' {
+			if pt.kind != .ident {
 				l.fail('CGS line ${pt.line}: module parameter must be a name')
 				return
 			}
-			if l.peek().kind == '=' {
+			if l.peek().kind == .assign {
 				l.take()
 				l.params[nt.text + ':' + pt.text] = l.capture_expr()
 			} else {
 				l.params[nt.text + ':' + pt.text] = []CgsToken{}
 			}
-			if l.peek().kind == ',' {
+			if l.peek().kind == .comma {
 				l.take()
 			} else {
 				break
 			}
 		}
 	}
-	l.expect(')')
-	l.expect('{')
+	l.expect(.rparen)
+	l.expect(.lbrace)
 	start := l.pos
 	mut depth := 1
 	for depth > 0 {
 		k := l.take().kind
-		if k == '{' {
+		if k == .lbrace {
 			depth++
-		} else if k == '}' {
+		} else if k == .rbrace {
 			depth--
 		}
 	}
@@ -1039,7 +1104,7 @@ fn (mut l SceneLoader) module_def() {
 }
 
 fn (mut l SceneLoader) module_call(name string, pos []CgsValue, kw map[string]CgsValue, ctx [16]f64, mat map[string]CgsValue, line int) {
-	l.expect(';')
+	l.expect(.semi)
 	// formal parameter names are tracked separately; simplified: only positional + keyword by name
 	body := l.modules[name]
 	mut scope := map[string]CgsValue{}
@@ -1080,16 +1145,16 @@ fn (mut l SceneLoader) capture_expr() []CgsToken {
 	mut depth := 0
 	for {
 		t := l.peek()
-		if t.kind == 'eof' {
+		if t.kind == .eof {
 			l.fail('CGS line ${t.line}: unclosed expression')
 			return l.toks[start..l.pos]
 		}
-		if depth == 0 && t.kind in [',', ')', ';'] {
+		if depth == 0 && t.kind in [.comma, .rparen, .semi] {
 			break
 		}
-		if t.kind in ['(', '['] {
+		if t.kind in [.lparen, .lbracket] {
 			depth++
-		} else if t.kind in [')', ']'] {
+		} else if t.kind in [.rparen, .rbracket] {
 			depth--
 		}
 		l.take()
@@ -1116,40 +1181,40 @@ fn (mut l SceneLoader) capture_statement() []CgsToken {
 
 fn (mut l SceneLoader) skip_statement() {
 	t := l.peek()
-	if t.kind == '{' {
+	if t.kind == .lbrace {
 		l.take()
 		mut depth := 1
 		for depth > 0 {
 			k := l.take().kind
-			if k == '{' {
+			if k == .lbrace {
 				depth++
-			} else if k == '}' {
+			} else if k == .rbrace {
 				depth--
 			}
 		}
 		return
 	}
-	if t.kind == 'ident' && t.text == 'if' {
+	if t.kind == .ident && t.text == 'if' {
 		l.take()
 		l.skip_parens()
 		l.skip_statement()
-		if l.peek().kind == 'ident' && l.peek().text == 'else' {
+		if l.peek().kind == .ident && l.peek().text == 'else' {
 			l.take()
 			l.skip_statement()
 		}
 		return
 	}
-	if t.kind == 'ident' && t.text in ['for', 'union', 'echo'] {
+	if t.kind == .ident && t.text in ['for', 'union', 'echo'] {
 		l.take()
 		l.skip_parens()
 		if t.text == 'echo' {
-			l.expect(';')
+			l.expect(.semi)
 		} else {
 			l.skip_statement()
 		}
 		return
 	}
-	if t.kind == 'ident' && t.text == 'module' {
+	if t.kind == .ident && t.text == 'module' {
 		l.take()
 		l.take()
 		l.skip_parens()
@@ -1157,35 +1222,35 @@ fn (mut l SceneLoader) skip_statement() {
 		return
 	}
 	l.take()
-	if l.peek().kind == '=' {
-		for l.take().kind != ';' {
+	if l.peek().kind == .assign {
+		for l.take().kind != .semi {
 		}
 		return
 	}
-	if l.peek().kind == '(' {
+	if l.peek().kind == .lparen {
 		l.skip_parens()
 		nxt := l.peek().kind
-		if nxt == '{' {
+		if nxt == .lbrace {
 			l.skip_statement()
-		} else if nxt == ';' {
+		} else if nxt == .semi {
 			l.take()
 		} else {
 			l.skip_statement()
 		}
 		return
 	}
-	for l.take().kind != ';' {
+	for l.take().kind != .semi {
 	}
 }
 
 fn (mut l SceneLoader) skip_parens() {
-	l.expect('(')
+	l.expect(.lparen)
 	mut depth := 1
 	for depth > 0 {
 		k := l.take().kind
-		if k == '(' {
+		if k == .lparen {
 			depth++
-		} else if k == ')' {
+		} else if k == .rparen {
 			depth--
 		}
 	}
@@ -1194,27 +1259,27 @@ fn (mut l SceneLoader) skip_parens() {
 // --- construction -----------------------------------------------------------
 
 fn (mut l SceneLoader) call_args(scope map[string]CgsValue) ([]CgsValue, map[string]CgsValue) {
-	l.expect('(')
+	l.expect(.lparen)
 	mut pos := []CgsValue{}
 	mut kw := map[string]CgsValue{}
-	if l.peek().kind != ')' {
+	if l.peek().kind != .rparen {
 		for {
 			t := l.peek()
-			if t.kind == 'ident' && l.peek1().kind == '=' {
+			if t.kind == .ident && l.peek1().kind == .assign {
 				l.take()
 				l.take()
 				kw[t.text] = l.expr(scope, 1)
 			} else {
 				pos << l.expr(scope, 1)
 			}
-			if l.peek().kind == ',' {
+			if l.peek().kind == .comma {
 				l.take()
 			} else {
 				break
 			}
 		}
 	}
-	l.expect(')')
+	l.expect(.rparen)
 	return pos, kw
 }
 
@@ -1340,7 +1405,7 @@ fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]Cg
 	l.scene.add_mesh(mesh(g2, l.build_material(mat), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, motor))
 }
 
-fn (mut l SceneLoader) csg_block(op string, ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
+fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
 	saved := l.collect
 	was_collecting := l.collecting
 	l.collect = []CollectedGeom{}

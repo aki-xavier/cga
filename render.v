@@ -5,18 +5,25 @@ module cga
 import mlx
 import math
 
+// PrimKind is the kind of a renderable primitive.
+pub enum PrimKind {
+	plane
+	sphere
+	cylinder
+}
+
 // RenderPrimitive is one renderable primitive (metre-space blade + region/alpha).
 pub struct RenderPrimitive {
 pub:
-	kind   string // "plane" | "sphere" | "cylinder"
+	kind   PrimKind
 	blade  Multivector
 	region int
 	alpha  f64
 pub mut:
-	cylinder_data ?Cylinder // set for "cylinder"
+	cylinder_data ?Cylinder // set for .cylinder
 }
 
-pub fn render_primitive(kind string, blade Multivector, region int, alpha f64) RenderPrimitive {
+pub fn render_primitive(kind PrimKind, blade Multivector, region int, alpha f64) RenderPrimitive {
 	return RenderPrimitive{
 		kind:   kind
 		blade:  blade
@@ -74,7 +81,7 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 		}
 		mut t := mlx.Array{}
 		mut nrm := mlx.Array{}
-		if p.kind == 'plane' {
+		if p.kind == .plane {
 			n := arr3v(b.euclidean_vector())
 			d := b.einf_coeff()
 			mut denom := dirs.multiply(n).sum_axis(-1, false)
@@ -82,7 +89,7 @@ pub fn render_scene(prims []RenderPrimitive, fx f64, fy f64, cx f64, cy f64, h i
 				mlx.f32_scalar(f32(math.inf(1))), .float32))
 			t = fs(d).divide(denom)
 			nrm = n.broadcast_to([h, w, 3])
-		} else if p.kind == 'sphere' {
+		} else if p.kind == .sphere {
 			c, r := sphere_from_dual(b)
 			ca := arr3v(c)
 			a := dirs.multiply(dirs).sum_axis(-1, false)

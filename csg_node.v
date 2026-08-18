@@ -3,18 +3,22 @@ module cga
 // CsgGeometry: recursive boolean combinator over solid primitives.
 import mlx
 
+// CsgOp is the boolean operation of a CSG node.
+pub enum CsgOp {
+	union
+	difference
+	intersection
+}
+
 // CsgGeometry combines solid children via union / intersection / difference.
 pub struct CsgGeometry {
 pub:
-	op       string
+	op       CsgOp
 	children []Geometry
 }
 
 // csg_geometry builds a CSG node (difference = children[0] - union(children[1:])).
-pub fn csg_geometry(op string, children []Geometry) CsgGeometry {
-	if op != 'union' && op != 'intersection' && op != 'difference' {
-		panic('csg op must be union/intersection/difference, got ${op}')
-	}
+pub fn csg_geometry(op CsgOp, children []Geometry) CsgGeometry {
 	if children.len < 2 {
 		panic('csg ${op} needs >= 2 children, got ${children.len}')
 	}
@@ -32,7 +36,7 @@ pub fn csg_geometry(op string, children []Geometry) CsgGeometry {
 
 pub struct CsgParams {
 pub:
-	op       string
+	op       CsgOp
 	children []GeometryParams
 }
 
@@ -52,7 +56,7 @@ fn csg_crossings(p CsgParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, m
 
 // csg_contains is the whole-tree membership test.
 fn csg_contains(p CsgParams, pos mlx.Array) mlx.Array {
-	if p.op == 'difference' {
+	if p.op == .difference {
 		first := geom_contains(p.children[0], pos)
 		mut rest := mlx.zeros_like(first)
 		for cp in p.children[1..] {
@@ -63,7 +67,7 @@ fn csg_contains(p CsgParams, pos mlx.Array) mlx.Array {
 	mut acc := geom_contains(p.children[0], pos)
 	for cp in p.children[1..] {
 		cc := geom_contains(cp, pos)
-		acc = if p.op == 'union' { acc.logical_or(cc) } else { acc.logical_and(cc) }
+		acc = if p.op == .union { acc.logical_or(cc) } else { acc.logical_and(cc) }
 	}
 	return acc
 }
@@ -121,7 +125,7 @@ pub fn csg_bounds(p CsgParams) ?[2][3]f64 {
 	for cp in p.children {
 		bnds << geom_bounds(cp)
 	}
-	if p.op == 'difference' {
+	if p.op == .difference {
 		return bnds[0]
 	}
 	mut bounded := []?[2][3]f64{}
@@ -133,7 +137,7 @@ pub fn csg_bounds(p CsgParams) ?[2][3]f64 {
 	if bounded.len == 0 {
 		return none
 	}
-	if p.op == 'union' {
+	if p.op == .union {
 		mut bmin := [3]f64{}
 		mut bmax := [3]f64{}
 		mut first := true

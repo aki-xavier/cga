@@ -322,7 +322,7 @@ pub fn gltf_to_geometry(outs []GltfMeshOut) Geometry {
 	if kids.len == 1 {
 		return kids[0]
 	}
-	return csg_geometry('union', kids)
+	return csg_geometry(.union, kids)
 }
 
 // resolve_gltf_buffer returns the bytes for one glTF buffer.  `uri` may be empty

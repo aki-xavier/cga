@@ -5,12 +5,25 @@ module main
 // A small hand-written lexer that classifies each span into a semantic class.
 // CGS documents are tiny, so we re-scan the whole text on every edit.
 
+// HighlightClass is one semantic syntax class.
+pub enum HighlightClass {
+	comment
+	keyword
+	typ
+	function
+	constant
+	number
+	operator
+	punctuation
+	plain
+}
+
 // HighlightSpan is one classified byte span.
 pub struct HighlightSpan {
 pub:
 	start int
 	end   int
-	class string // keyword / type / function / constant / number / operator / punctuation / comment
+	class HighlightClass
 }
 
 // highlight_tokenize scans `text` into ordered, non-overlapping spans.
@@ -30,7 +43,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			out << HighlightSpan{
 				start: s
 				end: i
-				class: 'comment'
+				class: .comment
 			}
 			continue
 		}
@@ -48,7 +61,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			out << HighlightSpan{
 				start: s
 				end: i
-				class: 'number'
+				class: .number
 			}
 			continue
 		}
@@ -74,7 +87,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			out << HighlightSpan{
 				start: s
 				end: i
-				class: 'number'
+				class: .number
 			}
 			continue
 		}
@@ -100,7 +113,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 				out << HighlightSpan{
 					start: i
 					end: i + 2
-					class: 'operator'
+					class: .operator
 				}
 				i += 2
 				continue
@@ -111,7 +124,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			out << HighlightSpan{
 				start: i
 				end: i + 1
-				class: 'operator'
+				class: .operator
 			}
 			i++
 			continue
@@ -121,7 +134,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			out << HighlightSpan{
 				start: i
 				end: i + 1
-				class: 'punctuation'
+				class: .punctuation
 			}
 			i++
 			continue
@@ -132,34 +145,34 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 }
 
 // classify_word maps an identifier to a semantic class (none = plain variable).
-pub fn classify_word(word string) ?string {
+pub fn classify_word(word string) ?HighlightClass {
 	match word {
-		'module', 'for', 'if', 'else', 'echo', 'union' { return 'keyword' }
-		'true', 'false', 'pi' { return 'constant' }
+		'module', 'for', 'if', 'else', 'echo', 'union' { return .keyword }
+		'true', 'false', 'pi' { return .constant }
 		'sphere', 'plane', 'cylinder', 'box', 'circle', 'translate', 'rotate', 'material',
 		'directional_light', 'point_light', 'ambient_light', 'background', 'camera' {
-			return 'type'
+			return .typ
 		}
 		'abs', 'sign', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sqrt', 'exp',
 		'ln', 'log', 'floor', 'ceil', 'round', 'pow', 'min', 'max', 'len', 'norm', 'cross' {
-			return 'function'
+			return .function
 		}
 		else { return none }
 	}
 }
 
 // highlight_color maps a semantic class to a 0xRRGGBB colour.
-pub fn highlight_color(class string) int {
+pub fn highlight_color(class HighlightClass) int {
 	return match class {
-		'comment' { 0x6a737d }
-		'keyword' { 0xc678dd }
-		'type' { 0x61afef }
-		'function' { 0xe5c07b }
-		'constant' { 0xd19a66 }
-		'number' { 0xd19a66 }
-		'operator' { 0x56b6c2 }
-		'punctuation' { 0x9da5b4 }
-		else { 0xdfe2ea }
+		.comment { 0x6a737d }
+		.keyword { 0xc678dd }
+		.typ { 0x61afef }
+		.function { 0xe5c07b }
+		.constant { 0xd19a66 }
+		.number { 0xd19a66 }
+		.operator { 0x56b6c2 }
+		.punctuation { 0x9da5b4 }
+		.plain { 0xdfe2ea }
 	}
 }
 

@@ -229,7 +229,7 @@ fn test_cyclide_bounds_contain_surface() {
 }
 
 fn test_cyclide_csg_combines() {
-	csg := csg_geometry('union', [
+	csg := csg_geometry(.union, [
 		cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!),
 		cyclide_geometry(cga_a, cga_b, cga_d, [0.0, 0.0, 0.0]!),
 	])
