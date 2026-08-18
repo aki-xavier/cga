@@ -13,9 +13,9 @@
 `examples/demo_engine.v` 的轨道动画（地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘 +
 折射玻璃球，平行光 + 点光 + 环境光，硬阴影，`aa=2` 超采样抗锯齿）：
 
-![轨道渲染 demo](docs/orbit.gif)
+![轨道渲染 demo](examples/artifacts/orbit.gif)
 
-重新生成（直接由 V 合成 `artifacts/orbit.gif`，不落 PNG，见 `gif.v`）：
+重新生成（直接由 V 合成 `examples/artifacts/orbit.gif`，不落 PNG，见 `gif.v`）：
 
 ```bash
 VMODULES=$(pwd)/.vmodules v -gc boehm run examples/demo_engine.v 90
@@ -41,7 +41,7 @@ VMODULES=$(pwd)/.vmodules v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v .vmodules/mlx
 
 make test     # 跑全部 19 个测试文件（-no-memory-limit，见 Makefile）
-make run      # 渲染 smoke 场景 → artifacts/render_smoke.ppm
+make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.ppm
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
 ```
@@ -106,17 +106,17 @@ make editor     # 或：VMODULES=$(pwd)/.vmodules v -gc boehm run editor/
 全部实体图元（sphere/box/cylinder/cone/torus/ellipsoid/extrude/loft/mesh 与
 plane 半空间 —— 半空间交 = 剖切视图）：
 
-![CSG 球减三向方孔](docs/csg.png)
+![CSG 布尔并排](examples/artifacts/demo_csg.png)
 
 **建筑：CSG 开窗 + 纹理** — `examples/building.cgs`：参数化板式办公楼，
 砖墙用 `difference()` 开真窗洞，`material(map=...)` 贴砖纹：
 
-![参数化建筑](docs/building.png)
+![参数化建筑](examples/artifacts/building.png)
 
 **机械：CSG 钻孔装配** — `examples/mechanical.cgs`：法兰螺栓节圆阵列真钻孔 +
 中心孔、沉头锥孔、环面垫圈、径向齿阵列：
 
-![机械装配体](docs/mechanical.png)
+![机械装配体](examples/artifacts/mechanical.png)
 
 **新图元** — cone（凸体区间裁剪）/ torus（Durand-Kerner 复数迭代解四次方程）/
 ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，Durand-Kerner
@@ -138,9 +138,9 @@ near-origin）。
 
 **运动学** — `examples/demo_kinematics.v`：齿轮副（16:8 齿数比 → 角速度比精确
 −1:2）、曲柄滑块、螺旋轨迹 `M(s) = M₀·exp(s·log(M₀⁻¹M₁))` —— 全部 Motor 直写，
-无矩阵分解/四元数换算层，直接由 V 合成 `artifacts/kinematics.gif`（不落 PNG）：
+无矩阵分解/四元数换算层，直接由 V 合成 `examples/artifacts/kinematics.gif`（不落 PNG）：
 
-![运动学 demo](docs/kinematics.gif)
+![运动学 demo](examples/artifacts/kinematics.gif)
 
 ## 场景代码
 
@@ -302,15 +302,15 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   examples/                .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
                            + .v 演示 CLI（见下）
   gen/gen_tables.py        GP 积表生成器（生成 multivector_tables.v）
-  artifacts/               生成产物（demo 帧、tests/ 金样图、glb）
-  docs/                    README 插图
+  examples/artifacts/      demo 输出（README 插图）
+  artifacts/tests/         测试金样图（cgs_orbit / cone / cyclide / ...）
 ```
 
 演示 CLI（`VMODULES=$(pwd)/.vmodules v -gc boehm run examples/<name>.v`）：
 
-- `demo_engine.v [frames] [outdir]` —— 轨道动画 → `orbit.gif`
+- `demo_engine.v` —— 轨道动画 → `orbit.gif`
 - `demo_advantage.v` —— 无多边形/无限几何/变换同构三面板 → `advantage_{a,b,c}.png`
-- `demo_kinematics.v` —— 齿轮副/曲柄滑块/螺旋插值 → `artifacts/kinematics.gif`
+- `demo_kinematics.v` —— 齿轮副/曲柄滑块/螺旋插值 → `examples/artifacts/kinematics.gif`
 - `demo_csg.v` —— difference/intersection/union 并排 → `demo_csg.png`
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `render_smoke.v` —— smoke 场景 → `render_smoke.ppm`（即 `make run`）

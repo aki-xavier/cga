@@ -44,7 +44,7 @@ fn main() {
 	mut renderer := cga.renderer(480, 360, 2, 3)
 	img := renderer.render(scene, camera)
 
-	os.mkdir_all('artifacts') or {}
-	cga.save_frame_png('artifacts/demo_csg.png', img)
-	println('saved artifacts/demo_csg.png')
+	os.mkdir_all('examples/artifacts') or {}
+	cga.save_frame_png('examples/artifacts/demo_csg.png', img)
+	println('saved examples/artifacts/demo_csg.png')
 }

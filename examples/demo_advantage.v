@@ -13,9 +13,9 @@ fn render_panel(sc cga.Scene, cam_pos [3]f64, target [3]f64, name string) {
 	cam.look_at(target, none)
 	mut r := cga.renderer(400, 300, 2, 3)
 	img := r.render(sc, cam)
-	os.mkdir_all('artifacts') or {}
-	cga.save_frame_png('artifacts/${name}.png', img)
-	println('saved artifacts/${name}.png')
+	os.mkdir_all('examples/artifacts') or {}
+	cga.save_frame_png('examples/artifacts/${name}.png', img)
+	println('saved examples/artifacts/${name}.png')
 }
 
 fn panel_a() cga.Scene {

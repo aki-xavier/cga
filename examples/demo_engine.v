@@ -1,7 +1,7 @@
 module main
 
-// Orbit demo: three.js-style scene + orbit animation -> PNG frames.
-// Run: v run examples/demo_engine.v [frames] [outdir]
+// Orbit demo: three.js-style scene + orbit animation -> animated GIF
+// (examples/artifacts/orbit.gif).  Run: v -gc boehm run examples/demo_engine.v
 
 import cga
 import os
@@ -48,7 +48,7 @@ fn build_scene() cga.Scene {
 
 fn main() {
 	frames := 90
-	out_dir := 'artifacts'
+	out_dir := 'examples/artifacts'
 	os.mkdir_all(out_dir) or {}
 
 	scene := build_scene()

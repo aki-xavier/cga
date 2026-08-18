@@ -56,10 +56,10 @@ fn main() {
 		}
 		lines << row.join('  ')
 	}
-	os.write_file('artifacts/render_smoke.ppm', lines.join('\n')) or {
+	os.write_file('examples/artifacts/render_smoke.ppm', lines.join('\n')) or {
 		panic('write failed')
 	}
-	println('wrote artifacts/render_smoke.ppm')
+	println('wrote examples/artifacts/render_smoke.ppm')
 
 	// sample a few pixels to confirm non-background content
 	center := 120 * 320 * 4 + 160 * 4

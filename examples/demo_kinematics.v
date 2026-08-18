@@ -125,7 +125,7 @@ fn main() {
 		8.8]!, [0.4, 0.2, 1.2]!, [0.0, 1.0, 0.0]!)
 	cam.look_at([0.4, 0.2, 1.2]!, none)
 	mut renderer := cga.renderer(360, 270, 2, 3)
-	os.mkdir_all('artifacts') or {}
+	os.mkdir_all('examples/artifacts') or {}
 	mut gif_frames := [][]u8{}
 	for f in 0 .. n_frames {
 		s := f64(f) / f64(n_frames)
@@ -153,6 +153,6 @@ fn main() {
 		gif_frames << cga.f32_rgba_to_u8(img.data_f32())
 		img.free()
 	}
-	cga.save_gif('artifacts/kinematics.gif', gif_frames, 360, 270, 5)
-	println('saved artifacts/kinematics.gif (${n_frames} frames)')
+	cga.save_gif('examples/artifacts/kinematics.gif', gif_frames, 360, 270, 5)
+	println('saved examples/artifacts/kinematics.gif (${n_frames} frames)')
 }

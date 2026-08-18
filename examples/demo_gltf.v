@@ -8,7 +8,7 @@ import cga
 import os
 
 fn main() {
-	os.mkdir_all('artifacts') or {}
+	os.mkdir_all('examples/artifacts') or {}
 
 	// L-shaped extrusion
 	verts, faces := cga.extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 1.0]!, [1.0, 1.0]!,
@@ -16,7 +16,7 @@ fn main() {
 	// row-major transform: translate y by 0.6
 	t := [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
 		0.0, 1.0]!
-	cga.save_glb('artifacts/demo_gltf.glb', [cga.GltfMeshIn{
+	cga.save_glb('examples/artifacts/demo_gltf.glb', [cga.GltfMeshIn{
 		vertices: verts
 		faces: faces
 		transform: t
@@ -24,7 +24,7 @@ fn main() {
 	}])
 
 	// reload and render the loaded mesh(es) (world transform baked in)
-	loaded := cga.load_gltf('artifacts/demo_gltf.glb')
+	loaded := cga.load_gltf('examples/artifacts/demo_gltf.glb')
 	mut scene := cga.scene(none)
 	scene.add_mesh(cga.mesh(cga.gltf_to_geometry(loaded), cga.standard_material(cga.color_hex(0xE67E22),
 		0.3, 0.15, cga.color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0,
@@ -42,6 +42,6 @@ fn main() {
 	mut renderer := cga.renderer(480, 360, 2, 3)
 	img := renderer.render(scene, camera)
 
-	cga.save_frame_png('artifacts/demo_gltf.png', img)
-	println('saved artifacts/demo_gltf.png')
+	cga.save_frame_png('examples/artifacts/demo_gltf.png', img)
+	println('saved examples/artifacts/demo_gltf.png')
 }
