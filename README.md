@@ -42,7 +42,7 @@ ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
 make test     # 跑全部 19 个测试文件（-no-memory-limit，见 Makefile）
-make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.ppm
+make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
 ```
@@ -312,7 +312,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 - `demo_kinematics.v` —— 齿轮副/曲柄滑块/螺旋插值 → `examples/artifacts/kinematics.gif`
 - `demo_csg.v` —— difference/intersection/union 并排 → `demo_csg.png`
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
-- `render_smoke.v` —— smoke 场景 → `render_smoke.ppm`（即 `make run`）
+- `render_smoke.v` —— smoke 场景 → `render_smoke.png`（即 `make run`）
 - `render_cgs.v <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
 
 ## 质量

@@ -1,7 +1,6 @@
 module main
 
 import cga
-import os
 
 fn main() {
 	mut scene := cga.scene(none)
@@ -108,25 +107,8 @@ fn main() {
 	}
 	println('frame shape: ${img.shape()}  pixels: ${data.len / 4}')
 
-	// write PPM (simple format for visual check)
-	mut lines := []string{}
-	lines << 'P3\n320 240\n255'
-	mut idx := 0
-	for _ in 0 .. 240 {
-		mut row := []string{}
-		for _ in 0 .. 320 {
-			r := int(data[idx] + 0.5)
-			g := int(data[idx + 1] + 0.5)
-			b := int(data[idx + 2] + 0.5)
-			row << '${r} ${g} ${b}'
-			idx += 4
-		}
-		lines << row.join('  ')
-	}
-	os.write_file('examples/artifacts/render_smoke.ppm', lines.join('\n')) or {
-		panic('write failed')
-	}
-	println('wrote examples/artifacts/render_smoke.ppm')
+	cga.save_frame_png('examples/artifacts/render_smoke.png', img)
+	println('wrote examples/artifacts/render_smoke.png')
 
 	// sample a few pixels to confirm non-background content
 	center := 120 * 320 * 4 + 160 * 4
