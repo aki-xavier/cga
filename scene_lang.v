@@ -5,7 +5,7 @@ module cga
 //
 // Supports translate/rotate/scale/mirror modifiers, for/if/echo/module,
 // variables/expressions/math functions, all primitives, lights, camera,
-// background, precision, CSG (difference/intersection/union), and
+// background, CSG (difference/intersection/union), and
 // extrude/loft/mesh(.obj/.glb/.gltf).
 import math
 
@@ -941,23 +941,6 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		l.camera = cam
 		return
 	}
-	if name == 'precision' {
-		l.expect(.semi)
-		m := args['mode'] or { f64(0.0) }
-		match m {
-			string {
-				if m != 'float32' && m != 'float64' {
-					l.fail('CGS line ${t.line}: precision.mode needs "float32" or "float64"')
-					return
-				}
-			}
-			else {
-				l.fail('CGS line ${t.line}: precision.mode needs a string')
-				return
-			}
-		}
-		return
-	}
 	if name.ends_with('_light') {
 		l.expect(.semi)
 		l.add_light(name, args, t.line)
@@ -1342,7 +1325,6 @@ fn cgs_sig_names(name string) []string {
 		'mirror' { ['axis'] }
 		'difference' { [] }
 		'intersection' { [] }
-		'precision' { ['mode'] }
 		'directional_light' { ['direction'] }
 		'point_light' { ['position'] }
 		'ambient_light' { [] }

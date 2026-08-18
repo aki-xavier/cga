@@ -237,12 +237,6 @@ fn test_cgs_csg_block_and_new_primitives() {
 	assert geom_kind(sc.objects[5].geometry) == 'mesh'
 }
 
-fn test_cgs_precision_statement() {
-	sc, _ := cgs_load('precision("float64"); sphere(r=1);', '')
-	assert sc.objects.len == 1
-	set_precision('float32')
-}
-
 fn test_cgs_gltf_mesh() {
 	// save a GLB then load it back through the CGS mesh() primitive
 	verts, faces := extrude([[0.0, 0.0]!, [2.0, 0.0]!, [2.0, 2.0]!,

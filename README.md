@@ -25,7 +25,7 @@ v -gc boehm run examples/demo_engine.v 90
 
 | 层 | 内容 |
 | --- | --- |
-| **CGA 核心** | 32 分量 multivector（纯 `[32]f64`，CPU 双精度）；Motor versor 变换 (gp/reverse/log/velocity)；exp/log/插值；直接形式 `op` 与对偶形式 `ip` 两种关联判据；`set_precision` 保留为兼容空操作（核心恒为 float64，见下） |
+| **CGA 核心** | 32 分量 multivector（纯 `[32]f64`，CPU 双精度）；Motor versor 变换 (gp/reverse/log/velocity)；exp/log/插值；直接形式 `op` 与对偶形式 `ip` 两种关联判据 |
 | **渲染引擎** | three.js 命名 API：Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls；场景对象 = CGA blade，变换 = Motor 共轭；超采样抗锯齿 `renderer(w, h, aa, n)` |
 | **复杂建模** | **CSG**（union/difference/intersection 递归真布尔，实体协议 crossings/contains）；**仿射扩展**（scale/mirror 射线逆变换 + Newton 极分解）；**新图元** cone/torus/ellipsoid/cyclide；**网格**（Möller–Trumbore 批量求交 + extrude/loft + OBJ/glTF/GLB 互操作） |
 | **MLX GPU** | 每像素向量化解析求交，全分辨率单帧一次 kernel 批量；相机空间 X 右 / Y 下 / Z 前 |
@@ -74,7 +74,7 @@ v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 ```
 
 支持变量/表达式/数学函数/for+range/module/if-else/echo，以及 CSG
-（union/difference/intersection）与 `precision`；完整语法见 `scene_lang.v`
+（union/difference/intersection）；完整语法见 `scene_lang.v`
 文件头注释。示例：`examples/grid.cgs`（module + for 的 3×3 球阵）、
 `examples/building.cgs`（CSG 开窗建筑）、`examples/mechanical.cgs`
 （CSG 钻孔装配）。
@@ -132,8 +132,7 @@ ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，D
 
 **精度** — 代数核心（multivector/motor/图元）在 V 里是纯 CPU `[32]f64`，比
 Python 参考的默认 float32 更精确，远原点 conformal 抵消不再受 float32 精度
-限制；`set_precision("float32"/"float64")` 与 CGS `precision(...)` 保留为兼容
-空操作。渲染内核仍是 float32（MLX/Metal 无 float64，参数进相机空间后
+限制。渲染内核仍是 float32（MLX/Metal 无 float64，参数进相机空间后
 near-origin）。
 
 **运动学** — `examples/demo_kinematics.v`：齿轮副（16:8 齿数比 → 角速度比精确
