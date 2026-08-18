@@ -27,8 +27,14 @@ fn rq_linear_to_srgb255(lum f64) int {
 
 fn rq_wall_scene() Scene {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(plane_geometry([0.0, 0.0, -1.0]!, -4.0), basic_material(color_hex(0xCC3333),
-		1.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       plane_geometry([0.0, 0.0, -1.0]!, -4.0)
+		material:       basic_material(color_hex(0xCC3333), 1.0)
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	return sc
 }
 
@@ -60,8 +66,22 @@ fn test_render_srgb_roundtrip() {
 fn test_render_ior1_invisible() {
 	mut sc := rq_wall_scene()
 	// ior=1 & opacity=0 & absorption=0 -> exactly invisible (F=0, no bending)
-	sc.add_mesh(mesh(sphere_geometry(0.8), standard_material(color_hex(0xAAD4FF), 0.5, 0.0,
-		color_hex(0x000000), 0.0, 1.0, 0.0), [0.0, 0.0, 2.2]!, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       sphere_geometry(0.8)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xAAD4FF)
+			roughness:  0.5
+			metalness:  0.0
+			emissive:   color_hex(0x000000)
+			opacity:    0.0
+			ior:        1.0
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 2.2]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	mut r := renderer(64, 64, 1, 3)
 	cam := rq_head_on_cam()
 	a := rq_px(r.render(sc, cam), 64, 32, 32)
@@ -73,9 +93,22 @@ fn test_render_ior1_invisible() {
 
 fn rq_slab(depth f64, absorption f64) [3]f32 {
 	mut sc := rq_wall_scene()
-	sc.add_mesh(mesh(box_geometry(3.0, 3.0, depth), standard_material(color_hex(0xFFFFFF), 0.5,
-		0.0, color_hex(0x000000), 0.0, 1.0, absorption), [0.0, 0.0, 2.5]!, [0.0, 0.0, 1.0]!, 0.0,
-		none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       box_geometry(3.0, 3.0, depth)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xFFFFFF)
+			roughness:  0.5
+			metalness:  0.0
+			emissive:   color_hex(0x000000)
+			opacity:    0.0
+			ior:        1.0
+			absorption: absorption
+		})
+		position:       [0.0, 0.0, 2.5]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	mut r := renderer(64, 64, 1, 3)
 	return rq_px(r.render(sc, rq_head_on_cam()), 64, 32, 32)
 }
@@ -97,14 +130,41 @@ fn test_render_beer_absorption() {
 
 fn rq_shadow_scene(opacity ?f64) Scene {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(plane_geometry([0.0, 1.0, 0.0]!, 0.0), standard_material(color_hex(0xFFFFFF),
-		1.0, 0.0, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0,
-		none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       plane_geometry([0.0, 1.0, 0.0]!, 0.0)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xFFFFFF)
+			roughness:  1.0
+			metalness:  0.0
+			emissive:   color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.0, 1.0, 0.0]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.2))
 	if o := opacity {
-		sc.add_mesh(mesh(sphere_geometry(0.5), standard_material(color_hex(0xFFFFFF), 1.0, 0.0,
-			color_hex(0x000000), o, 1.0, 0.0), [2.0, 1.5, 3.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
+		sc.add_mesh(mesh(MeshParams{
+			geometry:       sphere_geometry(0.5)
+			material:       standard_material(MaterialParams{
+				color:      color_hex(0xFFFFFF)
+				roughness:  1.0
+				metalness:  0.0
+				emissive:   color_hex(0x000000)
+				opacity:    o
+				ior:        1.0
+				absorption: 0.0
+			})
+			position:       [2.0, 1.5, 3.0]!
+			rotation_axis:  [0.0, 0.0, 1.0]!
+			rotation_angle: 0.0
+			motor:          none
+		}))
 	}
 	return sc
 }

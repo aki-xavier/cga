@@ -11,13 +11,24 @@ pub mut:
 	material Material
 }
 
-// mesh builds a Mesh (position/rotation_axis/rotation_angle define the pose;
-// motor overrides them if given).
-pub fn mesh(geometry Geometry, material Material, position [3]f64, rotation_axis [3]f64, rotation_angle f64, motor ?Multivector) Mesh {
+// MeshParams configures a Mesh (position/rotation_axis/rotation_angle define
+// the pose; motor overrides them if given).
+pub struct MeshParams {
+pub:
+	geometry       Geometry
+	material       Material
+	position       [3]f64
+	rotation_axis  [3]f64
+	rotation_angle f64
+	motor          ?Multivector
+}
+
+// mesh builds a Mesh from params.
+pub fn mesh(p MeshParams) Mesh {
 	return Mesh{
-		Object3D: object3d(position, rotation_axis, rotation_angle, motor, identity3())
-		geometry: geometry
-		material: material
+		Object3D: object3d(p.position, p.rotation_axis, p.rotation_angle, p.motor, identity3())
+		geometry: p.geometry
+		material: p.material
 	}
 }
 

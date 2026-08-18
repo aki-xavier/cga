@@ -25,17 +25,29 @@ pub mut:
 	map ?Texture
 }
 
+// MaterialParams configures a standard material.
+pub struct MaterialParams {
+pub:
+	color      Color
+	roughness  f64
+	metalness  f64
+	emissive   Color
+	opacity    f64
+	ior        f64
+	absorption f64
+}
+
 // standard_material builds a MeshStandardMaterial (Lambert + Blinn-Phong).
-pub fn standard_material(color Color, roughness f64, metalness f64, emissive Color, opacity f64, ior f64, absorption f64) Material {
+pub fn standard_material(p MaterialParams) Material {
 	return Material{
 		kind:       .standard
-		color:      color
-		roughness:  clamp01(roughness)
-		metalness:  clamp01(metalness)
-		emissive:   emissive
-		opacity:    clamp01(opacity)
-		ior:        math.max(1.0, ior)
-		absorption: math.max(0.0, absorption)
+		color:      p.color
+		roughness:  clamp01(p.roughness)
+		metalness:  clamp01(p.metalness)
+		emissive:   p.emissive
+		opacity:    clamp01(p.opacity)
+		ior:        math.max(1.0, p.ior)
+		absorption: math.max(0.0, p.absorption)
 	}
 }
 

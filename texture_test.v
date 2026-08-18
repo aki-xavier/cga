@@ -19,10 +19,21 @@ fn test_png_decode_and_sample() {
 fn test_textured_render() {
 	tex := texture_load('examples/assets/brick.png')
 	mut sc := scene(none)
-	mut mat := standard_material(color_hex(0xFFFFFF), 0.5, 0.0, color_hex(0x000000), 1.0, 1.5, 0.0)
+	mut mat := standard_material(MaterialParams{
+		color:      color_hex(0xFFFFFF)
+		roughness:  0.5
+		metalness:  0.0
+		emissive:   color_hex(0x000000)
+		opacity:    1.0
+		ior:        1.5
+		absorption: 0.0
+	})
 	mat.map = tex
-	sc.add_mesh(mesh(box_geometry(1.0, 1.0, 1.0), mat, [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0,
-		none))
+	sc.add_mesh(mesh(MeshParams{ geometry: box_geometry(1.0, 1.0, 1.0), material: mat, position: [
+		0.0,
+		0.0,
+		0.0,
+	]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: none }))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.2))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [

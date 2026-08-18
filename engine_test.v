@@ -4,8 +4,15 @@ import os
 
 fn render_center(geom Geometry, pos [3]f64, name string) [3]f32 {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(geom, standard_material(color_hex(0xC0392B), 0.3, 0.1, color_hex(0x000000),
-		1.0, 1.5, 0.0), pos, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{ geometry: geom, material: standard_material(MaterialParams{
+		color:      color_hex(0xC0392B)
+		roughness:  0.3
+		metalness:  0.1
+		emissive:   color_hex(0x000000)
+		opacity:    1.0
+		ior:        1.5
+		absorption: 0.0
+	}), position: pos, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: none }))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [pos[0], pos[1], pos[2] + 4.0]!, pos, [
@@ -44,9 +51,22 @@ fn test_render_cyclide_nonempty() {
 	// fills the frame.)  The centre pixel is the ring's hole, so count
 	// red-dominant pixels instead of sampling the centre.
 	mut sc := scene(none)
-	sc.add_mesh(mesh(cyclide_geometry(1.0, 0.98, 0.3, [0.0, 0.0, 0.0]!), standard_material(color_hex(0xC0392B),
-		0.3, 0.1, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0,
-		1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       cyclide_geometry(1.0, 0.98, 0.3, [0.0, 0.0, 0.0]!)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xC0392B)
+			roughness:  0.3
+			metalness:  0.1
+			emissive:   color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
@@ -70,8 +90,22 @@ fn test_render_cyclide_nonempty() {
 
 fn test_render_torus_nonempty() {
 	mut sc := scene(none)
-	sc.add_mesh(mesh(torus_geometry(1.0, 0.3), standard_material(color_hex(0xC0392B), 0.3, 0.1,
-		color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       torus_geometry(1.0, 0.3)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xC0392B)
+			roughness:  0.3
+			metalness:  0.1
+			emissive:   color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
@@ -98,8 +132,22 @@ fn test_render_trimesh_nonempty() {
 	verts := [[0.0, 0.0, 1.0]!, [1.0, 0.0, 0.0]!, [-0.5, 0.866, 0.0]!,
 		[0.0, 0.0, -1.0]!]
 	faces := [[0, 1, 2]!, [0, 2, 3]!, [0, 3, 1]!, [1, 3, 2]!]
-	sc.add_mesh(mesh(trimesh_geometry(verts, faces), standard_material(color_hex(0xC0392B), 0.3,
-		0.1, color_hex(0x000000), 1.0, 1.5, 0.0), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, none))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       trimesh_geometry(verts, faces)
+		material:       standard_material(MaterialParams{
+			color:      color_hex(0xC0392B)
+			roughness:  0.3
+			metalness:  0.1
+			emissive:   color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.3))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [

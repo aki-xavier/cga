@@ -71,14 +71,14 @@ pub fn cgs_lex(text string) ![]CgsToken {
 			}
 		} else if i + 1 < n && text[i..i + 2] in ['==', '!=', '<=', '>=', '&&', '||'] {
 			toks << CgsToken{
-				kind : .op
+				kind: .op
 				text: text[i..i + 2]
 				line: ln
 			}
 			i += 2
 		} else if ch in [`+`, `-`, `*`, `/`, `%`, `<`, `>`, `!`, `:`] {
 			toks << CgsToken{
-				kind : .op
+				kind: .op
 				text: ch.ascii_str()
 				line: ln
 			}
@@ -103,7 +103,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				return error('CGS line ${ln}: unclosed string')
 			}
 			toks << CgsToken{
-				kind : .str
+				kind: .str
 				text: text[i + 1..j]
 				line: ln
 			}
@@ -114,7 +114,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 				j++
 			}
 			toks << CgsToken{
-				kind : .ident
+				kind: .ident
 				text: text[i..j]
 				line: ln
 			}
@@ -129,7 +129,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 					return error('CGS line ${ln}: illegal hex colour')
 				}
 				toks << CgsToken{
-					kind : .number
+					kind: .number
 					num:  f64(strconv_hex(text[i + 2..j]))
 					line: ln
 				}
@@ -155,7 +155,7 @@ pub fn cgs_lex(text string) ![]CgsToken {
 					}
 				}
 				toks << CgsToken{
-					kind : .number
+					kind: .number
 					num:  text[i..j].f64()
 					line: ln
 				}
@@ -556,7 +556,7 @@ pub fn cgs_load_result(text string, asset_root string) !(Scene, PerspectiveCamer
 fn (mut l SceneLoader) peek() CgsToken {
 	if l.pos >= l.toks.len {
 		return CgsToken{
-			kind : .eof
+			kind: .eof
 			line: 1
 		}
 	}
@@ -566,7 +566,7 @@ fn (mut l SceneLoader) peek() CgsToken {
 fn (mut l SceneLoader) peek1() CgsToken {
 	if l.pos + 1 >= l.toks.len {
 		return CgsToken{
-			kind : .eof
+			kind: .eof
 			line: 1
 		}
 	}
@@ -1402,7 +1402,11 @@ fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]Cg
 	}
 	motor, lin := decompose_rigid(ctx)
 	g2 := if is_identity3(lin) { geo } else { affine_geometry(geo, lin) }
-	l.scene.add_mesh(mesh(g2, l.build_material(mat), [0.0, 0.0, 0.0]!, [0.0, 0.0, 1.0]!, 0.0, motor))
+	l.scene.add_mesh(mesh(MeshParams{ geometry: g2, material: l.build_material(mat), position: [
+		0.0,
+		0.0,
+		0.0,
+	]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: motor }))
 }
 
 fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
@@ -1423,11 +1427,18 @@ fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue,
 		cm, cl := decompose_rigid(c.m4)
 		kids << transformed_geometry(c.geo, cm, cl)
 	}
-	l.scene.add_mesh(mesh(csg_geometry(op, kids), l.build_material(mat), [0.0, 0.0, 0.0]!, [
-		0.0,
-		0.0,
-		1.0,
-	]!, 0.0, motor_identity()))
+	l.scene.add_mesh(mesh(MeshParams{
+		geometry:       csg_geometry(op, kids)
+		material:       l.build_material(mat)
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [
+			0.0,
+			0.0,
+			1.0,
+		]!
+		rotation_angle: 0.0
+		motor:          motor_identity()
+	}))
 }
 
 fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, line int) Geometry {
@@ -1712,7 +1723,15 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 	opacity := cgs_opt_num(mat['opacity'] or { f64(-1.0) }, 1.0)
 	ior := cgs_opt_num(mat['ior'] or { f64(-1.0) }, 1.5)
 	absorption := cgs_opt_num(mat['absorption'] or { f64(-1.0) }, 0.0)
-	mut m := standard_material(color, roughness, metalness, emissive, opacity, ior, absorption)
+	mut m := standard_material(MaterialParams{
+		color:      color
+		roughness:  roughness
+		metalness:  metalness
+		emissive:   emissive
+		opacity:    opacity
+		ior:        ior
+		absorption: absorption
+	})
 	if t := tex {
 		m.map = t
 	}
