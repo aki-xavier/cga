@@ -169,8 +169,17 @@ pub fn cgs_lex(text string) ![]CgsToken {
 	return toks
 }
 
-// CgsValue is the dynamic value of the language (number / bool / string / list).
-type CgsValue = f64 | bool | string | []CgsValue
+// CgsVec3 is a 3-vector value in the CGS language (a `[x,y,z]` literal).
+struct CgsVec3 {
+	x f64
+	y f64
+	z f64
+}
+
+// CgsValue is the dynamic value of the language (number / bool / string / list /
+// 3-vector).  A `[x,y,z]` literal with three numeric elements is a CgsVec3;
+// ranges and other lists stay `[]CgsValue`.
+type CgsValue = f64 | bool | string | []CgsValue | CgsVec3
 
 fn cgs_num(v CgsValue, line int, what string) !f64 {
 	match v {
@@ -181,6 +190,9 @@ fn cgs_num(v CgsValue, line int, what string) !f64 {
 
 fn cgs_vec3(v CgsValue, line int, what string) ![3]f64 {
 	match v {
+		CgsVec3 {
+			return [v.x, v.y, v.z]!
+		}
 		[]CgsValue {
 			if v.len != 3 {
 				return error('CGS line ${line}: ${what} needs [x,y,z], got ${v}')
@@ -232,6 +244,7 @@ fn mirror4(ax [3]f64) ![16]f64 {
 fn cgs_truthy(v CgsValue) bool {
 	match v {
 		[]CgsValue { return v.len > 0 }
+		CgsVec3 { return true }
 		bool { return v }
 		f64 { return v != 0.0 }
 		string { return v != '' }
@@ -244,6 +257,9 @@ fn cgs_neg(v CgsValue, line int) !CgsValue {
 			x := -v
 			return x
 		}
+		CgsVec3 {
+			return CgsVec3{-v.x, -v.y, -v.z}
+		}
 		[]CgsValue {
 			mut out := []CgsValue{}
 			for x in v {
@@ -254,6 +270,15 @@ fn cgs_neg(v CgsValue, line int) !CgsValue {
 		else {
 			return error('CGS line ${line}: unary minus needs number/vector')
 		}
+	}
+}
+
+// cgs_as_list normalises a 3-vector to a 3-element numeric list, so vector and
+// list arithmetic share one elementwise path.
+fn cgs_as_list(v CgsValue) CgsValue {
+	return match v {
+		CgsVec3 { [CgsValue(v.x), CgsValue(v.y), CgsValue(v.z)] }
+		else { v }
 	}
 }
 
@@ -329,39 +354,41 @@ fn cgs_binop(op BinOp, a CgsValue, b CgsValue) !CgsValue {
 		}
 	}
 	// arithmetic: scalar or elementwise vector (scalar broadcast)
-	match a {
+	al := cgs_as_list(a)
+	bl := cgs_as_list(b)
+	match al {
 		[]CgsValue {
-			match b {
+			match bl {
 				[]CgsValue {
-					if a.len != b.len {
-						return error('CGS: vector length mismatch (${a.len} vs ${b.len})')
+					if al.len != bl.len {
+						return error('CGS: vector length mismatch (${al.len} vs ${bl.len})')
 					}
 					mut out := []CgsValue{}
-					for i in 0 .. a.len {
-						out << cgs_binop(op, a[i], b[i])!
+					for i in 0 .. al.len {
+						out << cgs_binop(op, al[i], bl[i])!
 					}
 					return out
 				}
 				else {
 					mut out := []CgsValue{}
-					for x in a {
-						out << cgs_binop(op, x, b)!
+					for x in al {
+						out << cgs_binop(op, x, bl)!
 					}
 					return out
 				}
 			}
 		}
 		else {
-			match b {
+			match bl {
 				[]CgsValue {
 					mut out := []CgsValue{}
-					for x in b {
-						out << cgs_binop(op, a, x)!
+					for x in bl {
+						out << cgs_binop(op, al, x)!
 					}
 					return out
 				}
 				else {
-					return cgs_scalar_arith(op, cgs_num(a, 0, 'arith')!, cgs_num(b, 0, 'arith')!)
+					return cgs_scalar_arith(op, cgs_num(al, 0, 'arith')!, cgs_num(bl, 0, 'arith')!)
 				}
 			}
 		}
@@ -373,12 +400,16 @@ fn cgs_call_fn(name string, args []CgsValue, line int) !CgsValue {
 		a0 := args[0]
 		match a0 {
 			[]CgsValue { return f64(a0.len) }
+			CgsVec3 { return f64(3) }
 			else { return error('CGS line ${line}: len needs a list') }
 		}
 	}
 	if name == 'norm' {
 		a0 := args[0]
 		match a0 {
+			CgsVec3 {
+				return math.sqrt(a0.x * a0.x + a0.y * a0.y + a0.z * a0.z)
+			}
 			[]CgsValue {
 				mut s := 0.0
 				for x in a0 {
@@ -751,6 +782,15 @@ fn (mut l SceneLoader) list_literal(scope map[string]CgsValue, line int) CgsValu
 		items << l.expr(scope, 1)
 	}
 	l.expect(.rbracket)
+	// A 3-element numeric literal is a vector (CgsVec3); anything else is a list.
+	if items.len == 3 {
+		x := items[0]
+		y := items[1]
+		z := items[2]
+		if x is f64 && y is f64 && z is f64 {
+			return CgsVec3{x, y, z}
+		}
+	}
 	return items
 }
 
@@ -849,6 +889,9 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		sv := args['s'] or { f64(1.0) }
 		mut s4 := [16]f64{}
 		match sv {
+			CgsVec3 {
+				s4 = scale4([sv.x, sv.y, sv.z]!)
+			}
 			[]CgsValue {
 				v := cgs_vec3(sv, t.line, 'scale.s') or {
 					l.fail(err.msg())
@@ -965,6 +1008,13 @@ fn (mut l SceneLoader) for_loop(ctx [16]f64, mat map[string]CgsValue, mut scope 
 	values := l.expr(scope, 1)
 	l.expect(.rparen)
 	match values {
+		CgsVec3 {
+			body := l.capture_statement()
+			for v in [values.x, values.y, values.z] {
+				scope[vt.text] = v
+				l.run_tokens(body, ctx, mat, mut scope)
+			}
+		}
 		[]CgsValue {
 			body := l.capture_statement()
 			for v in values {
@@ -1337,8 +1387,8 @@ fn cgs_sig_defaults(name string) map[string]CgsValue {
 		'camera' {
 			m['fov'] = f64(50.0)
 			m['aspect'] = f64(16.0 / 9.0)
-			m['position'] = []CgsValue{len: 3, init: f64(0.0)}
-			m['target'] = []CgsValue{len: 3, init: f64(0.0)}
+			m['position'] = CgsVec3{0.0, 0.0, 0.0}
+			m['target'] = CgsVec3{0.0, 0.0, 0.0}
 		}
 		'material' {
 			m['color'] = f64(0xFFFFFF)
@@ -1366,11 +1416,18 @@ fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]Cg
 	}
 	motor, lin := decompose_rigid(ctx)
 	g2 := if is_identity3(lin) { geo } else { affine_geometry(geo, lin) }
-	l.scene.add_mesh(mesh(MeshParams{ geometry: g2, material: l.build_material(mat), position: [
-		0.0,
-		0.0,
-		0.0,
-	]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: motor }))
+	l.scene.add_mesh(mesh(MeshParams{
+		geometry:       g2
+		material:       l.build_material(mat)
+		position:       [
+			0.0,
+			0.0,
+			0.0,
+		]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          motor
+	}))
 }
 
 fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) {
@@ -1526,6 +1583,10 @@ fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, lin
 					}
 					zsraw := args['zs'] or { f64(0.0) }
 					match zsraw {
+						CgsVec3 {
+							v, f := loft(profiles, [zsraw.x, zsraw.y, zsraw.z])
+							return trimesh_geometry(v, f)
+						}
 						[]CgsValue {
 							mut zs := []f64{}
 							for z in zsraw {
@@ -1655,9 +1716,9 @@ fn (mut l SceneLoader) build_material(mat map[string]CgsValue) Material {
 						return basic_material(color_hex(0xFFFFFF), 1.0)
 					}
 					tex = texture_load(l.asset_root + '/' + v) or {
-					l.fail(err.msg())
-					return basic_material(color_hex(0xFFFFFF), 1.0)
-				}
+						l.fail(err.msg())
+						return basic_material(color_hex(0xFFFFFF), 1.0)
+					}
 				}
 			}
 			else {
