@@ -154,13 +154,12 @@ pub fn load_png_rgba(path string) !([]u8, int, int) {
 	raw := zlib.decompress(idat) or { return error('PNG inflate failed: ${err}') }
 	stride := width * bpp
 	mut img := []u8{len: height * stride}
+	// prev holds the already-decoded previous scanline (zeros for row 0); one
+	// reusable buffer instead of a fresh allocation + clone per row.
+	mut prev := []u8{len: stride}
 	for y in 0 .. height {
 		filter := int(raw[y * (stride + 1)])
 		row_start := y * (stride + 1) + 1
-		mut prev := []u8{len: stride}
-		if y > 0 {
-			prev = img[(y - 1) * stride..y * stride].clone()
-		}
 		for x in 0 .. stride {
 			cur := int(raw[row_start + x])
 			left := if x >= bpp { int(img[y * stride + x - bpp]) } else { 0 }
@@ -175,6 +174,7 @@ pub fn load_png_rgba(path string) !([]u8, int, int) {
 			}
 			img[y * stride + x] = u8(val & 0xFF)
 		}
+		copy(mut prev, img[(y * stride)..((y + 1) * stride)])
 	}
 	mut out := []u8{len: width * height * 4}
 	mut i := 0

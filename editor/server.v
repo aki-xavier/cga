@@ -55,12 +55,17 @@ fn (mut handler EditorHandler) handle(req http.Request) http.Response {
 		hgt := query_param(query, 'h', 500)
 		aa := query_param(query, 'aa', 1)
 		reply := chan RenderReply{cap: 1}
-		handler.jobs <- RenderJob{
+		// Non-blocking enqueue: when the render queue is full the worker thread
+		// must not block on the send (that would exhaust the http worker pool
+		// under concurrent renders); back off with 503 instead.
+		if handler.jobs.try_push(RenderJob{
 			text:  req.data
 			w:     w
 			h:     hgt
 			aa:    aa
 			reply: reply
+		}) != .success {
+			return text_response(503, 'text/plain', 'render queue full, retry shortly')
 		}
 		res := <-reply
 		if res.err != '' {

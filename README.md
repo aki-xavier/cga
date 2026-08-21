@@ -41,7 +41,7 @@ v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
-make test     # 跑全部 18 个测试文件（-no-memory-limit，见 Makefile）
+make test     # 跑全部 17 个测试文件（-no-memory-limit，见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
@@ -123,13 +123,6 @@ ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，D
 **仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向
 走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解
 为 motor·linear，rotate 与 scale/mirror 任意嵌套顺序均正确。
-
-**曲面烘焙（基元 + 残差 → 网格）** — `surface_bake.v`：沿基元（sphere/plane/
-无限 cylinder/cyclide）uv 网格节点的法向批量投射射线，把任意目标几何（含
-trimesh）烘焙成该基元参数域上的三角网格（u 向环带缝合、球极三角扇、开放边界环自动封盖、可
-`save_glb` 导出 glTF）。烘焙网格即最终可见曲面（基元+细节一体；基元仍是
-代数/语义句柄，两者不要同渲——残差为 0 处会 z-fighting）。示例
-`examples/displace/`（loft 星形花瓶 → 圆柱基元，烘焙网格 vs 目标 PSNR ~30 dB）。
 
 **网格与互操作** — MeshGeometry（Möller–Trumbore 批量求交，平坦法向，无 BVH）；
 `modeling.v` 的 extrude（耳切凹轮廓三角化）与 loft（等点数多截面）；`mesh_io.v`
@@ -290,7 +283,6 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   shading.v                材质/灯光 + 批量 Blinn-Phong
   texture.v                PNG 解码 + bilinear map 采样
   renderer.v               mlx-v GPU 批量光线追踪（SSAA/硬阴影/Whitted 折射）
-  surface_bake.v           基元 uv 网格曲面烘焙（→ trimesh / glTF 导出）
   csg.v + csg_node.v       递归 CSG 布尔（crossings/contains 实体协议）
   affine.v + affine_geom.v 仿射扩展（scale/mirror 射线逆变换 + Newton 极分解）
   modeling.v               耳切三角化 + extrude + loft
@@ -299,7 +291,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   image_io.v               PNG 读写
   gif.v                    动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
   scene_lang.v             CGS 场景语言（lexer + 单遍 parser/evaluator）
-  *_test.v                 17 个根目录测试文件
+  *_test.v                 16 个根目录测试文件
   editor/                  CGS 网页编辑器（server.v/highlight.v + web/）
                            + highlight_test.v
   examples/                .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
@@ -318,11 +310,10 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `render_smoke.v` —— smoke 场景 → `render_smoke.png`（即 `make run`）
 - `render_cgs.v <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
-- `displace/demo_displace.v` —— loft 星形花瓶烘焙到圆柱基元 uv 网格 → glb + `displace_{target,baked,diff}.png`
 
 ## 质量
 
-- `make test`（`v -no-memory-limit test .`）：18 个测试文件全过 —— 代数恒等式 /
+- `make test`（`v -no-memory-limit test .`）：17 个测试文件全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 位移曲面烘焙 /
   编辑器 highlight。
