@@ -280,7 +280,8 @@ fn uniform_rotation_factor(m Mat3) (bool, f64) {
 	at := mat3_transpose(m)
 	b := mat3_mul(at, m)
 	s2 := (b[0][0] + b[1][1] + b[2][2]) / 3.0
-	tol := 1e-9 * math.max(1.0, s2)
+	// relative to the scale, with a small absolute floor for near-zero scales
+	tol := 1e-9 * s2 + 1e-24
 	if math.abs(b[0][1]) > tol || math.abs(b[0][2]) > tol || math.abs(b[1][2]) > tol
 		|| math.abs(b[0][0] - s2) > tol || math.abs(b[1][1] - s2) > tol
 		|| math.abs(b[2][2] - s2) > tol {

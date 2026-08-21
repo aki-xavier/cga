@@ -50,6 +50,7 @@ fn test_highlight_functions_and_constants() {
 fn test_highlight_classify_word() {
 	assert classify_word('module') or { HighlightClass.plain } == .keyword
 	assert classify_word('sphere') or { HighlightClass.plain } == .typ
+	assert classify_word('splats') or { HighlightClass.plain } == .typ
 	assert classify_word('sqrt') or { HighlightClass.plain } == .function
 	assert classify_word('pi') or { HighlightClass.plain } == .constant
 	assert classify_word('myvar') == none

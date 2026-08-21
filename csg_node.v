@@ -25,6 +25,7 @@ pub fn csg_geometry(op CsgOp, children []Geometry) CsgGeometry {
 	for c in children {
 		match c {
 			CircleGeometry { panic('circle is not a solid (no crossings/contains)') }
+			SplatsGeometry { panic('splats are not a solid (no crossings/contains)') }
 			else {}
 		}
 	}
@@ -81,10 +82,12 @@ fn csg_nearest_surface(p CsgParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Ar
 	ts_f := mlx.where(ts_s.isfinite(), ts_s, mlx.zeros_like(ts_s))
 	delta := 1e-4
 	p_plus := o.expand_dims(1).add(mlx.s_add(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
-	p_minus := o.expand_dims(1).add(mlx.s_sub(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
+	p_minus :=
+		o.expand_dims(1).add(mlx.s_sub(ts_f, delta).expand_dims(2).multiply(d.expand_dims(1)))
 	in_plus := csg_contains(p, p_plus)
 	in_minus := csg_contains(p, p_minus)
-	flip := in_plus.not_equal(in_minus).logical_and(mlx.s_gt(ts_s, 1e-6)).logical_and(ts_s.isfinite())
+	flip :=
+		in_plus.not_equal(in_minus).logical_and(mlx.s_gt(ts_s, 1e-6)).logical_and(ts_s.isfinite())
 	cand := mlx.where(flip, ts_s, inf_like(ts_s))
 	t := cand.min_axis(1, false)
 	mask := t.isfinite()

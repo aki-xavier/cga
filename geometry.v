@@ -81,7 +81,6 @@ pub:
 	shift  [3]f64
 }
 
-// GeometryParams is the sum of all camera-space parameter variants.
 pub struct TrimeshParams {
 pub:
 	a_inv3 Mat3

@@ -9,11 +9,18 @@ module cga
 //     recovered from Gaussian.quat (columns t1, t2, n; thin axis local e3).
 //   - Pinhole: pixel = (fx * X/Z + cx, fy * Y/Z + cy) with fx, fy, cx, cy
 //     exactly as in Renderer.build_rays; camera space +z is forward.
-//   - Compositing is in DISPLAY space (sRGB 0..255), matching the render.v
-//     idiom; the ray-traced base frame is already sRGB-encoded.
+//   - Compositing is in LINEAR space (0..1): splat colours are decoded from
+//     the sRGB Color at projection time, the ray-traced base frame comes from
+//     Renderer.render_linear, and the sRGB encode (srgb_encode_frame, shared
+//     with Renderer.render) happens once at the very end.
 //   - Depth compositing treats the scene as ONE opaque surface per pixel (the
 //     primary hit): splats behind it are fully occluded.  Refraction and
-//     multi-layer transparency of the base scene are ignored.
+//     multi-layer transparency of the base scene are ignored.  Each splat's
+//     whole footprint is occlusion-tested with its CENTRE depth.  To keep
+//     splats attached exactly ON the ray-traced surface from flickering
+//     (t == dep coin flip), the centre depth is biased nearer by half the
+//     normal extent: t -= 0.5 * sigma_normal (a splat half-buried in the
+//     surface shows its front half — the intended attachment semantics).
 import mlx
 import math
 
@@ -30,7 +37,7 @@ struct Splat2D {
 	bi    f32
 	ci    f32
 	alpha f32
-	col   [3]f32 // display-space rgb (0..255)
+	col   [3]f32 // linear-space rgb (0..1)
 	x0    int    // 3-sigma bounding box, clamped to the image
 	x1    int
 	y0    int
@@ -96,15 +103,18 @@ fn project_splats(g Gaussians, cam PerspectiveCamera, width int, height int) []S
 		if x0 > x1 || y0 > y1 {
 			continue // fully off-screen
 		}
+		lin := s.color.rgb() // sRGB Color -> linear 0..1
 		out << Splat2D{
-			px:    f32(px)
-			py:    f32(py)
-			t:     f32(math.sqrt(xc * xc + yc * yc + zc * zc))
+			px: f32(px)
+			py: f32(py)
+			// centre depth, biased nearer by half the normal extent so splats
+			// attached exactly on the opaque surface stay visible (see header)
+			t:     f32(math.sqrt(xc * xc + yc * yc + zc * zc) - 0.5 * s.scale[2])
 			ai:    f32(c / det)
 			bi:    f32(-b / det)
 			ci:    f32(a / det)
 			alpha: f32(s.opacity)
-			col:   [f32(s.color.r * 255.0), f32(s.color.g * 255.0), f32(s.color.b * 255.0)]!
+			col:   [f32(lin[0]), f32(lin[1]), f32(lin[2])]!
 			x0:    x0
 			x1:    x1
 			y0:    y0
@@ -115,10 +125,11 @@ fn project_splats(g Gaussians, cam PerspectiveCamera, width int, height int) []S
 	return out
 }
 
-// composite_splats blends depth-sorted splats over a base frame (H, W, 3,
-// 0..255) with a per-pixel opaque scene depth (H, W, inf = miss), returning
-// (H, W, 4) float32 0..255.  The gather-based front-to-back loop follows the
-// render.v idiom (no scatter in the mlx wrapper).
+// composite_splats blends depth-sorted splats over a LINEAR base frame
+// (H, W, 3, 0..1) with a per-pixel opaque scene depth (H, W, inf = miss),
+// returning the LINEAR (H, W, 3) 0..1 result (callers sRGB-encode once at the
+// end via srgb_encode_frame).  The gather-based front-to-back loop uses
+// sorted-order accumulation (no scatter in the mlx wrapper).
 fn composite_splats(splats []Splat2D, base mlx.Array, depth mlx.Array, width int, height int) mlx.Array {
 	mut acc := mlx.zeros([height, width, 3], .float32)
 	mut trans := mlx.ones([height, width], .float32)
@@ -188,12 +199,16 @@ fn composite_splats(splats []Splat2D, base mlx.Array, depth mlx.Array, width int
 			wgt := mlx.s_mul(p2, -0.5).exp()
 			mut alpha := mlx.array_f32(val, [k, 1, 1]).multiply(wgt)
 			alpha = mlx.where(inside, alpha, mlx.zeros_like(alpha))
+			// clamp alpha below 1 (3DGS practice): keeps the transmittance
+			// T > 0 after any number of layers, so deeper splats always keep
+			// their (small) contribution and compositing stays smooth
 			alpha = mlx.s_clip(alpha, 0.0, 0.99)
 			// occlusion by the opaque scene surface
 			vis := mlx.array_f32(vt, [k, 1, 1]).less(dep)
 			alpha = mlx.where(vis, alpha, mlx.zeros_like(alpha))
 			cols := mlx.array_f32(vcol, [k, 3])
-			// front-to-back alpha compositing with transmittance
+			// front-to-back alpha compositing with transmittance (gather-based;
+			// the mlx wrapper has no scatter)
 			for i in 0 .. k {
 				a_i := alpha.take_axis(mlx.int_scalar(i), 0)
 				c_i := cols.take_axis(mlx.int_scalar(i), 0)
@@ -218,8 +233,8 @@ fn composite_splats(splats []Splat2D, base mlx.Array, depth mlx.Array, width int
 		yy.free()
 	}
 	mut out := acc.add(trans.expand_dims(-1).multiply(base))
-	out = mlx.s_clip(out, 0.0, 255.0)
-	return mlx.concatenate([out, mlx.full_value([height, width, 1], 255.0, .float32)], -1)
+	out = mlx.s_clip(out, 0.0, 1.0)
+	return out
 }
 
 // project_point maps a world point to pixel coordinates (column, row) with
@@ -234,28 +249,61 @@ fn project_point(cam PerspectiveCamera, p [3]f64, width int, height int) (f64, f
 	return fx * xc / zc + f64(width - 1) / 2.0, fy * yc / zc + f64(height - 1) / 2.0
 }
 
+// bright_bbox returns (min_col, max_col, min_row, max_row) of frame pixels
+// whose brightness exceeds thresh (used by the splat tests, which compile
+// per-file and therefore cannot share test-local helpers).
+fn bright_bbox(data []f32, w int, h int, thresh f32) (int, int, int, int) {
+	mut c0 := w
+	mut c1 := -1
+	mut r0 := h
+	mut r1 := -1
+	for row in 0 .. h {
+		for col in 0 .. w {
+			idx := (row * w + col) * 4
+			if data[idx] + data[idx + 1] + data[idx + 2] > thresh {
+				if col < c0 {
+					c0 = col
+				}
+				if col > c1 {
+					c1 = col
+				}
+				if row < r0 {
+					r0 = row
+				}
+				if row > r1 {
+					r1 = row
+				}
+			}
+		}
+	}
+	return c0, c1, r0, r1
+}
+
 // render_splats renders the splat set alone over a flat background, returning
 // an (H, W, 4) float32 0..255 frame (same convention as Renderer.render).
 pub fn render_splats(g Gaussians, cam PerspectiveCamera, width int, height int, background Color) mlx.Array {
 	splats := project_splats(g, cam, width, height)
-	bg := mlx.arr3(background.r * 255.0, background.g * 255.0, background.b * 255.0).expand_dims(0).expand_dims(0).broadcast_to([
+	bg := mlx.arr3v(background.rgb()).expand_dims(0).expand_dims(0).broadcast_to([
 		height,
 		width,
 		3,
 	])
 	depth := mlx.full_value([height, width], f32(math.inf(1)), .float32)
-	return composite_splats(splats, bg, depth, width, height)
+	lin := composite_splats(splats, bg, depth, width, height)
+	return srgb_encode_frame(lin.reshape([height * width, 3]), width, height)
 }
 
-// render_splats_over ray-traces the scene with r (base colour + primary-hit
-// depth via r.depth_map()) and composites the splats with correct occlusion
-// by the opaque scene surface.  Returns (H, W, 4) float32 0..255.
+// render_splats_over ray-traces the scene with r (LINEAR base colour via
+// r.render_linear + primary-hit depth via r.depth_map()) and composites the
+// splats in linear space with correct occlusion by the opaque scene surface.
+// Returns (H, W, 4) float32 0..255 (sRGB-encoded).
 pub fn render_splats_over(g Gaussians, scene Scene, mut r Renderer, cam PerspectiveCamera) mlx.Array {
-	base := r.render(scene, cam) // (H, W, 4) 0..255
+	base := r.render_linear(scene, cam) // (H*W, 3) linear 0..1
 	depth := r.depth_map()
 	splats := project_splats(g, cam, r.width, r.height)
-	rgb := base.take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 2)
-	return composite_splats(splats, rgb, depth, r.width, r.height)
+	rgb := base.reshape([r.height, r.width, 3])
+	lin := composite_splats(splats, rgb, depth, r.width, r.height)
+	return srgb_encode_frame(lin.reshape([r.height * r.width, 3]), r.width, r.height)
 }
 
 // transform_gaussians applies a RIGID motor (rotation + translation) to a
@@ -315,9 +363,10 @@ pub fn render_scene_with_splats(scene Scene, mut r Renderer, cam PerspectiveCame
 			opaque.objects << obj
 		}
 	}
-	base := r.render(opaque, cam) // (H, W, 4) 0..255
+	base := r.render_linear(opaque, cam) // (H*W, 3) linear 0..1
 	depth := r.depth_map()
 	splats := project_splats(world, cam, r.width, r.height)
-	rgb := base.take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 2)
-	return composite_splats(splats, rgb, depth, r.width, r.height)
+	rgb := base.reshape([r.height, r.width, 3])
+	lin := composite_splats(splats, rgb, depth, r.width, r.height)
+	return srgb_encode_frame(lin.reshape([r.height * r.width, 3]), r.width, r.height)
 }

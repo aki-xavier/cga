@@ -14,9 +14,11 @@ pub mut:
 	aa        int
 	max_depth int
 	cam       ?PerspectiveCamera
-	// primary-hit distance per ray (aa^2*H*W), captured during render();
-	// used by depth_map() for splat compositing.  Empty before first render.
+	// primary-hit distance per ray (aa^2*H*W), captured during
+	// render()/render_linear(); used by depth_map() for splat compositing.
+	// has_depth is false until the first render.
 	last_depth mlx.Array
+	has_depth  bool
 }
 
 // renderer builds a Renderer (aa = supersampling factor).
@@ -62,8 +64,10 @@ fn (mut r Renderer) build_rays() mlx.Array {
 	return rays.divide(n)
 }
 
-// render produces the (H, W, 4) uint8 RGBA frame.
-pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array {
+// render_linear produces the (H*W, 3) LINEAR-space 0..1 frame (post AA mean,
+// clipped) before sRGB encoding.  r.last_depth holds the primary-hit depth
+// afterwards (see depth_map).  This is the base frame for splat compositing.
+pub fn (mut r Renderer) render_linear(scene Scene, camera PerspectiveCamera) mlx.Array {
 	r.cam = camera
 	rays := r.build_rays()
 	o := mlx.zeros_like(rays)
@@ -81,16 +85,29 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 	in_medium := mlx.zeros([n_rays], .bool_)
 	sigma := mlx.zeros([n_rays], .float32)
 	mut rgb := r.trace(scene, o, rays, lit, ambient, bg, in_medium, sigma, 0)
+	r.has_depth = true
 	s := r.aa * r.aa
 	if s > 1 {
 		rgb = rgb.reshape([s, n_rays / s, 3]).mean_axis(0, false)
 	}
-	rgb = mlx.s_clip(rgb, 0.0, 1.0)
-	rgb = mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb,
+	return mlx.s_clip(rgb, 0.0, 1.0)
+}
+
+// srgb_encode_frame applies the sRGB OETF to a linear (H*W, 3) 0..1 frame and
+// returns the (H, W, 4) 0..255 display frame.  Shared by Renderer.render and
+// the splat compositor so the encode formula lives in exactly one place.
+fn srgb_encode_frame(rgb mlx.Array, width int, height int) mlx.Array {
+	n := rgb.shape()[0]
+	enc := mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb,
 		1.0 / 2.4), 1.055), 0.055))
-	mut rgba := mlx.concatenate([rgb, mlx.ones([n_rays / s, 1], .float32)], -1)
+	mut rgba := mlx.concatenate([enc, mlx.ones([n, 1], .float32)], -1)
 	rgba = mlx.s_clip(mlx.s_add(mlx.s_mul(rgba, 255.0), 0.5), 0.0, 255.0)
-	return rgba.reshape([r.height, r.width, 4])
+	return rgba.reshape([height, width, 4])
+}
+
+// render produces the (H, W, 4) float32 0..255 sRGB RGBA frame.
+pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array {
+	return srgb_encode_frame(r.render_linear(scene, camera), r.width, r.height)
 }
 
 // trace returns the (N,3) linear colour for a ray bundle.  Transparent hits
@@ -241,9 +258,13 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 }
 
 // depth_map returns the (H, W) primary-hit distance image (inf = miss),
-// reduced over aa samples (nearest subpixel hit).  Valid after render();
-// used for depth-aware splat compositing (see splat_render.v).
+// reduced over aa samples (nearest subpixel hit).  Only valid after render()
+// or render_linear() on the same instance (panics otherwise); used for
+// depth-aware splat compositing (see splat_render.v).
 pub fn (r Renderer) depth_map() mlx.Array {
+	if !r.has_depth {
+		panic('depth_map() called before render()/render_linear() on this Renderer')
+	}
 	s := r.aa * r.aa
 	if s == 1 {
 		return r.last_depth.reshape([r.height, r.width])

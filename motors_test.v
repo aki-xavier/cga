@@ -43,6 +43,28 @@ fn test_interpolate_endpoints() {
 	assert a.interpolate(b, 1.0).eq(b)
 }
 
+fn test_rotor_from_quaternion_scaled() {
+	// 2x the quaternion for 60 deg about +z must give the same rotor as the
+	// unit quaternion (scale-invariant angle): e1 -> (cos60, sin60, 0)
+	c := math.cos(math.pi / 6.0) // half-angle 30 deg
+	s := math.sin(math.pi / 6.0)
+	q := Quaternion{
+		w: 2.0 * c
+		x: 0.0
+		y: 0.0
+		z: 2.0 * s
+	}
+	p := rotor_from_quaternion(q).apply(point_mv(1.0, 0.0, 0.0)).coords()
+	assert math.abs(p[0] - 0.5) < 1e-9
+	assert math.abs(p[1] - math.sqrt(3.0) / 2.0) < 1e-9
+	assert math.abs(p[2]) < 1e-9
+	// and the axis stays +z (not distorted by the scale)
+	p2 := rotor_from_quaternion(q).apply(point_mv(0.0, 0.0, 1.0)).coords()
+	assert math.abs(p2[2] - 1.0) < 1e-9
+	assert math.abs(p2[0]) < 1e-9
+	assert math.abs(p2[1]) < 1e-9
+}
+
 fn test_extract_velocity() {
 	// pure rotation about z at 1 rad/s
 	dt := 0.1

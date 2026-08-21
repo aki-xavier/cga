@@ -49,6 +49,8 @@ pub fn motor_rotor(axis [3]f64, angle f64) Multivector {
 }
 
 // rotor_from_quaternion builds a rotor from an (w, x, y, z) quaternion.
+// The quaternion need not be unit: the axis is normalised and the angle uses
+// the scale-invariant form 2*atan2(|xyz|, w).
 pub fn rotor_from_quaternion(q Quaternion) Multivector {
 	w := q.w
 	x := q.x
@@ -58,7 +60,7 @@ pub fn rotor_from_quaternion(q Quaternion) Multivector {
 	if n < 1e-12 {
 		return motor_identity()
 	}
-	angle := 2.0 * math.atan2(math.sqrt(x * x + y * y + z * z), w / n)
+	angle := 2.0 * math.atan2(math.sqrt(x * x + y * y + z * z), w)
 	return motor_rotor([x / n, y / n, z / n]!, angle)
 }
 

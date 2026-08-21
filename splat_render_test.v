@@ -58,6 +58,45 @@ fn test_splat_projection_lands_on_expected_pixel() {
 	assert math.abs(f64(best_row) - ex_row) <= 2.0
 }
 
+fn test_splat_blending_is_linear_space() {
+	// 129x129 so the centre pixel (64, 64) is hit exactly (w = 1, alpha = 0.5).
+	// Two half-opacity pure-red splats over a black background blend to
+	// 0.75 LINEAR red; the sRGB encode of that is ~225.1, while blending in
+	// display space would give 0.75 * 255 = 191.25.
+	w := 129
+	h := 129
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
+	cam.look_at([0.0, 0.0, 0.0]!, none)
+	splat := Gaussian{
+		mean:    [0.0, 0.0, 0.0]!
+		quat:    Quaternion{
+			w: 1.0
+			x: 0.0
+			y: 0.0
+			z: 0.0
+		}
+		scale:   [0.5, 0.5, 0.5]!
+		opacity: 0.5
+		color:   color_hex(0xFF0000)
+	}
+	g := Gaussians{
+		splats: [splat, splat]
+	}
+	img := render_splats(g, cam, w, h, color_rgb(0.0, 0.0, 0.0))
+	data := img.data_f32()
+	idx := (64 * w + 64) * 4
+	expected := 255.0 * (1.055 * math.pow(0.75, 1.0 / 2.4) - 0.055) + 0.5
+	assert math.abs(f64(data[idx]) - expected) < 1.5
+	assert data[idx] > 210.0 // clearly NOT the display-space blend (191.25)
+	// green/blue stay at the black background
+	assert data[idx + 1] < 1.0
+	assert data[idx + 2] < 1.0
+}
+
 fn splat_occlusion_scene() Scene {
 	mut sc := scene(color_rgb(0.0, 0.0, 0.0))
 	sc.add_mesh(mesh(MeshParams{
@@ -212,4 +251,115 @@ fn test_render_splats_dense_cyclide() {
 	assert red > 100
 	assert pale > 100
 	assert sky_hole > 20
+}
+
+// (bright_bbox lives in splat_render.v — test files compile per-file)
+
+fn flat_splat(scale [3]f64) Gaussian {
+	return Gaussian{
+		mean:    [0.0, 0.0, 0.0]!
+		quat:    Quaternion{
+			w: 1.0
+			x: 0.0
+			y: 0.0
+			z: 0.0
+		}
+		scale:   scale
+		opacity: 1.0
+		color:   color_hex(0xFFFFFF)
+	}
+}
+
+fn test_splat_anisotropic_orientation() {
+	// long axis local e1 = world x = screen columns: the bright ellipse must
+	// be much wider than tall (pins Sigma2's axes: sigma_x/sigma_y = 6)
+	w := 128
+	h := 128
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
+	cam.look_at([0.0, 0.0, 0.0]!, none)
+	g := Gaussians{
+		splats: [flat_splat([0.3, 0.05, 0.05]!)]
+	}
+	img := render_splats(g, cam, w, h, color_rgb(0.0, 0.0, 0.0))
+	c0, c1, r0, r1 := bright_bbox(img.data_f32(), w, h, 100.0)
+	col_span := c1 - c0 + 1
+	row_span := r1 - r0 + 1
+	assert col_span > 40
+	assert row_span <= 15
+	assert col_span > 3 * row_span
+}
+
+fn test_splat_chunk_boundary_compositing() {
+	// 33 coincident splats (crosses the 32-splat chunk seam), alternating
+	// red/green, alpha 0.5, strictly increasing depth.  Hand-computed
+	// front-to-back blend: red = (2/3)(1-0.25^17), green = (1/3)(1-0.25^16).
+	w := 129
+	h := 129
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
+	cam.look_at([0.0, 0.0, 0.0]!, none)
+	mut g := Gaussians{
+		splats: []Gaussian{cap: 33}
+	}
+	for i in 0 .. 33 {
+		g.splats << Gaussian{
+			mean:    [0.0, 0.0, -0.001 * f64(i)]! // i=0 nearest the camera
+			quat:    Quaternion{
+				w: 1.0
+				x: 0.0
+				y: 0.0
+				z: 0.0
+			}
+			scale:   [0.5, 0.5, 0.5]!
+			opacity: 0.5
+			color:   if i % 2 == 0 { color_hex(0xFF0000) } else { color_hex(0x00FF00) }
+		}
+	}
+	img := render_splats(g, cam, w, h, color_rgb(0.0, 0.0, 0.0))
+	data := img.data_f32()
+	idx := (64 * w + 64) * 4
+	red_lin := (2.0 / 3.0) * (1.0 - math.pow(0.25, 17.0))
+	green_lin := (1.0 / 3.0) * (1.0 - math.pow(0.25, 16.0))
+	enc := fn (c f64) f64 {
+		return 255.0 * (1.055 * math.pow(c, 1.0 / 2.4) - 0.055) + 0.5
+	}
+	assert math.abs(f64(data[idx]) - enc(red_lin)) < 1.5
+	assert math.abs(f64(data[idx + 1]) - enc(green_lin)) < 1.5
+	assert data[idx + 2] < 1.0
+}
+
+fn test_depth_map_aa2() {
+	w := 64
+	h := 64
+	mut sc := scene(color_rgb(0.0, 0.0, 0.0))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       sphere_geometry(1.0)
+		material:       basic_material(color_hex(0xC0392B), 1.0)
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
+	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [
+		0.0,
+		1.0,
+		0.0,
+	]!)
+	cam.look_at([0.0, 0.0, 0.0]!, none)
+	mut r := renderer(w, h, 2, 3)
+	img := r.render(sc, cam)
+	img.free()
+	dm := r.depth_map()
+	assert dm.shape() == [64, 64]
+	data := dm.data_f32()
+	// centre: sphere surface at distance ~3; corner: background (inf)
+	assert math.abs(f64(data[32 * 64 + 32]) - 3.0) < 0.1
+	assert data[0] > 1e30
 }

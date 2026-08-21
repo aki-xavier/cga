@@ -218,3 +218,44 @@ fn test_plain_renderer_ignores_splat_meshes() {
 		assert !(data[i + 1] > data[i] + 20.0 && data[i + 1] > data[i + 2] + 20.0)
 	}
 }
+
+fn test_splat_mesh_rotation_turns_ellipse() {
+	// anisotropic splat with its long axis along local e1, under a 90° z
+	// rotation in the Object3D pose: the on-screen ellipse must be VERTICAL
+	// (catches a transposed mat3_mul(ro, rw) in transform_gaussians)
+	w := 128
+	h := 128
+	cam := scene_test_camera(w, h)
+	mut sc := scene(color_rgb(0.0, 0.0, 0.0))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       splats_geometry(Gaussians{
+			splats: [
+				Gaussian{
+					mean:    [0.0, 0.0, 0.0]!
+					quat:    Quaternion{
+						w: 1.0
+						x: 0.0
+						y: 0.0
+						z: 0.0
+					}
+					scale:   [0.3, 0.05, 0.05]!
+					opacity: 1.0
+					color:   color_hex(0xFFFFFF)
+				},
+			]
+		})
+		material:       basic_material(color_hex(0xFFFFFF), 1.0)
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: math.pi / 2.0
+		motor:          none
+	}))
+	mut r := renderer(w, h, 1, 3)
+	img := render_scene_with_splats(sc, mut r, cam)
+	c0, c1, r0, r1 := bright_bbox(img.data_f32(), w, h, 100.0)
+	col_span := c1 - c0 + 1
+	row_span := r1 - r0 + 1
+	assert row_span > 40
+	assert col_span <= 15
+	assert row_span > 3 * col_span
+}

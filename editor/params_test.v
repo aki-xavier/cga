@@ -20,8 +20,7 @@ fn test_params_named_scalar() {
 
 fn test_params_vector_elements() {
 	ps := extract_params('translate([0, 1, 0]) sphere(r=0.5);')
-	assert param_labels(ps) == ['translate.t[0]', 'translate.t[1]', 'translate.t[2]',
-		'sphere.r']
+	assert param_labels(ps) == ['translate.t[0]', 'translate.t[1]', 'translate.t[2]', 'sphere.r']
 }
 
 fn test_params_skips_hex_colors() {
@@ -44,4 +43,13 @@ fn test_params_format_number_trims() {
 	assert format_number(0.7) == '0.7'
 	assert format_number(6.1999998) == '6.2'
 	assert format_number(-0.0) == '0'
+}
+
+fn test_params_splats_positional_and_named() {
+	// positional args map to the splats signature names
+	ps := extract_params('splats(200, 0.1, 0.02) sphere(r=1);')
+	assert param_labels(ps) == ['splats.n', 'splats.sigma_tangent', 'splats.sigma_normal', 'sphere.r']
+	// keyword args self-label
+	ps2 := extract_params('splats(n=200, opacity=0.6) sphere(r=1);')
+	assert param_labels(ps2) == ['splats.n', 'splats.opacity', 'sphere.r']
 }

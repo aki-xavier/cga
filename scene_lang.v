@@ -12,7 +12,9 @@ module cga
 // primitive (both meshes share the pose):
 //   material(color=0xC0392B) splats(n=500, sigma_tangent=0.07,
 //       sigma_normal=0.02, opacity=0.6) sphere(r=1);
-// Per-splat colour comes from the object material; opacity defaults to 0.6.
+// Positional order is n, sigma_tangent, sigma_normal; opacity and color are
+// keyword-only.  Per-splat colour comes from the object material unless
+// color= overrides it; opacity defaults to 0.6.
 // Supported on sphere/ellipsoid/torus/cone/cylinder/box/plane/cyclide and on
 // rigid + uniform-scale transforms; other kinds are an eval error.  Scenes
 // with splat layers must be rendered with render_scene_with_splats.
