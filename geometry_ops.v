@@ -280,8 +280,8 @@ pub fn box_uv(p BoxParams, pos mlx.Array, n mlx.Array) mlx.Array {
 		half_a.take_axis(mlx.int_scalar(0), 0))
 	sy := mlx.where(mlx.s_eq(face, 2.0), half_a.take_axis(mlx.int_scalar(1), 0),
 		half_a.take_axis(mlx.int_scalar(2), 0))
-	return mlx.stack([mlx.s_add(x.divide(mlx.s_mul(sx, 2.0)), 0.5), mlx.s_add(y.divide(mlx.s_mul(sy, 2.0)), 0.5)],
-		-1)
+	return mlx.stack([mlx.s_add(x.divide(mlx.s_mul(sx, 2.0)), 0.5),
+		mlx.s_add(y.divide(mlx.s_mul(sy, 2.0)), 0.5)], -1)
 }
 
 // --- circle -----------------------------------------------------------------
@@ -334,6 +334,7 @@ pub fn geom_intersect(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, ml
 		TrimeshParams { trimesh_intersect(p, o, d) }
 		CsgParams { csg_intersect(p, o, d) }
 		AffineParams { affine_intersect(p, o, d) }
+		DisplacedParams { displaced_intersect(p, o, d) }
 	}
 }
 
@@ -351,6 +352,7 @@ pub fn geom_shadow(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.A
 		TrimeshParams { trimesh_shadow(p, o, d) }
 		CsgParams { csg_shadow(p, o, d) }
 		AffineParams { affine_shadow(p, o, d) }
+		DisplacedParams { displaced_shadow(p, o, d) }
 	}
 }
 
@@ -368,6 +370,7 @@ pub fn geom_uv(p GeometryParams, pos mlx.Array, n mlx.Array) mlx.Array {
 		TrimeshParams { trimesh_uv(p, pos, n) }
 		CsgParams { csg_uv(p, pos, n) }
 		AffineParams { affine_uv(p, pos, n) }
+		DisplacedParams { displaced_uv(p, pos, n) }
 	}
 }
 
@@ -418,6 +421,9 @@ pub fn geom_bounds(p GeometryParams) ?[2][3]f64 {
 		}
 		AffineParams {
 			return affine_bounds_from_inner(p)
+		}
+		DisplacedParams {
+			return displaced_bounds(p)
 		}
 	}
 }

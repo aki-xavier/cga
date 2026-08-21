@@ -15,9 +15,9 @@ fn render_panel(sc cga.Scene, cam_pos [3]f64, target [3]f64, name string) {
 	cam.look_at(target, none)
 	mut r := cga.renderer(400, 300, 2, 3)
 	img := r.render(sc, cam)
-	os.mkdir_all('examples/artifacts') or {}
-	cga.save_frame_png('examples/artifacts/${name}.png', img)
-	println('saved examples/artifacts/${name}.png')
+	out_dir := os.dir(@FILE)
+	os.mkdir_all(out_dir) or {}
+	cga.save_frame_png('${out_dir}/${name}.png', img)
 }
 
 fn panel_a() cga.Scene {
@@ -139,15 +139,22 @@ fn panel_c() cga.Scene {
 			motor:          m
 		}))
 	}
-	sc.add_mesh(cga.mesh(cga.MeshParams{ geometry: cga.box_geometry(0.65, 0.65, 0.65), material: cga.standard_material(cga.MaterialParams{
-		color:      cga.color_hex(0x27AE60)
-		roughness:  0.55
-		metalness:  0.0
-		emissive:   cga.color_hex(0x000000)
-		opacity:    1.0
-		ior:        1.5
-		absorption: 0.0
-	}), position: [0.0, 0.0, 0.0]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: m1 }))
+	sc.add_mesh(cga.mesh(cga.MeshParams{
+		geometry:       cga.box_geometry(0.65, 0.65, 0.65)
+		material:       cga.standard_material(cga.MaterialParams{
+			color:      cga.color_hex(0x27AE60)
+			roughness:  0.55
+			metalness:  0.0
+			emissive:   cga.color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
+		position:       [0.0, 0.0, 0.0]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          m1
+	}))
 	sc.add_light(cga.directional_light(cga.color_hex(0xFFFFFF), 0.45, [0.4, 1.0, 0.35]!))
 	sc.add_light(cga.point_light(cga.color_hex(0xFFFFFF), 0.6, [-1.0, 2.5, 3.0]!))
 	sc.add_light(cga.ambient_light(cga.color_hex(0xFFFFFF), 0.38))

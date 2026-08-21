@@ -178,8 +178,8 @@ fn box_contains(p BoxParams, pos mlx.Array) mlx.Array {
 	q0 := q.multiply(ax0).sum_axis(-1, false)
 	q1 := q.multiply(ax1).sum_axis(-1, false)
 	q2 := q.multiply(ax2).sum_axis(-1, false)
-	inside = inside.logical_and(mlx.s_le(q0.abs(), p.half[0])).logical_and(mlx.s_le(q1.abs(), p.half[1])).logical_and(mlx.s_le(q2.abs(),
-		p.half[2]))
+	inside = inside.logical_and(mlx.s_le(q0.abs(), p.half[0])).logical_and(mlx.s_le(q1.abs(),
+		p.half[1])).logical_and(mlx.s_le(q2.abs(), p.half[2]))
 	return inside
 }
 
@@ -288,6 +288,7 @@ pub fn geom_crossings(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, ml
 		CircleParams { panic('circle is not a solid (no crossings)') }
 		CsgParams { csg_crossings(p, o, d) }
 		AffineParams { affine_crossings(p, o, d) }
+		DisplacedParams { panic('displaced surface is not a solid (no crossings)') }
 	}
 }
 
@@ -305,5 +306,6 @@ pub fn geom_contains(p GeometryParams, pos mlx.Array) mlx.Array {
 		CircleParams { panic('circle is not a solid (no contains)') }
 		CsgParams { csg_contains(p, pos) }
 		AffineParams { affine_contains(p, pos) }
+		DisplacedParams { panic('displaced surface is not a solid (no contains)') }
 	}
 }

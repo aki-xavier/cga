@@ -41,7 +41,7 @@ v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
-make test     # 跑全部 18 个测试文件（-no-memory-limit，见 Makefile）
+make test     # 跑全部 19 个测试文件（-no-memory-limit，见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
@@ -125,6 +125,14 @@ ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，D
 **仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向
 走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解
 为 motor·linear，rotate 与 scale/mirror 任意嵌套顺序均正确。
+
+**位移曲面（基元 + 残差）** — `displaced.v`：一般曲面表示为
+`F(x) = d_base(x) − scale·r(uv(x))`，基元取 sphere/plane/无限 cylinder/cyclide，
+r 为双线性残差网格（u 周期缠绕）。求交 = 基元解析括段（半径按 max|残差| 膨胀）+
+段内 128 步符号扫描 + 8 次二分细化（非自由空间 ray marching）；法向为 F 的中心
+差分。`bake_residual` 沿基元节点法向批量投射射线把任意目标几何（含 trimesh）
+烘焙成残差网格，闭合「任意曲面 → CGA 基元」的表达回环。示例
+`examples/demo_displace.v`（loft 花瓶 → 圆柱，PSNR ~34 dB）。
 
 **网格与互操作** — MeshGeometry（Möller–Trumbore 批量求交，平坦法向，无 BVH）；
 `modeling.v` 的 extrude（耳切凹轮廓三角化）与 loft（等点数多截面）；`mesh_io.v`
@@ -285,6 +293,8 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   shading.v                材质/灯光 + 批量 Blinn-Phong
   texture.v                PNG 解码 + bilinear map 采样
   renderer.v               mlx-v GPU 批量光线追踪（SSAA/硬阴影/Whitted 折射）
+  displaced.v + displaced_kernel.v
+                           基元+残差位移曲面（bracket+march 求交 / 残差烘焙）
   csg.v + csg_node.v       递归 CSG 布尔（crossings/contains 实体协议）
   affine.v + affine_geom.v 仿射扩展（scale/mirror 射线逆变换 + Newton 极分解）
   modeling.v               耳切三角化 + extrude + loft
@@ -293,7 +303,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   image_io.v               PNG 读写
   gif.v                    动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
   scene_lang.v             CGS 场景语言（lexer + 单遍 parser/evaluator）
-  *_test.v                 16 个根目录测试文件
+  *_test.v                 17 个根目录测试文件
   editor/                  CGS 网页编辑器（server.v/params.v/highlight.v + web/）
                            + params_test.v / highlight_test.v
   examples/                .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
@@ -312,12 +322,14 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `render_smoke.v` —— smoke 场景 → `render_smoke.png`（即 `make run`）
 - `render_cgs.v <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
+- `demo_displace.v` —— loft 星形花瓶烘焙到圆柱基元 → `displace_{target,displaced,diff}.png`
 
 ## 质量
 
-- `make test`（`v -no-memory-limit test .`）：18 个测试文件全过 —— 代数恒等式 /
+- `make test`（`v -no-memory-limit test .`）：19 个测试文件全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
-  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 编辑器 params+highlight。
+  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 位移曲面烘焙 /
+  编辑器 params+highlight。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - `v test .` 零警告、零 notice。

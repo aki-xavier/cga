@@ -9,7 +9,7 @@
 
 # `-no-memory-limit` because `v test .` compiles the whole cga + mlx modules in
 # parallel (the v3 compiler's default 2.3 GiB guard trips on the generated GP
-# table + 18 test files).
+# table + 19 test files).
 test:
 	v -gc boehm -no-memory-limit test .
 
