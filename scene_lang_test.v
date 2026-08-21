@@ -3,14 +3,14 @@ module cga
 import os
 
 fn test_cgs_orbit() {
-	text := os.read_file('examples/orbit.cgs') or { panic('read orbit.cgs') }
+	text := os.read_file('examples/cgs/orbit.cgs') or { panic('read orbit.cgs') }
 	sc, _ := cgs_load(text, 'examples')
 	assert sc.objects.len == 7
 	assert sc.lights.len == 4
 }
 
 fn test_cgs_grid_module() {
-	text := os.read_file('examples/grid.cgs') or { panic('read grid.cgs') }
+	text := os.read_file('examples/cgs/grid.cgs') or { panic('read grid.cgs') }
 	sc, _ := cgs_load(text, 'examples')
 	assert sc.objects.len == 10
 	assert sc.lights.len == 2
@@ -26,7 +26,7 @@ fn test_cgs_csg_and_scale() {
 }
 
 fn test_cgs_render() {
-	text := os.read_file('examples/orbit.cgs') or { panic('read orbit.cgs') }
+	text := os.read_file('examples/cgs/orbit.cgs') or { panic('read orbit.cgs') }
 	sc, cam := cgs_load(text, 'examples')
 	mut r := renderer(120, 90, 1, 3)
 	img := r.render(sc, cam)

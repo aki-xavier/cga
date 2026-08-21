@@ -4,10 +4,10 @@ import mlx
 import os
 
 fn test_png_decode_and_sample() {
-	rgba, w, h := load_png_rgba('examples/assets/brick.png')!
+	rgba, w, h := load_png_rgba('examples/cgs/assets/brick.png')!
 	assert w == 256 && h == 256
 	assert rgba.len == 256 * 256 * 4
-	tex := texture_load('examples/assets/brick.png')!
+	tex := texture_load('examples/cgs/assets/brick.png')!
 	assert tex.width == 256 && tex.height == 256
 	uv := mlx.array_f32([f32(0.5), 0.5], [1, 2])
 	s := tex.sample(uv, .repeat, .repeat)
@@ -17,7 +17,7 @@ fn test_png_decode_and_sample() {
 }
 
 fn test_textured_render() {
-	tex := texture_load('examples/assets/brick.png')!
+	tex := texture_load('examples/cgs/assets/brick.png')!
 	mut sc := scene(none)
 	mut mat := standard_material(MaterialParams{
 		color:      color_hex(0xFFFFFF)
@@ -29,11 +29,18 @@ fn test_textured_render() {
 		absorption: 0.0
 	})
 	mat.map = tex
-	sc.add_mesh(mesh(MeshParams{ geometry: box_geometry(1.0, 1.0, 1.0), material: mat, position: [
-		0.0,
-		0.0,
-		0.0,
-	]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: none }))
+	sc.add_mesh(mesh(MeshParams{
+		geometry:       box_geometry(1.0, 1.0, 1.0)
+		material:       mat
+		position:       [
+			0.0,
+			0.0,
+			0.0,
+		]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          none
+	}))
 	sc.add_light(directional_light(color_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]!))
 	sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.2))
 	mut cam := perspective_camera(40.0, 1.0, 0.1, 100.0, [0.0, 0.0, 4.0]!, [0.0, 0.0, 0.0]!, [

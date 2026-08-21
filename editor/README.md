@@ -12,18 +12,19 @@ make editor              # or: v -gc boehm run editor/
 
 The server:
 
-- `GET  /` — serves `web/index.html` (the editor UI: textarea + preview + sliders).
-- `POST /render?w=&h=&aa=` — body = CGS text → PNG.
-- `POST /params` — body = CGS text → JSON of draggable numeric parameters.
+- `GET  /` — serves `web/index.html` (the editor UI: textarea + preview).
+- `POST /render?w=&h=&aa=` — body = CGS text → PNG.  CGS parse/eval errors and
+  invalid render args return HTTP 400 with a readable message; the page shows
+  it in a red overlay over the preview (keeping the last good render) and
+  clears it on the next successful render.
 - `GET  /health` — `ok`.
 
 ## Layout
 
 - `server.v` — HTTP server (`net.http`) + CGS→PNG rendering via `cga`.
-- `params.v` — numeric-parameter extraction (port of `editor/src/params.rs`).
 - `highlight.v` — CGS syntax-highlighting lexer (port of `editor/src/highlight.rs`).
-- `web/index.html` — the editor frontend (highlighting, sliders, debounced render).
-- `*_test.v` — tests for params + highlight.
+- `web/index.html` — the editor frontend (highlighting, error overlay, debounced render).
+- `highlight_test.v` — tests for the highlighter.
 
 ## Tests
 

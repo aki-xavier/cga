@@ -107,6 +107,31 @@ fn test_cgs_load_result_errors() {
 	}
 	assert saw_err3
 
+	// constructor-panic inputs must come back as clean errors (no panic)
+	bad := [
+		'sphere(r=-1);|sphere.r must be > 0',
+		'sphere();|sphere.r must be > 0',
+		'box(s=[1, 0, 1]);|box.s components must be > 0',
+		'plane(n=[0, 0, 0]);|plane.n must not be zero',
+		'cyclide(a=1, b=2, d=0.3);|cyclide needs a > b > 0',
+		'camera(fov=0);|camera.fov must be in (0, 180)',
+		'loft(profiles=[[[0, 0], [1, 0], [1, 1]], [[0, 0], [1, 0]]], zs=[0, 1]);|same vertex count',
+		'loft(profiles=[[[0, 0], [1, 0], [1, 1]], [[0, 0], [1, 0], [1, 1]]], zs=[1, 0]);|strictly increasing',
+		'difference() { circle(r=1); sphere(r=1); }|must be solids',
+		'extrude(profile=[[0, 0], [0, 0], [0, 0]], h=1);|duplicate consecutive points',
+		'extrude(profile=[[0, 0], [1, 0], [0.5, 0]], h=1);|degenerate',
+		'extrude(profile=[[0, 0], [2, 0], [2, 2], [1, -1], [0, 2]], h=1);|self-intersects',
+	]
+	for entry in bad {
+		parts := entry.split('|')
+		mut saw := false
+		cgs_load_result(parts[0], '') or {
+			assert err.msg().contains(parts[1])
+			saw = true
+		}
+		assert saw
+	}
+
 	// valid input still parses
 	sc, _ := cgs_load_result('sphere(r=1);', '') or { panic('unexpected error') }
 	assert sc.objects.len == 1

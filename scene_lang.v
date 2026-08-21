@@ -885,6 +885,14 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		tgt := cgs_vec3(args['target'] or { f64(0.0) }, t.line, 'camera.target') or {
 			return error(err.msg())
 		}
+		// perspective_camera panics on bad fov; the editor server has no panic
+		// recovery, so validate here
+		if fov <= 0.0 || fov >= 180.0 {
+			return error('CGS line ${t.line}: camera.fov must be in (0, 180), got ${fov}')
+		}
+		if aspect <= 0.0 {
+			return error('CGS line ${t.line}: camera.aspect must be > 0, got ${aspect}')
+		}
 		mut cam := perspective_camera(fov, aspect, 0.1, 100.0, campos, tgt, [0.0, 1.0, 0.0]!)
 		cam.look_at(tgt, none)
 		l.camera = cam
@@ -1348,6 +1356,12 @@ fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue,
 	}
 	mut kids := []Geometry{}
 	for c in children {
+		match c.geo {
+			CircleGeometry, DisplacedGeometry {
+				return error('CGS line ${line}: ${op} children must be solids (circle/displaced surfaces are not)')
+			}
+			else {}
+		}
 		cm, cl := decompose_rigid(c.m4)
 		kids << transformed_geometry(c.geo, cm, cl)
 	}
@@ -1365,7 +1379,105 @@ fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue,
 	}))
 }
 
+// cgs_arg_num reads a numeric arg with a 0.0 fallback (validation only;
+// build_geometry re-reads with proper errors).
+fn cgs_arg_num(args map[string]CgsValue, key string) f64 {
+	return cgs_num(args[key] or { f64(0.0) }, 0, key) or { 0.0 }
+}
+
+// validate_geometry_params turns constructor panics into clean CGS errors:
+// the geometry constructors panic on bad parameters (sphere r <= 0, plane
+// zero normal, loft unsorted zs, ...) and the editor server has no panic
+// recovery, so common user mistakes must error out here.
+fn validate_geometry_params(name string, args map[string]CgsValue, line int) ! {
+	mut pos_keys := []string{}
+	match name {
+		'sphere', 'circle', 'cylinder' {
+			pos_keys = ['r']
+		}
+		'cone' {
+			pos_keys = ['r', 'h']
+		}
+		'torus' {
+			pos_keys = ['R', 'r']
+		}
+		'extrude' {
+			pos_keys = ['h']
+		}
+		else {}
+	}
+	for k in pos_keys {
+		if cgs_arg_num(args, k) <= 0.0 {
+			return error('CGS line ${line}: ${name}.${k} must be > 0')
+		}
+	}
+	match name {
+		'box', 'ellipsoid' {
+			key := if name == 'box' { 's' } else { 'radii' }
+			v := cgs_vec3(args[key] or { f64(0.0) }, line, '${name}.${key}') or {
+				return error(err.msg())
+			}
+			if math.min(v[0], math.min(v[1], v[2])) <= 0.0 {
+				return error('CGS line ${line}: ${name}.${key} components must be > 0')
+			}
+		}
+		'plane' {
+			n := cgs_vec3(args['n'] or { f64(0.0) }, line, 'plane.n') or { return error(err.msg()) }
+			if vec3_dot(n, n) < 1e-24 {
+				return error('CGS line ${line}: plane.n must not be zero')
+			}
+		}
+		'cyclide' {
+			a := cgs_arg_num(args, 'a')
+			b := cgs_arg_num(args, 'b')
+			d := cgs_arg_num(args, 'd')
+			if !(a > b && b > 0.0) {
+				return error('CGS line ${line}: cyclide needs a > b > 0')
+			}
+			if d <= 0.0 {
+				return error('CGS line ${line}: cyclide.d must be > 0')
+			}
+		}
+		'loft' {
+			// loft() panics on mismatched profile sizes or unsorted zs
+			if raw := args['profiles'] {
+				if raw is []CgsValue {
+					mut m := -1
+					for p in raw {
+						if p is []CgsValue {
+							if m >= 0 && p.len != m {
+								return error('CGS line ${line}: loft profiles must share the same vertex count')
+							}
+							m = p.len
+						}
+					}
+				}
+			}
+			mut zs := []f64{}
+			zsraw := args['zs'] or { f64(0.0) }
+			match zsraw {
+				CgsVec3 {
+					zs = [zsraw.x, zsraw.y, zsraw.z]
+				}
+				[]CgsValue {
+					for z in zsraw {
+						zs << cgs_num(z, line, 'loft.zs[i]') or { return error(err.msg()) }
+					}
+				}
+				else {}
+			}
+			for i in 0 .. zs.len - 1 {
+				if zs[i] >= zs[i + 1] {
+					return error('CGS line ${line}: loft.zs must be strictly increasing')
+				}
+			}
+		}
+		else {}
+	}
+}
+
 fn (mut l SceneLoader) build_geometry(name string, args map[string]CgsValue, line int) !Geometry {
+	validate_geometry_params(name, args, line)!
 	match name {
 		'sphere' {
 			r := cgs_num(args['r'] or { f64(0.0) }, line, 'sphere.r') or { return error(err.msg()) }
@@ -1516,6 +1628,9 @@ fn (mut l SceneLoader) profile2d(v CgsValue, line int, what string) ![][2]f64 {
 					}
 				}
 			}
+			// triangulate/extrude panic on bad profiles; the server has no
+			// panic recovery, so validate here
+			validate_profile(pts) or { return error('CGS line ${line}: ${err.msg()}') }
 			return pts
 		}
 		else {

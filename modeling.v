@@ -21,6 +21,49 @@ fn cross2(o [2]f64, a [2]f64, b [2]f64) f64 {
 	return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
 
+// segs_intersect reports whether the open segments p1-p2 and p3-p4 cross.
+fn segs_intersect(p1 [2]f64, p2 [2]f64, p3 [2]f64, p4 [2]f64) bool {
+	d1 := cross2(p3, p4, p1)
+	d2 := cross2(p3, p4, p2)
+	d3 := cross2(p1, p2, p3)
+	d4 := cross2(p1, p2, p4)
+	return ((d1 > 1e-12 && d2 < -1e-12) || (d1 < -1e-12 && d2 > 1e-12))
+		&& ((d3 > 1e-12 && d4 < -1e-12) || (d3 < -1e-12 && d4 > 1e-12))
+}
+
+// validate_profile reports the conditions under which triangulate/extrude
+// would panic (too few points, duplicate consecutive points, zero area,
+// self-intersection) — for callers without panic recovery (the CGS server).
+pub fn validate_profile(profile [][2]f64) ! {
+	n := profile.len
+	if n < 3 {
+		return error('profile needs >= 3 points, got ${n}')
+	}
+	for i in 0 .. n {
+		j := (i + 1) % n
+		dx := profile[j][0] - profile[i][0]
+		dy := profile[j][1] - profile[i][1]
+		if dx * dx + dy * dy < 1e-24 {
+			return error('profile has duplicate consecutive points (${i}/${j})')
+		}
+	}
+	if math.abs(signed_area(profile)) < 1e-12 {
+		return error('profile is degenerate (zero area / collinear)')
+	}
+	// non-adjacent edge crossings (ear clipping cannot handle those)
+	for i in 0 .. n {
+		for j in i + 1 .. n {
+			// skip adjacent edges (sharing a vertex)
+			if j == i || j == (i + 1) % n || i == (j + 1) % n {
+				continue
+			}
+			if segs_intersect(profile[i], profile[(i + 1) % n], profile[j], profile[(j + 1) % n]) {
+				return error('profile self-intersects (edges ${i} and ${j})')
+			}
+		}
+	}
+}
+
 fn in_tri(p [2]f64, a [2]f64, b [2]f64, c [2]f64) bool {
 	return cross2(a, b, p) >= -1e-12 && cross2(b, c, p) >= -1e-12 && cross2(c, a, p) >= -1e-12
 }

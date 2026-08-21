@@ -48,6 +48,7 @@
   #code::selection { background: rgba(90,120,255,.35); }
   .side { width: 340px; display: flex; flex-direction: column; border-left: 1px solid #2a2a3a; }
   .preview {
+    position: relative;
     height: 320px; display: flex; align-items: center; justify-content: center;
     background: #101018; overflow: hidden;
   }
@@ -56,13 +57,21 @@
   .status { padding: 6px 12px; font-size: 12px; }
   .status.ok { color: var(--ok); }
   .status.err { color: var(--err); }
-  .params { flex: 1; overflow-y: auto; padding: 8px 12px; }
-  .params h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 500; }
-  .param { margin-bottom: 8px; }
-  .param .row { display: flex; justify-content: space-between; font-size: 12px; }
-  .param .row .label { color: var(--muted); }
-  .param .row .val { color: var(--fg); }
-  .param input[type=range] { width: 100%; accent-color: var(--accent); }
+  /* prominent render-error overlay over the preview (keeps last good image) */
+  .err-overlay {
+    position: absolute; inset: 0; z-index: 3;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 16px;
+    background: rgba(50, 8, 8, 0.94); color: #ffb4b4;
+    border-top: 2px solid var(--err); border-bottom: 2px solid var(--err);
+    text-align: center;
+  }
+  .err-overlay .err-title { color: #ff6b6b; font-weight: 600; font-size: 14px; }
+  .err-overlay .err-msg {
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 200px; overflow-y: auto; line-height: 1.5;
+  }
+  .err-overlay[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -81,18 +90,24 @@
     </div>
   </div>
   <div class="side">
-    <div class="preview" id="preview"><span class="placeholder">预览加载中…</span></div>
+    <div class="preview" id="preview">
+      <span class="frame" id="frame"><span class="placeholder">预览加载中…</span></span>
+      <div class="err-overlay" id="errOverlay" hidden>
+        <span class="err-title">渲染错误</span>
+        <span class="err-msg" id="errMsg"></span>
+      </div>
+    </div>
     <div class="status" id="status">就绪</div>
-    <div class="params" id="params"><h3>参数</h3></div>
   </div>
 </main>
 
 <script>
 const code = document.getElementById('code');
 const highlight = document.getElementById('highlight');
-const preview = document.getElementById('preview');
+const frame = document.getElementById('frame');
 const status = document.getElementById('status');
-const paramsBox = document.getElementById('params');
+const errOverlay = document.getElementById('errOverlay');
+const errMsg = document.getElementById('errMsg');
 
 const EXAMPLES = [
   'sphere(r=1);\n',
@@ -102,7 +117,6 @@ const EXAMPLES = [
 ];
 
 let debounceTimer = null;
-let currentParams = [];
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -155,7 +169,19 @@ function updateHighlight() {
   highlight.scrollLeft = code.scrollLeft;
 }
 
-// --- render + params ---
+// --- render ---
+function showError(msg) {
+  errMsg.textContent = msg;
+  errOverlay.hidden = false;
+  status.textContent = '渲染失败';
+  status.className = 'status err';
+}
+
+function clearError() {
+  errOverlay.hidden = true;
+  errMsg.textContent = '';
+}
+
 async function render() {
   const text = code.value;
   status.textContent = '渲染中…';
@@ -165,76 +191,18 @@ async function render() {
     if (resp.ok) {
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
-      preview.innerHTML = `<img src="${url}">`;
+      frame.innerHTML = `<img src="${url}">`;
+      clearError();
       status.textContent = '已渲染';
       status.className = 'status ok';
     } else {
-      preview.innerHTML = '<span class="placeholder">渲染失败</span>';
-      status.textContent = await resp.text();
-      status.className = 'status err';
+      // server-side CGS error (400/500): show the message over the preview,
+      // keeping the last good render underneath
+      showError(await resp.text());
     }
   } catch (e) {
-    preview.innerHTML = '<span class="placeholder">渲染失败</span>';
-    status.textContent = '渲染服务不可达: ' + e;
-    status.className = 'status err';
+    showError('渲染服务不可达: ' + e);
   }
-  refreshParams();
-}
-
-async function refreshParams() {
-  try {
-    const resp = await fetch('/params', { method: 'POST', body: code.value });
-    currentParams = resp.ok ? await resp.json() : [];
-  } catch (e) {
-    currentParams = [];
-  }
-  buildSliders();
-}
-
-function buildSliders() {
-  paramsBox.innerHTML = `<h3>参数 (${currentParams.length} 个可拖拽)</h3>`;
-  if (currentParams.length === 0) {
-    paramsBox.innerHTML += '<div style="color:#6a7080;font-size:12px">无数值参数</div>';
-    return;
-  }
-  for (const p of currentParams) {
-    const wrap = document.createElement('div');
-    wrap.className = 'param';
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.innerHTML = `<span class="label">${escapeHtml(p.label)}</span><span class="val">${(+p.value).toFixed(3)}</span>`;
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.min = p.min; input.max = p.max; input.step = p.step; input.value = p.value;
-    input.addEventListener('input', () => {
-      row.querySelector('.val').textContent = (+input.value).toFixed(3);
-      applySlider(p.label, p.ordinal, +input.value);
-    });
-    wrap.appendChild(row); wrap.appendChild(input);
-    paramsBox.appendChild(wrap);
-  }
-}
-
-function formatNumber(v) {
-  let s = v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-  if (s === '' || s === '-0' || s === '-') s = '0';
-  return s;
-}
-
-async function applySlider(label, ordinal, value) {
-  // re-fetch current params to get fresh byte offsets, then patch the text
-  let ps = currentParams;
-  try {
-    const resp = await fetch('/params', { method: 'POST', body: code.value });
-    if (resp.ok) ps = await resp.json();
-  } catch (e) { /* ignore */ }
-  const p = ps.find(q => q.label === label && q.ordinal === ordinal);
-  if (!p) return;
-  const text = code.value;
-  code.value = text.slice(0, p.start) + formatNumber(value) + text.slice(p.end);
-  currentParams = ps;
-  updateHighlight();
-  schedule();
 }
 
 function schedule() {

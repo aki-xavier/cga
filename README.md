@@ -41,7 +41,7 @@ v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
-make test     # 跑全部 19 个测试文件（-no-memory-limit，见 Makefile）
+make test     # 跑全部 18 个测试文件（-no-memory-limit，见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
@@ -83,14 +83,12 @@ v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 
 `editor/` 是网页版实时预览编辑器（V `net.http` 服务，替代原 Rust/gpui 版本）：
 左侧代码编辑，右侧实时预览（编辑防抖 → `POST /render` → PNG），解析错误返回
-HTTP 400 并在界面提示（Result 式解析，不会崩掉服务）。
+HTTP 400 并以红色浮层覆盖预览区提示（Result 式解析，不会崩掉服务）。
 
 - **CGS 语法高亮**：手写词法分析器（`editor/highlight.v`：关键字 / 图元 /
   修饰符 / 函数 / 数字与色值 / 注释 / 运算符）。
-- **拖拽调参**：`editor/params.v` 把每个数值字面量（如 `sphere.r`、
-  `translate.t[1]`）映射为滑块，拖动直写回源文本并实时重渲染。
 - 路由：`GET /`（编辑器页面）、`POST /render?w=&h=&aa=`（CGS→PNG）、
-  `POST /params`（提取可拖动参数 JSON）、`GET /health`。
+  `GET /health`。
 
 ```bash
 make editor     # 或：v -gc boehm run editor/
@@ -304,8 +302,8 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   gif.v                    动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
   scene_lang.v             CGS 场景语言（lexer + 单遍 parser/evaluator）
   *_test.v                 17 个根目录测试文件
-  editor/                  CGS 网页编辑器（server.v/params.v/highlight.v + web/）
-                           + params_test.v / highlight_test.v
+  editor/                  CGS 网页编辑器（server.v/highlight.v + web/）
+                           + highlight_test.v
   examples/                .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
                            + .v 演示 CLI（见下）
   gen/gen_tables.py        GP 积表生成器（生成 multivector_tables.v）
@@ -326,10 +324,10 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 
 ## 质量
 
-- `make test`（`v -no-memory-limit test .`）：19 个测试文件全过 —— 代数恒等式 /
+- `make test`（`v -no-memory-limit test .`）：18 个测试文件全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 位移曲面烘焙 /
-  编辑器 params+highlight。
+  编辑器 highlight。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - `v test .` 零警告、零 notice。
