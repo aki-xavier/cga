@@ -86,3 +86,18 @@ fn test_glb_color_material() {
 	assert out[0].vertices.len == 4
 	os.rm('/tmp/cga_color.glb') or {}
 }
+
+// test_gltf_solid_color_material loads a real asset and checks the loader no
+// longer decodes textures — the resulting Material is a plain solid colour built
+// from the PBR factor (no `map`), so meshes render uniformly.
+fn test_gltf_solid_color_material() {
+	out := load_gltf('examples/helmet/DamagedHelmet.glb')!
+	assert out.len == 1
+	m := out[0]
+	// the mesh still carries geometry + per-vertex UVs
+	assert m.uv.len > 0
+	// and the Material the renderer consumes is untextured solid colour
+	mat := gltf_material(m)
+	assert mat.map == none
+	assert mat.metalness >= 0.0 && mat.metalness <= 1.0
+}

@@ -75,12 +75,43 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 			lit << light_to_camera(light, camera.motor)
 		}
 	}
+	// ray-trace CGA analytic primitives; rasterize direct triangle meshes
+	mut ray_objs := []Mesh{}
+	mut mesh_objs := []Mesh{}
+	for obj in scene.objects {
+		if obj.geometry is TrimeshGeometry {
+			mesh_objs << obj
+		} else {
+			ray_objs << obj
+		}
+	}
+	mut s2 := scene
+	s2.objects = ray_objs
 	in_medium := mlx.zeros([n_rays], .bool_)
 	sigma := mlx.zeros([n_rays], .float32)
-	mut rgb := r.trace(scene, o, rays, lit, ambient, bg, in_medium, sigma, 0)
+	mut rgb, t := r.trace(s2, o, rays, lit, ambient, bg, in_medium, sigma, 0)
 	s := r.aa * r.aa
 	if s > 1 {
 		rgb = rgb.reshape([s, n_rays / s, 3]).mean_axis(0, false)
+	}
+	// camera-space depth of the analytic hit (min over subsamples) for compositing
+	mut dz := t.multiply(rays.take_axis(mlx.int_scalar(2), 1))
+	if s > 1 {
+		dz = dz.reshape([s, n_rays / s]).min_axis(0, false)
+	}
+	if mesh_objs.len > 0 {
+		hh := r.height
+		ww := r.width
+		fy := f64(hh) / (2.0 * math.tan(math.radians(camera.fov) / 2.0))
+		fx := fy * camera.aspect
+		cx := f64(ww - 1) / 2.0
+		cy := f64(hh - 1) / 2.0
+		rr := rasterize_meshes(mesh_objs, camera, ww, hh, fx, fy, cx, cy, lit, ambient)
+		rt_d := dz.reshape([hh, ww])
+		closer := rr.depth.less(rt_d)
+		// rgb is [H*W,3]; flatten rr to match before compositing
+		rgb = mlx.where(closer.reshape([hh * ww]).expand_dims(1), rr.color.reshape([hh * ww, 3]),
+			rgb)
 	}
 	rgb = mlx.s_clip(rgb, 0.0, 1.0)
 	rgb = mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb, 1.0 / 2.4),
@@ -90,9 +121,10 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 	return rgba.reshape([r.height, r.width, 4])
 }
 
-// trace returns the (N,3) linear colour for a ray bundle.  Transparent hits
-// split into Fresnel reflection + refraction (Beer absorption) up to max_depth.
-fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) mlx.Array {
+// trace returns the (N,3) linear colour + the primary ray distance for a ray
+// bundle.  Transparent hits split into Fresnel reflection + refraction (Beer
+// absorption) up to max_depth.
+fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) (mlx.Array, mlx.Array) {
 	hit, t, n0, local, op, ior, abso := r.nearest(scene, o, d, lit, ambient, depth == 0)
 	mut cos_i := d.multiply(n0).sum_axis(-1, true).negative()
 	n := mlx.where(mlx.s_lt(cos_i, 0.0), n0.negative(), n0)
@@ -118,10 +150,10 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 			d_t := d.multiply(eta).add(n.multiply(eta.multiply(cos_i).subtract(cos_t)))
 			entering := in_medium.logical_not()
 			sig_next := mlx.where(entering, abso, mlx.fs(0.0))
-			refl := r.trace(scene, p.add(mlx.s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
+			refl, _ := r.trace(scene, p.add(mlx.s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
 
 				depth + 1)
-			refr := r.trace(scene, p.subtract(mlx.s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
+			refr, _ := r.trace(scene, p.subtract(mlx.s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
 				sig_next, depth + 1)
 			body :=
 				op.expand_dims(1).multiply(local).add(mlx.fs(1.0).subtract(op.expand_dims(1)).multiply(refr))
@@ -131,7 +163,7 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 	}
 	att := mlx.where(in_medium.logical_and(hit).expand_dims(1),
 		sigma.negative().multiply(t).expand_dims(1).exp(), mlx.fs(1.0))
-	return result.multiply(att)
+	return result.multiply(att), t
 }
 
 // nearest intersects a ray bundle against all objects and shades the nearest hit.

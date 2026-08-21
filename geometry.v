@@ -207,6 +207,18 @@ pub type Geometry = AffineGeometry
 	| BoxGeometry
 	| CircleGeometry
 
+// TriUvs is one triangle's three UV pairs (u0,u1,u2), as scalars (fixed-array
+// struct fields trip a V 0.5.2 codegen bug).
+pub struct TriUvs {
+pub:
+	u0x f64
+	u0y f64
+	u1x f64
+	u1y f64
+	u2x f64
+	u2y f64
+}
+
 pub struct TrimeshGeometry {
 pub:
 	n_faces int
@@ -214,6 +226,7 @@ pub:
 	e1      [][3]f64
 	e2      [][3]f64
 	nrm     [][3]f64
+	uv      []TriUvs // per-face; empty when the mesh has no UVs
 	lo      [3]f64
 	hi      [3]f64
 }
@@ -267,6 +280,35 @@ pub fn trimesh_geometry(vertices [][3]f64, faces [][3]int) TrimeshGeometry {
 		nrm:     nrm
 		lo:      bmin
 		hi:      bmax
+	}
+}
+
+// trimesh_geometry_uv is trimesh_geometry but also carries per-vertex UVs
+// (parallel to `vertices`) as per-face UV triples for texture sampling.
+pub fn trimesh_geometry_uv(vertices [][3]f64, faces [][3]int, uvs [][2]f64) TrimeshGeometry {
+	g := trimesh_geometry(vertices, faces)
+	if uvs.len == 0 {
+		return g
+	}
+	if uvs.len != vertices.len {
+		panic('uv count ${uvs.len} != vertex count ${vertices.len}')
+	}
+	mut tri := []TriUvs{len: faces.len}
+	for i, f in faces {
+		a := uvs[f[0]]
+		b := uvs[f[1]]
+		c := uvs[f[2]]
+		tri[i] = TriUvs{u0x: a[0], u0y: a[1], u1x: b[0], u1y: b[1], u2x: c[0], u2y: c[1]}
+	}
+	return TrimeshGeometry{
+		n_faces: g.n_faces
+		v0:      g.v0
+		e1:      g.e1
+		e2:      g.e2
+		nrm:     g.nrm
+		uv:      tri
+		lo:      g.lo
+		hi:      g.hi
 	}
 }
 

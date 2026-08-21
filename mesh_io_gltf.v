@@ -1,6 +1,8 @@
 module cga
 
-// glTF 2.0 read + GLB write (geometry only: TRIANGLES primitives).
+// glTF 2.0 read + GLB write (geometry: TRIANGLES primitives; materials: solid
+// colour from the PBR base color / metalness / roughness / emissive factors —
+// no texturing).
 import encoding.binary
 import encoding.base64
 import json2
@@ -34,6 +36,7 @@ pub:
 	attributes map[string]int
 	indices    ?int @[json: 'indices']
 	mode       int
+	material   ?int
 }
 
 struct GltfMesh {
@@ -56,6 +59,19 @@ pub:
 	nodes []int
 }
 
+struct GltfPbr {
+pub:
+	base_color_factor []f64 @[json: 'baseColorFactor']
+	metallic_factor   f64   @[json: 'metallicFactor']
+	roughness_factor  f64   @[json: 'roughnessFactor']
+}
+
+struct GltfMaterial {
+pub:
+	pbr             GltfPbr @[json: 'pbrMetallicRoughness']
+	emissive_factor []f64   @[json: 'emissiveFactor']
+}
+
 struct GltfRoot {
 pub:
 	buffers      []GltfBuffer
@@ -65,14 +81,22 @@ pub:
 	nodes        []GltfNode
 	scenes       []GltfScene
 	scene        int
+	materials    []GltfMaterial
 }
 
-// GltfMeshOut is one loaded mesh (vertices, faces, world transform).
+// GltfMeshOut is one loaded mesh (vertices, faces, world transform) plus its
+// solid-colour PBR material (base colour + metalness / roughness / emissive) and
+// per-vertex UVs.
 pub struct GltfMeshOut {
 pub:
-	vertices [][3]f64
-	faces    [][3]int
-	world    [16]f64
+	vertices  [][3]f64
+	faces     [][3]int
+	world     [16]f64
+	uv        [][2]f64 // parallel to vertices; empty when none
+	color     [3]f64
+	metalness f64
+	roughness f64
+	emissive  [3]f64
 }
 
 // GltfMeshIn is one input entry for save_glb.
@@ -260,7 +284,7 @@ fn (a GltfAccessor) component_type_bytes() int {
 	}
 }
 
-fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out []GltfMeshOut) {
+fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, path string, idx int, parent [16]f64, mut out []GltfMeshOut) {
 	node := gltf.nodes[idx]
 	world := mat4_mul(parent, node_local_matrix(node))
 	if m := node.mesh {
@@ -274,6 +298,14 @@ fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out
 			mut verts := [][3]f64{}
 			for i := 0; i < pos.len; i += 3 {
 				verts << [pos[i], pos[i + 1], pos[i + 2]]!
+			}
+			// per-vertex UVs (TEXCOORD_0, VEC2) when present
+			mut uvs := [][2]f64{}
+			if uv_idx := prim.attributes['TEXCOORD_0'] {
+				uvdata := read_accessor(gltf, bins, uv_idx)
+				for i := 0; i + 1 < uvdata.len; i += 2 {
+					uvs << [uvdata[i], uvdata[i + 1]]!
+				}
 			}
 			mut raw_idx := []int{}
 			if ii := prim.indices {
@@ -293,15 +325,46 @@ fn load_gltf_visit(gltf &GltfRoot, bins [][]u8, idx int, parent [16]f64, mut out
 			for i := 0; i < raw_idx.len; i += 3 {
 				faces << [raw_idx[i], raw_idx[i + 1], raw_idx[i + 2]]!
 			}
+			// material: solid colour from the glTF PBR params (no textures).  The
+			// base colour comes from baseColorFactor, with a small default metalness
+			// so the mesh still shades visibly under direct lighting.
+			mut color := [1.0, 1.0, 1.0]!
+			mut metalness := 0.05
+			mut roughness := 0.5
+			mut emissive := [0.0, 0.0, 0.0]!
+			if mat_ptr := prim.material {
+				if mat_ptr < gltf.materials.len {
+					mat := gltf.materials[mat_ptr]
+					if mat.pbr.base_color_factor.len >= 3 {
+						color = [mat.pbr.base_color_factor[0], mat.pbr.base_color_factor[1],
+							mat.pbr.base_color_factor[2]]!
+					}
+					metalness = math.min(0.2, mat.pbr.metallic_factor)
+					roughness = if mat.pbr.roughness_factor > 0.05 {
+						mat.pbr.roughness_factor
+					} else {
+						0.5
+					}
+					if mat.emissive_factor.len >= 3 {
+						emissive = [mat.emissive_factor[0], mat.emissive_factor[1],
+							mat.emissive_factor[2]]!
+					}
+				}
+			}
 			out << GltfMeshOut{
-				vertices: verts
-				faces:    faces
-				world:    world
+				vertices:  verts
+				faces:     faces
+				world:     world
+				uv:        uvs
+				color:     color
+				metalness: metalness
+				roughness: roughness
+				emissive:  emissive
 			}
 		}
 	}
 	for child in node.children {
-		load_gltf_visit(gltf, bins, child, world, mut out)
+		load_gltf_visit(gltf, bins, path, child, world, mut out)
 	}
 }
 
@@ -314,7 +377,11 @@ pub fn gltf_to_geometry(outs []GltfMeshOut) Geometry {
 		for p in o.vertices {
 			vv << transform_point(o.world, p)
 		}
-		kids << trimesh_geometry(vv, o.faces)
+		kids << if o.uv.len > 0 {
+			trimesh_geometry_uv(vv, o.faces, o.uv)
+		} else {
+			trimesh_geometry(vv, o.faces)
+		}
 	}
 	if kids.len == 0 {
 		panic('glTF contains no meshes')
@@ -323,6 +390,20 @@ pub fn gltf_to_geometry(outs []GltfMeshOut) Geometry {
 		return kids[0]
 	}
 	return csg_geometry(.union, kids)
+}
+
+// gltf_material builds a solid-colour Material from a loaded GltfMeshOut using
+// its base colour + metalness / roughness / emissive (no textures are loaded).
+pub fn gltf_material(o GltfMeshOut) Material {
+	return standard_material(MaterialParams{
+		color:      color_rgb(o.color[0], o.color[1], o.color[2])
+		roughness:  o.roughness
+		metalness:  o.metalness
+		emissive:   color_rgb(o.emissive[0], o.emissive[1], o.emissive[2])
+		opacity:    1.0
+		ior:        1.5
+		absorption: 0.0
+	})
 }
 
 // resolve_gltf_buffer returns the bytes for one glTF buffer.  `uri` may be empty
@@ -382,7 +463,7 @@ pub fn load_gltf(path string) ![]GltfMeshOut {
 	scene_idx := if gltf.scene < gltf.scenes.len { gltf.scene } else { 0 }
 	mut out := []GltfMeshOut{}
 	for root in gltf.scenes[scene_idx].nodes {
-		load_gltf_visit(&gltf, bins, root, mat4_identity(), mut out)
+		load_gltf_visit(&gltf, bins, path, root, mat4_identity(), mut out)
 	}
 	return out
 }

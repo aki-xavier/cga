@@ -109,8 +109,14 @@ fn paeth(a int, b int, c int) int {
 // greyscale+alpha) into RGBA bytes, returning (pixels, width, height).
 pub fn load_png_rgba(path string) !([]u8, int, int) {
 	data := os.read_bytes(path) or { return error('cannot read ${path}') }
+	return decode_png_rgba(data)
+}
+
+// decode_png_rgba decodes an 8-bit non-interlaced PNG (greyscale / RGB / RGBA /
+// greyscale+alpha) from raw bytes into RGBA bytes, returning (pixels, w, h).
+pub fn decode_png_rgba(data []u8) !([]u8, int, int) {
 	if data.len < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 {
-		return error('${path} is not a PNG')
+		return error('not a PNG')
 	}
 	mut pos := 8
 	mut width := 0

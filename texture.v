@@ -3,6 +3,7 @@ module cga
 // Immutable linear RGBA texture sampled on the MLX device.  Source images are
 // decoded from PNG (sRGB -> linear) before entering the renderer.
 import mlx
+import stbi
 
 pub enum WrapMode {
 	repeat
@@ -11,9 +12,10 @@ pub enum WrapMode {
 
 pub struct Texture {
 pub:
-	pixels mlx.Array // (height, width, 4) float32 linear
-	height int
-	width  int
+	pixels    mlx.Array // (height, width, 4) float32 raw texels in [0,1]
+	height    int
+	width     int
+	is_linear bool // true for data maps (metallicRoughness/normal), false for sRGB colour maps
 }
 
 // sRGB -> linear on an (N,3) encoded float array.
@@ -22,7 +24,7 @@ fn srgb_to_linear_arr(rgb mlx.Array) mlx.Array {
 		2.4))
 }
 
-// texture_from_rgba builds a texture from encoded sRGB RGBA floats (0..1).
+// texture_from_rgba builds a texture from raw sRGB RGBA floats (0..1).
 pub fn texture_from_rgba(rgba [][][]f64) Texture {
 	h := rgba.len
 	if h < 1 {
@@ -42,33 +44,65 @@ pub fn texture_from_rgba(rgba [][][]f64) Texture {
 			}
 		}
 	}
-	encoded := mlx.array_f32(flat, [h, w, 4])
-	rgb := encoded.take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 2)
-	lin := srgb_to_linear_arr(rgb)
-	a := encoded.take_axis(mlx.int_scalar(3), 2).expand_dims(2)
 	return Texture{
-		pixels: mlx.concatenate([lin, a], 2)
-		height: h
-		width:  w
+		pixels:    mlx.array_f32(flat, [h, w, 4])
+		height:    h
+		width:     w
+		is_linear: false
 	}
 }
 
-// texture_load loads a PNG and decodes it to linear RGBA.
-pub fn texture_load(path string) !Texture {
-	rgba, w, h := load_png_rgba(path)!
+// texture_from_u8_rgba builds a Texture from raw sRGB RGBA bytes (row-major).
+pub fn texture_from_u8_rgba(rgba []u8, w int, h int) Texture {
+	return texture_from_raw(rgba, w, h, false)
+}
+
+fn texture_from_raw(rgba []u8, w int, h int, is_linear bool) Texture {
 	mut flat := []f32{len: rgba.len}
 	for i, b in rgba {
 		flat[i] = f32(b) / 255.0
 	}
-	encoded := mlx.array_f32(flat, [h, w, 4])
-	rgb := encoded.take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 2)
-	lin := srgb_to_linear_arr(rgb)
-	a := encoded.take_axis(mlx.int_scalar(3), 2).expand_dims(2)
 	return Texture{
-		pixels: mlx.concatenate([lin, a], 2)
-		height: h
-		width:  w
+		pixels:    mlx.array_f32(flat, [h, w, 4])
+		height:    h
+		width:     w
+		is_linear: is_linear
 	}
+}
+
+// texture_load loads a PNG file and decodes it to linear RGBA.
+pub fn texture_load(path string) !Texture {
+	rgba, w, h := load_png_rgba(path)!
+	return texture_from_u8_rgba(rgba, w, h)
+}
+
+// texture_from_png_bytes decodes a PNG (raw bytes) to a linear RGBA texture.
+pub fn texture_from_png_bytes(data []u8) !Texture {
+	rgba, w, h := decode_png_rgba(data)!
+	return texture_from_u8_rgba(rgba, w, h)
+}
+
+// texture_from_bytes decodes image bytes (PNG / JPEG / ...) via stb_image to a
+// linear RGBA texture (used for glTF-embedded textures, which are often JPEG).
+pub fn texture_from_bytes(data []u8) !Texture {
+	r, w, h := stbi_decode(data)!
+	return texture_from_u8_rgba(r, w, h)
+}
+
+fn stbi_decode(data []u8) !([]u8, int, int) {
+	img := stbi.load_from_memory(data.data, data.len, stbi.LoadParams{
+		desired_channels: 4
+	})!
+	defer {
+		unsafe { img.free() }
+	}
+	mut rgba := []u8{len: img.width * img.height * 4}
+	unsafe {
+		for i in 0 .. rgba.len {
+			rgba[i] = img.data[i]
+		}
+	}
+	return rgba, img.width, img.height
 }
 
 fn wrap_value(value mlx.Array, mode WrapMode) mlx.Array {
@@ -118,5 +152,13 @@ pub fn (t Texture) sample(uv mlx.Array, wrap_s WrapMode, wrap_t WrapMode) mlx.Ar
 	omfy := mlx.fs(1.0).subtract(fy)
 	top := c00.multiply(omfx).add(c10.multiply(fx))
 	bot := c01.multiply(omfx).add(c11.multiply(fx))
-	return top.multiply(omfy).add(bot.multiply(fy))
+	res := top.multiply(omfy).add(bot.multiply(fy)) // (count,4) raw interpolated
+	rgb := res.take_axis(mlx.array_i32([i32(0), 1, 2], [3]), 1)
+	lin := if t.is_linear {
+		rgb
+	} else {
+		srgb_to_linear_arr(rgb)
+	}
+	a := res.take_axis(mlx.int_scalar(3), 1).expand_dims(1)
+	return mlx.concatenate([lin, a], 1)
 }
