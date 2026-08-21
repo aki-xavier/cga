@@ -41,7 +41,7 @@ v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
-make test     # 跑全部 23 个测试文件（-no-memory-limit，见 Makefile）
+make test     # 跑全部 18 个测试文件（-no-memory-limit，见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
@@ -65,7 +65,7 @@ directional_light(direction=[0.4, 1.0, 0.35], intensity=0.38);
 camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 ```
 
-修饰符（`translate`/`rotate`/`scale`/`mirror`/`material`/`splats`）对紧随的语句或 `{}`
+修饰符（`translate`/`rotate`/`scale`/`mirror`/`material`）对紧随的语句或 `{}`
 块生效，可嵌套；图元：sphere/plane/cylinder/box/circle/cone/torus/cyclide/
 ellipsoid/extrude/loft/mesh。渲染：
 
@@ -73,28 +73,11 @@ ellipsoid/extrude/loft/mesh。渲染：
 v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 ```
 
-`splats(...)` 修饰符为紧随的图元附加高斯溅射点层（Gaussian splats）：
-评测器同时生成实体网格与同位姿的 `SplatsGeometry` 网格，溅射点颜色默认继承
-物体材质（可用 `color` 覆盖），`opacity` 默认 0.6。位置参数顺序为
-`n, sigma_tangent, sigma_normal`；`opacity` 与 `color` 仅支持关键字参数。
-支持 sphere/ellipsoid/torus/cone/cylinder/box/plane/cyclide（以及刚体+均匀
-缩放变换）；trimesh/CSG/circle 会给出明确的评测错误。示例
-`examples/splats.cgs`：
-
-```text
-material(color=0xC0392B, roughness=0.3)
-  splats(n=1152, sigma_tangent=0.06, sigma_normal=0.015, color=0xECF0F1)
-  cyclide(a=1.0, b=0.98, d=0.3);
-```
-
-含溅射层的场景经由 `render_scene_with_splats` 渲染（`render_cgs.v` 与编辑器
-server 已走该路径；遮挡正确）。
-
 支持变量/表达式/数学函数/for+range/module/if-else/echo，以及 CSG
 （union/difference/intersection）；完整语法见 `scene_lang.v`
 文件头注释。示例：`examples/grid.cgs`（module + for 的 3×3 球阵）、
 `examples/building.cgs`（CSG 开窗建筑）、`examples/mechanical.cgs`
-（CSG 钻孔装配）、`examples/splats.cgs`（高斯溅射点层）。
+（CSG 钻孔装配）。
 
 ### 实时预览编辑器 (V web)
 
@@ -209,8 +192,7 @@ flowchart LR
 geometry 构造参数里；像素级计算全部在 mlx-v GPU 上批量进行，V 层每帧只循环
 图元（~10 个）。代数核心跑在 CPU 的 `[32]f64` 上（比 Python 默认 float32 更准），
 `mlx-v` 只用在逐像素渲染内核（`renderer.v` / `geometry_ops.v` / `shading.v`），
-V 无标量运算符重载，标量助手（`s_add`/`s_mul`/`s_clip`… 自由函数）由 mlx-v
-提供（4fdebe9 起）。
+V 无标量运算符重载，标量助手 `s_add`/`s_mul`/`s_clip`… 自由函数由 `mlx-v` 提供。
 
 ## CGA 建模 vs 传统欧氏建模（渲染视角）
 
@@ -282,8 +264,8 @@ flowchart LR
   路径，无需矩阵分解。
 - **几何感知输出**：图元 blade 本身就是操作对象语义（平面法向 = 抓取姿态 z 轴、
   圆柱轴线+半径 = 夹爪开度）。
-- **重建回环验证**：重建的 blade 场景渲染回原视角（`renderer.v`，带
-  `depth_map()` 深度输出），与原帧深度对比发现漂移。
+- **重建回环验证**：重建的 blade 场景渲染回原视角（`renderer.v`），与原帧深度对比
+  发现漂移。
 - **统一坐标变换**：相机、机械臂、工件全用同一代数，多坐标系链式变换收敛到一个
   表示。
 
@@ -303,8 +285,6 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   shading.v                材质/灯光 + 批量 Blinn-Phong
   texture.v                PNG 解码 + bilinear map 采样
   renderer.v               mlx-v GPU 批量光线追踪（SSAA/硬阴影/Whitted 折射）
-  splat.v + splat_sample.v + splat_render.v
-                           高斯泼溅（面上采样 + EWA 投影 + 线性空间 alpha 合成）
   csg.v + csg_node.v       递归 CSG 布尔（crossings/contains 实体协议）
   affine.v + affine_geom.v 仿射扩展（scale/mirror 射线逆变换 + Newton 极分解）
   modeling.v               耳切三角化 + extrude + loft
@@ -313,10 +293,10 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   image_io.v               PNG 读写
   gif.v                    动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
   scene_lang.v             CGS 场景语言（lexer + 单遍 parser/evaluator）
-  *_test.v                 21 个根目录测试文件
+  *_test.v                 16 个根目录测试文件
   editor/                  CGS 网页编辑器（server.v/params.v/highlight.v + web/）
                            + params_test.v / highlight_test.v
-  examples/                .cgs 示例 (orbit/grid/building/mechanical/splats) + assets/ 纹理
+  examples/                .cgs 示例 (orbit/grid/building/mechanical) + assets/ 纹理
                            + .v 演示 CLI（见下）
   gen/gen_tables.py        GP 积表生成器（生成 multivector_tables.v）
   examples/artifacts/      demo 输出（README 插图）
@@ -330,19 +310,16 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 - `demo_kinematics.v` —— 齿轮副/曲柄滑块/螺旋插值 → `examples/artifacts/kinematics.gif`
 - `demo_csg.v` —— difference/intersection/union 并排 → `demo_csg.png`
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
-- `demo_splats.v` —— cyclide + 椭球吸附泼溅层轨道动画 → `examples/artifacts/splats.gif`
 - `render_smoke.v` —— smoke 场景 → `render_smoke.png`（即 `make run`）
 - `render_cgs.v <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
 
 ## 质量
 
-- `make test`（`v -no-memory-limit test .`）：23 个测试文件全过 —— 代数恒等式 /
+- `make test`（`v -no-memory-limit test .`）：18 个测试文件全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
-  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 泼溅采样+渲染 /
-  编辑器 params+highlight。
-- 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cgs_splats / cone /
-  cyclide / ellipsoid / sphere / splat_cyclide / splat_ellipsoid /
-  splat_mixed_scene / splat_render_cyclide / textured_box / torus / trimesh）。
+  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 编辑器 params+highlight。
+- 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
+  ellipsoid / sphere / textured_box / torus / trimesh）。
 - `v test .` 零警告、零 notice。
 
 ## License

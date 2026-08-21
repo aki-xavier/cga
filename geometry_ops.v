@@ -280,8 +280,8 @@ pub fn box_uv(p BoxParams, pos mlx.Array, n mlx.Array) mlx.Array {
 		half_a.take_axis(mlx.int_scalar(0), 0))
 	sy := mlx.where(mlx.s_eq(face, 2.0), half_a.take_axis(mlx.int_scalar(1), 0),
 		half_a.take_axis(mlx.int_scalar(2), 0))
-	return mlx.stack([mlx.s_add(x.divide(mlx.s_mul(sx, 2.0)), 0.5),
-		mlx.s_add(y.divide(mlx.s_mul(sy, 2.0)), 0.5)], -1)
+	return mlx.stack([mlx.s_add(x.divide(mlx.s_mul(sx, 2.0)), 0.5), mlx.s_add(y.divide(mlx.s_mul(sy, 2.0)), 0.5)],
+		-1)
 }
 
 // --- circle -----------------------------------------------------------------
@@ -322,98 +322,35 @@ pub fn circle_uv(p CircleParams, pos mlx.Array, n mlx.Array) mlx.Array {
 
 pub fn geom_intersect(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, mlx.Array) {
 	return match p {
-		SphereParams {
-			sphere_intersect(p, o, d)
-		}
-		PlaneParams {
-			plane_intersect(p, o, d)
-		}
-		CylinderParams {
-			cylinder_intersect(p, o, d)
-		}
-		BoxParams {
-			box_intersect(p, o, d)
-		}
-		CircleParams {
-			circle_intersect(p, o, d)
-		}
-		ConeParams {
-			cone_intersect(p, o, d)
-		}
-		TorusParams {
-			torus_intersect(p, o, d)
-		}
-		EllipsoidParams {
-			ellipsoid_intersect(p, o, d)
-		}
-		CyclideParams {
-			cyclide_intersect(p, o, d)
-		}
-		TrimeshParams {
-			trimesh_intersect(p, o, d)
-		}
-		CsgParams {
-			csg_intersect(p, o, d)
-		}
-		AffineParams {
-			affine_intersect(p, o, d)
-		}
-		SplatsParams {
-			// splat clouds have no surface: never hit
-			n_rays := o.shape()[0]
-			t := mlx.full([n_rays], mlx.f32_scalar(f32(math.inf(1))), .float32)
-			n := mlx.zeros_like(o)
-			mask := mlx.zeros([n_rays], .bool_)
-			t, n, mask
-		}
+		SphereParams { sphere_intersect(p, o, d) }
+		PlaneParams { plane_intersect(p, o, d) }
+		CylinderParams { cylinder_intersect(p, o, d) }
+		BoxParams { box_intersect(p, o, d) }
+		CircleParams { circle_intersect(p, o, d) }
+		ConeParams { cone_intersect(p, o, d) }
+		TorusParams { torus_intersect(p, o, d) }
+		EllipsoidParams { ellipsoid_intersect(p, o, d) }
+		CyclideParams { cyclide_intersect(p, o, d) }
+		TrimeshParams { trimesh_intersect(p, o, d) }
+		CsgParams { csg_intersect(p, o, d) }
+		AffineParams { affine_intersect(p, o, d) }
 	}
 }
 
 pub fn geom_shadow(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array) {
 	return match p {
-		SphereParams {
-			sphere_shadow(p, o, d)
-		}
-		PlaneParams {
-			plane_shadow(p, o, d)
-		}
-		CylinderParams {
-			cylinder_shadow(p, o, d)
-		}
-		BoxParams {
-			box_shadow(p, o, d)
-		}
-		CircleParams {
-			circle_shadow(p, o, d)
-		}
-		ConeParams {
-			cone_shadow(p, o, d)
-		}
-		TorusParams {
-			torus_shadow(p, o, d)
-		}
-		EllipsoidParams {
-			ellipsoid_shadow(p, o, d)
-		}
-		CyclideParams {
-			cyclide_shadow(p, o, d)
-		}
-		TrimeshParams {
-			trimesh_shadow(p, o, d)
-		}
-		CsgParams {
-			csg_shadow(p, o, d)
-		}
-		AffineParams {
-			affine_shadow(p, o, d)
-		}
-		SplatsParams {
-			// splats cast no ray-traced shadows
-			n_rays := o.shape()[0]
-			t := mlx.full([n_rays], mlx.f32_scalar(f32(math.inf(1))), .float32)
-			mask := mlx.zeros([n_rays], .bool_)
-			t, mask
-		}
+		SphereParams { sphere_shadow(p, o, d) }
+		PlaneParams { plane_shadow(p, o, d) }
+		CylinderParams { cylinder_shadow(p, o, d) }
+		BoxParams { box_shadow(p, o, d) }
+		CircleParams { circle_shadow(p, o, d) }
+		ConeParams { cone_shadow(p, o, d) }
+		TorusParams { torus_shadow(p, o, d) }
+		EllipsoidParams { ellipsoid_shadow(p, o, d) }
+		CyclideParams { cyclide_shadow(p, o, d) }
+		TrimeshParams { trimesh_shadow(p, o, d) }
+		CsgParams { csg_shadow(p, o, d) }
+		AffineParams { affine_shadow(p, o, d) }
 	}
 }
 
@@ -431,7 +368,6 @@ pub fn geom_uv(p GeometryParams, pos mlx.Array, n mlx.Array) mlx.Array {
 		TrimeshParams { trimesh_uv(p, pos, n) }
 		CsgParams { csg_uv(p, pos, n) }
 		AffineParams { affine_uv(p, pos, n) }
-		SplatsParams { mlx.zeros([pos.shape()[0], 2], .float32) }
 	}
 }
 
@@ -482,10 +418,6 @@ pub fn geom_bounds(p GeometryParams) ?[2][3]f64 {
 		}
 		AffineParams {
 			return affine_bounds_from_inner(p)
-		}
-		SplatsParams {
-			// never culled in Renderer.nearest (and never hit anyway)
-			return none
 		}
 	}
 }

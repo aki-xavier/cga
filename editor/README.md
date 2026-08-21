@@ -13,8 +13,7 @@ make editor              # or: v -gc boehm run editor/
 The server:
 
 - `GET  /` — serves `web/index.html` (the editor UI: textarea + preview + sliders).
-- `POST /render?w=&h=&aa=` — body = CGS text → PNG (renders splat layers too,
-  via `render_scene_with_splats`).
+- `POST /render?w=&h=&aa=` — body = CGS text → PNG.
 - `POST /params` — body = CGS text → JSON of draggable numeric parameters.
 - `GET  /health` — `ok`.
 
