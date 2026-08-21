@@ -81,15 +81,11 @@ pub fn triangulate(profile [][2]f64) [][3]int {
 		idx[i] = i
 	}
 	if signed_area(pts) < 0.0 {
-		// reverse to CCW
-		mut rp := []f64{len: n * 2}
-		for i in 0 .. n {
-			rp[2 * i] = pts[n - 1 - i][0]
-			rp[2 * i + 1] = pts[n - 1 - i][1]
-		}
-		for i in 0 .. n {
-			pts[i] = [rp[2 * i], rp[2 * i + 1]]!
-		}
+		// CW input: walk the vertices in reverse via idx.  NOTE: pts stays in
+		// the original order — the ear loop below indexes pts THROUGH idx, so
+		// permuting pts as well would cancel the reversal (that double
+		// reversal made every CW profile fail; extrude/loft never hit it
+		// because they pre-CCW their profiles).
 		for i in 0 .. n {
 			idx[i] = n - 1 - i
 		}

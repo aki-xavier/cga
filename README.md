@@ -124,13 +124,12 @@ ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，D
 走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解
 为 motor·linear，rotate 与 scale/mirror 任意嵌套顺序均正确。
 
-**位移曲面（基元 + 残差）** — `displaced.v`：一般曲面表示为
-`F(x) = d_base(x) − scale·r(uv(x))`，基元取 sphere/plane/无限 cylinder/cyclide，
-r 为双线性残差网格（u 周期缠绕）。求交 = 基元解析括段（半径按 max|残差| 膨胀）+
-段内 128 步符号扫描 + 8 次二分细化（非自由空间 ray marching）；法向为 F 的中心
-差分。`bake_residual` 沿基元节点法向批量投射射线把任意目标几何（含 trimesh）
-烘焙成残差网格，闭合「任意曲面 → CGA 基元」的表达回环。示例
-`examples/demo_displace.v`（loft 花瓶 → 圆柱，PSNR ~34 dB）。
+**曲面烘焙（基元 + 残差 → 网格）** — `surface_bake.v`：沿基元（sphere/plane/
+无限 cylinder/cyclide）uv 网格节点的法向批量投射射线，把任意目标几何（含
+trimesh）烘焙成该基元参数域上的三角网格（u 向环带缝合、球极三角扇、开放边界环自动封盖、可
+`save_glb` 导出 glTF）。烘焙网格即最终可见曲面（基元+细节一体；基元仍是
+代数/语义句柄，两者不要同渲——残差为 0 处会 z-fighting）。示例
+`examples/displace/`（loft 星形花瓶 → 圆柱基元，烘焙网格 vs 目标 PSNR ~30 dB）。
 
 **网格与互操作** — MeshGeometry（Möller–Trumbore 批量求交，平坦法向，无 BVH）；
 `modeling.v` 的 extrude（耳切凹轮廓三角化）与 loft（等点数多截面）；`mesh_io.v`
@@ -291,8 +290,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   shading.v                材质/灯光 + 批量 Blinn-Phong
   texture.v                PNG 解码 + bilinear map 采样
   renderer.v               mlx-v GPU 批量光线追踪（SSAA/硬阴影/Whitted 折射）
-  displaced.v + displaced_kernel.v
-                           基元+残差位移曲面（bracket+march 求交 / 残差烘焙）
+  surface_bake.v           基元 uv 网格曲面烘焙（→ trimesh / glTF 导出）
   csg.v + csg_node.v       递归 CSG 布尔（crossings/contains 实体协议）
   affine.v + affine_geom.v 仿射扩展（scale/mirror 射线逆变换 + Newton 极分解）
   modeling.v               耳切三角化 + extrude + loft
@@ -320,7 +318,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 - `demo_gltf.v` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `render_smoke.v` —— smoke 场景 → `render_smoke.png`（即 `make run`）
 - `render_cgs.v <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
-- `demo_displace.v` —— loft 星形花瓶烘焙到圆柱基元 → `displace_{target,displaced,diff}.png`
+- `displace/demo_displace.v` —— loft 星形花瓶烘焙到圆柱基元 uv 网格 → glb + `displace_{target,baked,diff}.png`
 
 ## 质量
 

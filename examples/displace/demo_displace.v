@@ -1,13 +1,13 @@
 module main
 
-// Displaced-surface demo: a star-profiled lofted vase (trimesh) is BAKED onto
-// an infinite-cylinder base as a residual grid, then the displaced cylinder
-// renders through the analytic ray tracer (bracket + march, no ray marching
-// of free space).  Saves a side-by-side comparison:
-//   examples/artifacts/displace_target.png    (the lofted trimesh)
-//   examples/artifacts/displace_displaced.png (cylinder + baked residual)
-//   examples/artifacts/displace_diff.png      (4x amplified difference)
-// Run: v -gc boehm run examples/demo_displace.v
+// Surface-bake demo: a star-profiled lofted vase (trimesh) is BAKED onto an
+// infinite-cylinder base's uv grid as a triangle mesh, exported as glTF (the
+// deliverable — opens in Blender etc.) and rendered next to the target:
+//   examples/displace/displace_target.png  (the lofted trimesh)
+//   examples/displace/displace_baked.png   (the baked mesh)
+//   examples/displace/displace_diff.png    (4x amplified difference)
+//   examples/displace/displace_vase.glb    (baked mesh, upright node transform)
+// Run: v -gc boehm run examples/displace/demo_displace.v
 import cga
 import mlx
 import os
@@ -82,12 +82,24 @@ fn build_scene(geo cga.Geometry, col int) cga.Scene {
 
 fn main() {
 	out_dir := os.dir(@FILE)
-	os.mkdir_all(out_dir) or {}
 
 	target := star_vase()
 	base := cga.cylinder_geometry(0.8, -1.0) // infinite cylinder
-	println('baking residual (128x48 grid)...')
-	baked := cga.bake_residual(base, target, 128, 48, 1.0)
+	println('baking surface mesh (64x24 grid)...')
+	baked := cga.bake_surface(base, target, 64, 24)
+	println('baked: ${baked.vertices.len} vertices, ${baked.faces.len} faces')
+
+	// the glb is the deliverable: upright node transform baked in (rotate
+	// -90deg about x, then y - 1.0 — same pose as the render meshes)
+	pose := [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]!
+	cga.save_glb('${out_dir}/displace_vase.glb', [
+		cga.GltfMeshIn{
+			vertices:  baked.vertices
+			faces:     baked.faces
+			transform: pose
+			color:     [0.16, 0.5, 0.73]!
+		},
+	])
 
 	mut cam := cga.perspective_camera(45.0, 4.0 / 3.0, 0.1, 100.0, [0.0, 1.6, 4.6]!, [
 		0.0,
@@ -95,11 +107,11 @@ fn main() {
 		0.0,
 	]!, [0.0, 1.0, 0.0]!)
 	cam.look_at([0.0, 0.0, 0.0]!, none)
-	mut r := cga.renderer(320, 240, 2, 3)
+	mut r := cga.renderer(240, 180, 1, 3)
 	img_t := r.render(build_scene(target, 0x2980B9), cam)
-	img_d := r.render(build_scene(baked, 0x2980B9), cam)
+	img_d := r.render(build_scene(cga.trimesh_geometry(baked.vertices, baked.faces), 0x2980B9), cam)
 	cga.save_frame_png('${out_dir}/displace_target.png', img_t)
-	cga.save_frame_png('${out_dir}/displace_displaced.png', img_d)
+	cga.save_frame_png('${out_dir}/displace_baked.png', img_d)
 
 	// 4x amplified difference
 	da := img_d.data_f32()
@@ -117,7 +129,8 @@ fn main() {
 		diff[i + 3] = 255.0
 	}
 	mse /= f64(nch)
-	cga.save_frame_png('${out_dir}/displace_diff.png', mlx.array_f32(diff, [240, 320, 4]))
+	cga.save_frame_png('${out_dir}/displace_diff.png', mlx.array_f32(diff, [180, 240, 4]))
 	println('bake PSNR vs trimesh: ${10.0 * math.log10(255.0 * 255.0 / mse):.2f} dB')
-	println('saved ${out_dir}/displace_{target,displaced,diff}.png')
+	glb_size := os.file_size('${out_dir}/displace_vase.glb')
+	println('saved ${out_dir}/displace_{target,baked,diff}.png + displace_vase.glb (${glb_size} bytes)')
 }

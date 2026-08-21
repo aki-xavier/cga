@@ -25,7 +25,6 @@ pub fn csg_geometry(op CsgOp, children []Geometry) CsgGeometry {
 	for c in children {
 		match c {
 			CircleGeometry { panic('circle is not a solid (no crossings/contains)') }
-			DisplacedGeometry { panic('displaced surface is not a solid (no crossings/contains)') }
 			else {}
 		}
 	}

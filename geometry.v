@@ -108,7 +108,6 @@ pub type GeometryParams = AffineParams
 	| CylinderParams
 	| PlaneParams
 	| SphereParams
-	| DisplacedParams
 
 // --- geometry structs --------------------------------------------------------
 
@@ -207,7 +206,6 @@ pub type Geometry = AffineGeometry
 	| CylinderGeometry
 	| BoxGeometry
 	| CircleGeometry
-	| DisplacedGeometry
 
 pub struct TrimeshGeometry {
 pub:
@@ -458,9 +456,6 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 		}
 		AffineGeometry {
 			affine_to_camera(g, m)
-		}
-		DisplacedGeometry {
-			displaced_to_camera(g, m)
 		}
 	}
 }

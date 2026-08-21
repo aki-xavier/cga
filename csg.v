@@ -288,7 +288,6 @@ pub fn geom_crossings(p GeometryParams, o mlx.Array, d mlx.Array) (mlx.Array, ml
 		CircleParams { panic('circle is not a solid (no crossings)') }
 		CsgParams { csg_crossings(p, o, d) }
 		AffineParams { affine_crossings(p, o, d) }
-		DisplacedParams { panic('displaced surface is not a solid (no crossings)') }
 	}
 }
 
@@ -306,6 +305,5 @@ pub fn geom_contains(p GeometryParams, pos mlx.Array) mlx.Array {
 		CircleParams { panic('circle is not a solid (no contains)') }
 		CsgParams { csg_contains(p, pos) }
 		AffineParams { affine_contains(p, pos) }
-		DisplacedParams { panic('displaced surface is not a solid (no contains)') }
 	}
 }

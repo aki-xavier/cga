@@ -1357,8 +1357,8 @@ fn (mut l SceneLoader) csg_block(op CsgOp, ctx [16]f64, mat map[string]CgsValue,
 	mut kids := []Geometry{}
 	for c in children {
 		match c.geo {
-			CircleGeometry, DisplacedGeometry {
-				return error('CGS line ${line}: ${op} children must be solids (circle/displaced surfaces are not)')
+			CircleGeometry {
+				return error('CGS line ${line}: ${op} children must be solids (circle is not)')
 			}
 			else {}
 		}
