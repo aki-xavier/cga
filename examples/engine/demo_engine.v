@@ -136,8 +136,7 @@ fn build_scene() cga.Scene {
 
 fn main() {
 	frames := 90
-	out_dir := 'examples/artifacts'
-	os.mkdir_all(out_dir) or {}
+	out_dir := os.dir(@FILE)
 
 	scene := build_scene()
 	mut camera := cga.perspective_camera(50.0, 4.0 / 3.0, 0.1, 100.0, [0.0, 2.4, 6.2]!, [

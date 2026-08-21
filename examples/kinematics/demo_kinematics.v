@@ -199,16 +199,22 @@ fn build_scene() KinScene {
 	ks.m0 = m0
 	ks.twist = m0.reverse().gp(m1).log()
 	for k in 0 .. 9 {
-		ks.scene.add_mesh(cga.mesh(cga.MeshParams{ geometry: cga.sphere_geometry(0.05), material: cga.standard_material(cga.MaterialParams{
-			color:      cga.color_hex(0x7F8C8D)
-			roughness:  0.6
-			metalness:  0.0
-			emissive:   cga.color_hex(0x000000)
-			opacity:    1.0
-			ior:        1.5
-			absorption: 0.0
-		}), position: [0.0, 0.0, 0.0]!, rotation_axis: [0.0, 0.0, 1.0]!, rotation_angle: 0.0, motor: m0.gp(cga.motor_exp(ks.twist,
-			f64(k) / 8.0)) }))
+		ks.scene.add_mesh(cga.mesh(cga.MeshParams{
+			geometry:       cga.sphere_geometry(0.05)
+			material:       cga.standard_material(cga.MaterialParams{
+				color:      cga.color_hex(0x7F8C8D)
+				roughness:  0.6
+				metalness:  0.0
+				emissive:   cga.color_hex(0x000000)
+				opacity:    1.0
+				ior:        1.5
+				absorption: 0.0
+			})
+			position:       [0.0, 0.0, 0.0]!
+			rotation_axis:  [0.0, 0.0, 1.0]!
+			rotation_angle: 0.0
+			motor:          m0.gp(cga.motor_exp(ks.twist, f64(k) / 8.0))
+		}))
 	}
 	return ks
 }
@@ -231,7 +237,6 @@ fn main() {
 	]!, [0.0, 1.0, 0.0]!)
 	cam.look_at([0.4, 0.2, 1.2]!, none)
 	mut renderer := cga.renderer(360, 270, 2, 3)
-	os.mkdir_all('examples/artifacts') or {}
 	mut gif_frames := [][]u8{}
 	for f in 0 .. n_frames {
 		s := f64(f) / f64(n_frames)
@@ -257,6 +262,6 @@ fn main() {
 		gif_frames << cga.f32_rgba_to_u8(img.data_f32())
 		img.free()
 	}
-	cga.save_gif('examples/artifacts/kinematics.gif', gif_frames, 360, 270, 5)
-	println('saved examples/artifacts/kinematics.gif (${n_frames} frames)')
+	out := os.dir(@FILE)
+	cga.save_gif('${out}/kinematics.gif', gif_frames, 360, 270, 5)
 }
