@@ -13,10 +13,18 @@ fn main() {
 	loaded := cga.load_gltf('${out}/DamagedHelmet.glb')!
 
 	mut scene := cga.scene(none)
-	// helmet: triangle mesh (rasterized); solid-colour material from glTF
+	// helmet: triangle mesh (rasterized); rendered as a solid grey
 	scene.add_mesh(cga.mesh(cga.MeshParams{
 		geometry: cga.gltf_to_geometry(loaded)
-		material: cga.gltf_material(loaded[0])
+		material: cga.standard_material(cga.MaterialParams{
+			color:      cga.color_hex(0x9E9E9E)
+			roughness:  0.6
+			metalness:  0.0
+			emissive:   cga.color_hex(0x000000)
+			opacity:    1.0
+			ior:        1.5
+			absorption: 0.0
+		})
 		position:       [0.0, 0.0, 0.0]!
 		rotation_axis:  [0.0, 0.0, 1.0]!
 		rotation_angle: 0.0
