@@ -108,6 +108,13 @@ pub type GeometryParams = AffineParams
 	| CylinderParams
 	| PlaneParams
 	| SphereParams
+	| SplatsParams
+
+// SplatsParams is the inert camera-space placeholder for SplatsGeometry: a
+// splat cloud has no surface to intersect, so every ray kernel is a no-op.
+// The splat data lives on SplatsGeometry and is rendered by splat_render.v.
+pub struct SplatsParams {
+}
 
 // --- geometry structs --------------------------------------------------------
 
@@ -206,6 +213,22 @@ pub type Geometry = AffineGeometry
 	| CylinderGeometry
 	| BoxGeometry
 	| CircleGeometry
+	| SplatsGeometry
+
+// SplatsGeometry is a Gaussian-splat set (LOCAL space) used as scene geometry.
+// It is invisible to the ray-tracing kernels (no surface); render scenes
+// containing splat meshes with render_scene_with_splats (splat_render.v).
+pub struct SplatsGeometry {
+pub:
+	gaussians Gaussians
+}
+
+// splats_geometry wraps a Gaussians set as scene geometry (local space).
+pub fn splats_geometry(g Gaussians) SplatsGeometry {
+	return SplatsGeometry{
+		gaussians: g
+	}
+}
 
 pub struct TrimeshGeometry {
 pub:
@@ -456,6 +479,10 @@ pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
 		}
 		AffineGeometry {
 			affine_to_camera(g, m)
+		}
+		SplatsGeometry {
+			// inert: no ray-tracing parameters (rendered by splat_render.v)
+			SplatsParams{}
 		}
 	}
 }

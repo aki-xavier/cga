@@ -1,7 +1,6 @@
 module main
 
 // CGS render CLI: v run examples/render_cgs.v <file.cgs> [out.png] [w h aa]
-
 import cga
 import os
 
@@ -19,7 +18,9 @@ fn main() {
 	sc, mut cam := cga.cgs_load(text, src.all_before_last('/'))
 	cam.aspect = f64(w) / f64(h)
 	mut r := cga.renderer(w, h, aa, 3)
-	img := r.render(sc, cam)
+	// render_scene_with_splats handles scenes with splat layers (plain
+	// Renderer.render would leave them invisible)
+	img := cga.render_scene_with_splats(sc, mut r, cam)
 	cga.save_frame_png(out, img)
 	println('saved ${out}')
 }

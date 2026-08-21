@@ -9,7 +9,6 @@ module main
 //
 //   v -gc boehm run editor/server.v        (from the repo root)
 //   open http://127.0.0.1:8123
-
 import cga
 import json2
 import net.http
@@ -84,14 +83,15 @@ fn render_cgs(text string, w int, h int, aa int) ![]u8 {
 	sc, mut cam := cga.cgs_load_result(text, '')!
 	cam.aspect = f64(w) / f64(h)
 	mut r := cga.renderer(w, h, aa, 3)
-	img := r.render(sc, cam)
+	// handles splat layers too (plain render would leave them invisible)
+	img := cga.render_scene_with_splats(sc, mut r, cam)
 	return cga.frame_to_png_bytes(img)
 }
 
 fn main() {
 	mut server := http.Server{
-		addr: '127.0.0.1:${port}'
-		handler: EditorHandler{}
+		addr:                 '127.0.0.1:${port}'
+		handler:              EditorHandler{}
 		show_startup_message: true
 	}
 	server.listen_and_serve()

@@ -65,7 +65,7 @@ directional_light(direction=[0.4, 1.0, 0.35], intensity=0.38);
 camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 ```
 
-修饰符（`translate`/`rotate`/`scale`/`mirror`/`material`）对紧随的语句或 `{}`
+修饰符（`translate`/`rotate`/`scale`/`mirror`/`material`/`splats`）对紧随的语句或 `{}`
 块生效，可嵌套；图元：sphere/plane/cylinder/box/circle/cone/torus/cyclide/
 ellipsoid/extrude/loft/mesh。渲染：
 
@@ -73,11 +73,26 @@ ellipsoid/extrude/loft/mesh。渲染：
 v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 ```
 
+`splats(...)` 修饰符为紧随的图元附加高斯溅射点层（Gaussian splats）：
+评测器同时生成实体网格与同位姿的 `SplatsGeometry` 网格，溅射点颜色默认继承
+物体材质（可用 `color` 覆盖），`opacity` 默认 0.6。支持 sphere/ellipsoid/torus/
+cone/cylinder/box/plane/cyclide（以及刚体+均匀缩放变换）；trimesh/CSG/circle
+会给出明确的评测错误。示例 `examples/splats.cgs`：
+
+```text
+material(color=0xC0392B, roughness=0.3)
+  splats(n=1152, sigma_tangent=0.06, sigma_normal=0.015, color=0xECF0F1)
+  cyclide(a=1.0, b=0.98, d=0.3);
+```
+
+含溅射层的场景经由 `render_scene_with_splats` 渲染（`render_cgs.v` 与编辑器
+server 已走该路径；遮挡正确）。
+
 支持变量/表达式/数学函数/for+range/module/if-else/echo，以及 CSG
 （union/difference/intersection）；完整语法见 `scene_lang.v`
 文件头注释。示例：`examples/grid.cgs`（module + for 的 3×3 球阵）、
 `examples/building.cgs`（CSG 开窗建筑）、`examples/mechanical.cgs`
-（CSG 钻孔装配）。
+（CSG 钻孔装配）、`examples/splats.cgs`（高斯溅射点层）。
 
 ### 实时预览编辑器 (V web)
 

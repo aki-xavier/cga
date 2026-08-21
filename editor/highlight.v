@@ -42,7 +42,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			}
 			out << HighlightSpan{
 				start: s
-				end: i
+				end:   i
 				class: .comment
 			}
 			continue
@@ -60,7 +60,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			}
 			out << HighlightSpan{
 				start: s
-				end: i
+				end:   i
 				class: .number
 			}
 			continue
@@ -86,7 +86,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			}
 			out << HighlightSpan{
 				start: s
-				end: i
+				end:   i
 				class: .number
 			}
 			continue
@@ -100,7 +100,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			if cls := classify_word(text[s..i]) {
 				out << HighlightSpan{
 					start: s
-					end: i
+					end:   i
 					class: cls
 				}
 			}
@@ -112,7 +112,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 			if two in ['==', '!=', '<=', '>=', '&&', '||'] {
 				out << HighlightSpan{
 					start: i
-					end: i + 2
+					end:   i + 2
 					class: .operator
 				}
 				i += 2
@@ -123,7 +123,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 		if c in [`+`, `-`, `*`, `/`, `%`, `<`, `>`, `!`, `:`] {
 			out << HighlightSpan{
 				start: i
-				end: i + 1
+				end:   i + 1
 				class: .operator
 			}
 			i++
@@ -133,7 +133,7 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 		if c in [`[`, `]`, `{`, `}`, `(`, `)`, `,`, `;`, `=`] {
 			out << HighlightSpan{
 				start: i
-				end: i + 1
+				end:   i + 1
 				class: .punctuation
 			}
 			i++
@@ -147,17 +147,23 @@ pub fn highlight_tokenize(text string) []HighlightSpan {
 // classify_word maps an identifier to a semantic class (none = plain variable).
 pub fn classify_word(word string) ?HighlightClass {
 	match word {
-		'module', 'for', 'if', 'else', 'echo', 'union' { return .keyword }
-		'true', 'false', 'pi' { return .constant }
+		'module', 'for', 'if', 'else', 'echo', 'union' {
+			return .keyword
+		}
+		'true', 'false', 'pi' {
+			return .constant
+		}
 		'sphere', 'plane', 'cylinder', 'box', 'circle', 'translate', 'rotate', 'material',
-		'directional_light', 'point_light', 'ambient_light', 'background', 'camera' {
+		'splats', 'directional_light', 'point_light', 'ambient_light', 'background', 'camera' {
 			return .typ
 		}
-		'abs', 'sign', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sqrt', 'exp',
-		'ln', 'log', 'floor', 'ceil', 'round', 'pow', 'min', 'max', 'len', 'norm', 'cross' {
+		'abs', 'sign', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sqrt', 'exp', 'ln',
+		'log', 'floor', 'ceil', 'round', 'pow', 'min', 'max', 'len', 'norm', 'cross' {
 			return .function
 		}
-		else { return none }
+		else {
+			return none
+		}
 	}
 }
 
@@ -202,7 +208,7 @@ pub fn brace_fold_ranges(text string) []FoldRange {
 					if start_line < line_number {
 						ranges << FoldRange{
 							start: start_line
-							end: line_number
+							end:   line_number
 						}
 					}
 				}

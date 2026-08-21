@@ -74,10 +74,10 @@ fn tokenize(text string) []Tok {
 				i++
 			}
 			toks << Tok{
-				k: .hex
+				k:    .hex
 				text: text[s..i]
-				s: s
-				e: i
+				s:    s
+				e:    i
 			}
 			continue
 		}
@@ -100,10 +100,10 @@ fn tokenize(text string) []Tok {
 				}
 			}
 			toks << Tok{
-				k: .num
+				k:    .num
 				text: text[s..i]
-				s: s
-				e: i
+				s:    s
+				e:    i
 			}
 			continue
 		}
@@ -113,19 +113,19 @@ fn tokenize(text string) []Tok {
 				i++
 			}
 			toks << Tok{
-				k: .ident
+				k:    .ident
 				text: text[s..i]
-				s: s
-				e: i
+				s:    s
+				e:    i
 			}
 			continue
 		}
 		if c in [`(`, `)`, `[`, `]`, `,`, `=`, `;`, `:`] {
 			toks << Tok{
-				k: .sym
+				k:    .sym
 				text: text[i..i + 1]
-				s: i
-				e: i + 1
+				s:    i
+				e:    i + 1
 			}
 			i++
 			continue
@@ -144,7 +144,9 @@ fn list_is_range(toks []Tok, open int) (bool, int) {
 			continue
 		}
 		match toks[j].text {
-			'[' { depth++ }
+			'[' {
+				depth++
+			}
 			']' {
 				if depth == 0 {
 					return colons > 0, colons
@@ -176,6 +178,7 @@ fn positional_name(call string, index int) string {
 		'point_light' { ['position', 'intensity', 'color'] }
 		'ambient_light' { ['intensity', 'color'] }
 		'background' { ['color'] }
+		'splats' { ['n', 'sigma_tangent', 'sigma_normal'] }
 		else { [] }
 	}
 	if index < sig.len {
@@ -188,13 +191,27 @@ fn positional_name(call string, index int) string {
 fn range_for(label string, value f64) (f32, f32, f32) {
 	leaf := label.all_after_last('.').all_before('[')
 	match leaf {
-		'angle' { return 0.0, 6.2832, 0.01 }
-		'fov' { return 1.0, 120.0, 1.0 }
-		'roughness', 'metalness', 'opacity', 'emissive' { return 0.0, 1.0, 0.01 }
-		'ior' { return 0.5, 3.0, 0.01 }
-		'absorption' { return 0.0, 2.0, 0.01 }
-		'intensity' { return 0.0, 2.0, 0.01 }
-		'aspect' { return 0.5, 2.5, 0.01 }
+		'angle' {
+			return 0.0, 6.2832, 0.01
+		}
+		'fov' {
+			return 1.0, 120.0, 1.0
+		}
+		'roughness', 'metalness', 'opacity', 'emissive' {
+			return 0.0, 1.0, 0.01
+		}
+		'ior' {
+			return 0.5, 3.0, 0.01
+		}
+		'absorption' {
+			return 0.0, 2.0, 0.01
+		}
+		'intensity' {
+			return 0.0, 2.0, 0.01
+		}
+		'aspect' {
+			return 0.5, 2.5, 0.01
+		}
 		else {
 			v := f32(value)
 			return v - 5.0, v + 5.0, 0.1
@@ -222,9 +239,9 @@ pub fn extract_params(text string) []RawParam {
 							name := toks[i - 1].text
 							first := positional_name(name, 0)
 							frames << Frame{
-								name: name
+								name:       name
 								positional: 0
-								outer_arg: arg
+								outer_arg:  arg
 							}
 							arg = '${name}.${first}'
 						} else {
@@ -255,10 +272,10 @@ pub fn extract_params(text string) []RawParam {
 					'[' {
 						is_range, colons := list_is_range(toks, i)
 						lists << List{
-							index: 0
+							index:    0
 							is_range: is_range
-							colons: colons
-							ordinal: 0
+							colons:   colons
+							ordinal:  0
 						}
 					}
 					']' {
@@ -281,7 +298,9 @@ pub fn extract_params(text string) []RawParam {
 							}
 						}
 					}
-					';' { arg = '' }
+					';' {
+						arg = ''
+					}
 					else {}
 				}
 			}
@@ -310,14 +329,14 @@ pub fn extract_params(text string) []RawParam {
 					ordinals[label] = ordinal + 1
 					mn, mx, st := range_for(label, value)
 					out << RawParam{
-						label: label
+						label:   label
 						ordinal: ordinal
-						start: t.s
-						end: t.e
-						value: value
-						min: mn
-						max: mx
-						step: st
+						start:   t.s
+						end:     t.e
+						value:   value
+						min:     mn
+						max:     mx
+						step:    st
 					}
 					if lists.len > 0 && lists[lists.len - 1].is_range {
 						mut l := lists[lists.len - 1]

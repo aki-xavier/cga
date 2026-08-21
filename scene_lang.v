@@ -5,8 +5,17 @@ module cga
 //
 // Supports translate/rotate/scale/mirror modifiers, for/if/echo/module,
 // variables/expressions/math functions, all primitives, lights, camera,
-// background, CSG (difference/intersection/union), and
-// extrude/loft/mesh(.obj/.glb/.gltf).
+// background, CSG (difference/intersection/union), splats(...) Gaussian-splat
+// layers, and extrude/loft/mesh(.obj/.glb/.gltf).
+//
+// The splats modifier attaches a Gaussian-splat layer to the following
+// primitive (both meshes share the pose):
+//   material(color=0xC0392B) splats(n=500, sigma_tangent=0.07,
+//       sigma_normal=0.02, opacity=0.6) sphere(r=1);
+// Per-splat colour comes from the object material; opacity defaults to 0.6.
+// Supported on sphere/ellipsoid/torus/cone/cylinder/box/plane/cyclide and on
+// rigid + uniform-scale transforms; other kinds are an eval error.  Scenes
+// with splat layers must be rendered with render_scene_with_splats.
 import math
 import strconv
 
@@ -867,6 +876,22 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 		l.body(ctx, merged, mut scope, t.line)!
 		return
 	}
+	if name == 'splats' {
+		// attach a Gaussian-splat layer to the following primitive; the config
+		// travels in the chain map under splat_* keys (build_material ignores
+		// them) and is consumed by add_geometry
+		mut merged := map[string]CgsValue{}
+		for k, v in mat {
+			merged[k] = v
+		}
+		merged['splat_n'] = args['n'] or { f64(256.0) }
+		merged['splat_st'] = args['sigma_tangent'] or { f64(0.05) }
+		merged['splat_sn'] = args['sigma_normal'] or { f64(0.015) }
+		merged['splat_opacity'] = args['opacity'] or { f64(0.6) }
+		merged['splat_color'] = args['color'] or { f64(-1.0) }
+		l.body(ctx, merged, mut scope, t.line)!
+		return
+	}
 	if name == 'background' {
 		l.expect(.semi)!
 		c := cgs_num(args['color'] or { f64(0.0) }, t.line, 'color') or { return error(err.msg()) }
@@ -897,7 +922,7 @@ fn (mut l SceneLoader) statement(ctx [16]f64, mat map[string]CgsValue, mut scope
 	}
 	l.expect(.semi)!
 	geo := l.build_geometry(name, args, t.line)!
-	l.add_geometry(geo, ctx, mat)!
+	l.add_geometry(geo, ctx, mat, t.line)!
 }
 
 fn (mut l SceneLoader) body(ctx [16]f64, mat map[string]CgsValue, mut scope map[string]CgsValue, line int) ! {
@@ -1267,6 +1292,7 @@ fn cgs_sig_names(name string) []string {
 		'background' { ['color'] }
 		'camera' { [] }
 		'material' { [] }
+		'splats' { ['n', 'sigma_tangent', 'sigma_normal'] }
 		else { [] }
 	}
 }
@@ -1305,13 +1331,23 @@ fn cgs_sig_defaults(name string) map[string]CgsValue {
 			m['unlit'] = false
 			m['map'] = string('')
 		}
+		'splats' {
+			m['n'] = f64(256.0)
+			m['sigma_tangent'] = f64(0.05)
+			m['sigma_normal'] = f64(0.015)
+			m['opacity'] = f64(0.6)
+			m['color'] = f64(-1.0) // -1 = inherit the object material colour
+		}
 		else {}
 	}
 	return m
 }
 
-fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]CgsValue) ! {
+fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]CgsValue, line int) ! {
 	if l.collecting {
+		if _ := mat['splat_n'] {
+			return error('CGS line ${line}: splats inside CSG blocks are not supported')
+		}
 		l.collect << CollectedGeom{
 			geo: geo
 			m4:  ctx
@@ -1328,6 +1364,59 @@ fn (mut l SceneLoader) add_geometry(geo Geometry, ctx [16]f64, mat map[string]Cg
 			0.0,
 			0.0,
 		]!
+		rotation_axis:  [0.0, 0.0, 1.0]!
+		rotation_angle: 0.0
+		motor:          motor
+	}))
+	if _ := mat['splat_n'] {
+		l.add_splat_mesh(g2, motor, mat, line)!
+	}
+}
+
+// add_splat_mesh samples a Gaussian-splat layer on the (local) geometry g2 and
+// adds it as a SplatsGeometry mesh sharing the opaque mesh's pose motor.
+// Per-splat colour comes from the object material; unsupported kinds and
+// non-uniform-scale transforms are clean eval errors (never sampler panics).
+fn (mut l SceneLoader) add_splat_mesh(g2 Geometry, motor Multivector, mat map[string]CgsValue, line int) ! {
+	match g2 {
+		TrimeshGeometry, CsgGeometry, CircleGeometry, SplatsGeometry {
+			return error('CGS line ${line}: splats are not supported on this geometry kind (use sphere/ellipsoid/torus/cone/cylinder/box/plane/cyclide)')
+		}
+		AffineGeometry {
+			ok, _ := uniform_rotation_factor(g2.linear)
+			if !ok {
+				return error('CGS line ${line}: splats with non-uniform scale or mirror are not supported')
+			}
+		}
+		else {}
+	}
+	n := int(cgs_num(mat['splat_n'] or { f64(0.0) }, line, 'splats.n')!)
+	st := cgs_num(mat['splat_st'] or { f64(0.0) }, line, 'splats.sigma_tangent')!
+	sn := cgs_num(mat['splat_sn'] or { f64(0.0) }, line, 'splats.sigma_normal')!
+	op := cgs_num(mat['splat_opacity'] or { f64(0.6) }, line, 'splats.opacity')!
+	if n <= 0 || st <= 0.0 || sn <= 0.0 {
+		return error('CGS line ${line}: splats needs n > 0 and sigma_tangent/sigma_normal > 0')
+	}
+	tmpl0 := l.build_material(mat)!
+	mut tmpl := Material{
+		...tmpl0
+		opacity: clamp01(op)
+	}
+	// splats.color overrides the inherited material colour when >= 0
+	if sc := mat['splat_color'] {
+		cv := cgs_num(sc, line, 'splats.color')!
+		if cv >= 0.0 {
+			tmpl = Material{
+				...tmpl
+				color: color_hex(int(cv))
+			}
+		}
+	}
+	g := sample_gaussians_on_surface(g2, n, st, sn, tmpl)
+	l.scene.add_mesh(mesh(MeshParams{
+		geometry:       splats_geometry(g)
+		material:       tmpl
+		position:       [0.0, 0.0, 0.0]!
 		rotation_axis:  [0.0, 0.0, 1.0]!
 		rotation_angle: 0.0
 		motor:          motor

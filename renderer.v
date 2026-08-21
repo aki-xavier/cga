@@ -14,6 +14,9 @@ pub mut:
 	aa        int
 	max_depth int
 	cam       ?PerspectiveCamera
+	// primary-hit distance per ray (aa^2*H*W), captured during render();
+	// used by depth_map() for splat compositing.  Empty before first render.
+	last_depth mlx.Array
 }
 
 // renderer builds a Renderer (aa = supersampling factor).
@@ -83,8 +86,8 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 		rgb = rgb.reshape([s, n_rays / s, 3]).mean_axis(0, false)
 	}
 	rgb = mlx.s_clip(rgb, 0.0, 1.0)
-	rgb = mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb, 1.0 / 2.4),
-		1.055), 0.055))
+	rgb = mlx.where(mlx.s_le(rgb, 0.0031308), mlx.s_mul(rgb, 12.92), mlx.s_sub(mlx.s_mul(mlx.s_pow(rgb,
+		1.0 / 2.4), 1.055), 0.055))
 	mut rgba := mlx.concatenate([rgb, mlx.ones([n_rays / s, 1], .float32)], -1)
 	rgba = mlx.s_clip(mlx.s_add(mlx.s_mul(rgba, 255.0), 0.5), 0.0, 255.0)
 	return rgba.reshape([r.height, r.width, 4])
@@ -92,8 +95,11 @@ pub fn (mut r Renderer) render(scene Scene, camera PerspectiveCamera) mlx.Array 
 
 // trace returns the (N,3) linear colour for a ray bundle.  Transparent hits
 // split into Fresnel reflection + refraction (Beer absorption) up to max_depth.
-fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) mlx.Array {
+fn (mut r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, bg mlx.Array, in_medium mlx.Array, sigma mlx.Array, depth int) mlx.Array {
 	hit, t, n0, local, op, ior, abso := r.nearest(scene, o, d, lit, ambient, depth == 0)
+	if depth == 0 {
+		r.last_depth = t
+	}
 	mut cos_i := d.multiply(n0).sum_axis(-1, true).negative()
 	n := mlx.where(mlx.s_lt(cos_i, 0.0), n0.negative(), n0)
 	cos_i = cos_i.abs()
@@ -118,9 +124,8 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 			d_t := d.multiply(eta).add(n.multiply(eta.multiply(cos_i).subtract(cos_t)))
 			entering := in_medium.logical_not()
 			sig_next := mlx.where(entering, abso, mlx.fs(0.0))
-			refl := r.trace(scene, p.add(mlx.s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium, sigma,
-
-				depth + 1)
+			refl := r.trace(scene, p.add(mlx.s_mul(n, 1e-3)), d_r, lit, ambient, bg, in_medium,
+				sigma, depth + 1)
 			refr := r.trace(scene, p.subtract(mlx.s_mul(n, 1e-3)), d_t, lit, ambient, bg, entering,
 				sig_next, depth + 1)
 			body :=
@@ -233,6 +238,20 @@ fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambi
 		}
 	}
 	return hit, best_t, best_n, acc, op, ior, abso
+}
+
+// depth_map returns the (H, W) primary-hit distance image (inf = miss),
+// reduced over aa samples (nearest subpixel hit).  Valid after render();
+// used for depth-aware splat compositing (see splat_render.v).
+pub fn (r Renderer) depth_map() mlx.Array {
+	s := r.aa * r.aa
+	if s == 1 {
+		return r.last_depth.reshape([r.height, r.width])
+	}
+	return r.last_depth.reshape([s, r.height * r.width]).min_axis(0, false).reshape([
+		r.height,
+		r.width,
+	])
 }
 
 // render_frame is the single-frame convenience entry point.
