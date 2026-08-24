@@ -1,8 +1,9 @@
 module main
 
 // Orbit demo: three.js-style scene + orbit animation -> animated GIF
-// (examples/artifacts/orbit.gif).  Run: v -gc boehm run examples/demo_engine.v
+// (examples/artifacts/orbit.gif).  Run: v run examples/demo_engine.v
 import cga
+import mlx
 import os
 import math
 
@@ -157,6 +158,10 @@ fn main() {
 		img := renderer.render(scene, camera)
 		gif_frames << cga.f32_rgba_to_u8(img.data_f32())
 		img.free()
+		// per frame: release dead Metal buffers, then hand MLX's non-reusing
+		// cache back to the OS (see editor/server.v)
+		mlx.gc_collect()
+		mlx.clear_cache()
 		println('frame ${i + 1}/${frames} rendered')
 	}
 	cga.save_gif('${out_dir}/orbit.gif', gif_frames, 360, 270, 3)

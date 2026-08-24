@@ -6,7 +6,7 @@ for the Rust `gpui` editor (`editor/src/*.rs`, removed).
 ## Run
 
 ```sh
-make editor              # or: v -gc boehm run editor/
+make editor              # or: v run editor/
 # open http://127.0.0.1:8123
 ```
 
@@ -29,5 +29,5 @@ The server:
 ## Tests
 
 ```sh
-cd editor && v -gc boehm test .
+cd editor && v test .
 ```

@@ -3,6 +3,7 @@ module main
 // Kinematics demo: gears + crank-slider + spiral trajectory driven by Motor.
 // Saves PNG frames and an animated GIF (assembled in V).
 import cga
+import mlx
 import os
 import math
 
@@ -261,6 +262,10 @@ fn main() {
 		img := renderer.render(ks.scene, cam)
 		gif_frames << cga.f32_rgba_to_u8(img.data_f32())
 		img.free()
+		// per frame: release dead Metal buffers, then hand MLX's non-reusing
+		// cache back to the OS (see editor/server.v)
+		mlx.gc_collect()
+		mlx.clear_cache()
 	}
 	out := os.dir(@FILE)
 	cga.save_gif('${out}/kinematics.gif', gif_frames, 360, 270, 5)

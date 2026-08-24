@@ -18,7 +18,7 @@
 重新生成（直接由 V 合成 `examples/artifacts/orbit.gif`，不落 PNG，见 `gif.v`）：
 
 ```bash
-v -gc boehm run examples/demo_engine.v 90
+v run examples/demo_engine.v 90
 ```
 
 ## 特性
@@ -41,16 +41,14 @@ v -gc boehm run examples/demo_engine.v 90
 ln -s ~/code/mlx-v ~/.vmodules/mlx
 ln -s "$(pwd)"     ~/.vmodules/cga
 
-make test     # 跑全部 17 个测试文件（-no-memory-limit，见 Makefile）
+make test     # 跑全部 17 个测试文件（见 Makefile）
 make run      # 渲染 smoke 场景 → examples/artifacts/render_smoke.png
 make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # v fmt -w .
 ```
 
-直接调用 `v` 即可（例如 `v -no-memory-limit test .`）。构建可执行文件
-（demo / `render_cgs` / `render_smoke`）请加 `-gc boehm`：V 0.5.2 默认的
-`boehm_full_opt` GC 生成的 closure 代码在 macOS 上编译失败，会触发一次
-虚假的「C compiler bug report」与回退重编译（产物仍正确，但很吵）。
+直接调用 `v` 即可（例如 `v test .`）。构建可执行文件
+（demo / `render_cgs` / `render_smoke`）
 
 ## CGS 场景语言 (OpenSCAD 风格)
 
@@ -70,7 +68,7 @@ camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 ellipsoid/extrude/loft/mesh。渲染：
 
 ```bash
-v -gc boehm run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
+v run examples/render_cgs.v examples/orbit.cgs orbit.png 640 480 2
 ```
 
 支持变量/表达式/数学函数/for+range/module/if-else/echo，以及 CSG
@@ -91,7 +89,7 @@ HTTP 400 并以红色浮层覆盖预览区提示（Result 式解析，不会崩�
   `GET /health`。
 
 ```bash
-make editor     # 或：v -gc boehm run editor/
+make editor     # 或：v run editor/
 # open http://127.0.0.1:8123
 ```
 
@@ -301,7 +299,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
   artifacts/tests/         测试金样图（cgs_orbit / cone / cyclide / ...）
 ```
 
-演示 CLI（`v -gc boehm run examples/<name>.v`）：
+演示 CLI（`v run examples/<name>.v`）：
 
 - `demo_engine.v` —— 轨道动画 → `orbit.gif`
 - `demo_advantage.v` —— 无多边形/无限几何/变换同构三面板 → `advantage_{a,b,c}.png`
@@ -313,7 +311,7 @@ cga/                       # 平铺 `module cga`（V 文件全在仓库根目录
 
 ## 质量
 
-- `make test`（`v -no-memory-limit test .`）：17 个测试文件全过 —— 代数恒等式 /
+- `make test`（`v test .`）：17 个测试文件全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 位移曲面烘焙 /
   编辑器 highlight。

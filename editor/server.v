@@ -7,7 +7,7 @@ module main
 // A CGS parse error returns HTTP 400 with the message (the parser is
 // Result-based, so it no longer crashes the server).
 //
-//   v -gc boehm run editor/server.v        (from the repo root)
+//   v run editor/server.v        (from the repo root)
 //   open http://127.0.0.1:8123
 import cga
 import mlx
@@ -132,7 +132,19 @@ fn render_cgs(text string, w int, h int, aa int) ![]u8 {
 	cam.aspect = f64(w) / f64(h)
 	mut r := cga.renderer(w, h, aa, 3)
 	img := r.render(sc, cam)
-	return cga.frame_to_png_bytes(img)
+	png := cga.frame_to_png_bytes(img)
+	img.free()
+	// A render leaves thousands of dead mlx arrays whose Metal buffers are only
+	// released by the Boehm finalizers; the boxes are bytes-small so the GC heap
+	// never feels pressure and GC would otherwise almost never run, letting the
+	// Metal footprint grow ~10MB/render without bound (measured 1.5G/150 renders).
+	// Collect once per render so handles die and buffers return to MLX's cache.
+	mlx.gc_collect()
+	// gc_collect releases the handles, but MLX's caching allocator then hoards
+	// the freed Metal buffers without reusing them (cache grew past 2GB over a
+	// handful of identical 8MB-active renders), so hand the cache back to the OS.
+	mlx.clear_cache()
+	return png
 }
 
 // render_loop is the single render thread: all MLX work happens here, pinned
