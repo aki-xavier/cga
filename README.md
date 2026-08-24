@@ -13,7 +13,7 @@
 `examples/demo_engine.v` 的轨道动画（地面 + 红/蓝球 + 金柱 + 绿盒 + 紫圆盘 +
 折射玻璃球，平行光 + 点光 + 环境光，硬阴影，`aa=2` 超采样抗锯齿）：
 
-![轨道渲染 demo](examples/artifacts/orbit.gif)
+![轨道渲染 demo](examples/engine/orbit.gif)
 
 重新生成（直接由 V 合成 `examples/artifacts/orbit.gif`，不落 PNG，见 `gif.v`）：
 
@@ -102,7 +102,7 @@ make editor     # 或：v run editor/
 全部实体图元（sphere/box/cylinder/cone/torus/ellipsoid/extrude/loft/mesh 与
 plane 半空间 —— 半空间交 = 剖切视图）：
 
-![CSG 布尔并排](examples/artifacts/demo_csg.png)
+![CSG 布尔并排](examples/csg/demo_csg.png)
 
 **建筑：CSG 开窗 + 纹理** — `examples/building.cgs`：参数化板式办公楼，
 砖墙用 `difference()` 开真窗洞，`material(map=...)` 贴砖纹：
@@ -135,7 +135,7 @@ near-origin）。
 −1:2）、曲柄滑块、螺旋轨迹 `M(s) = M₀·exp(s·log(M₀⁻¹M₁))` —— 全部 Motor 直写，
 无矩阵分解/四元数换算层，直接由 V 合成 `examples/artifacts/kinematics.gif`（不落 PNG）：
 
-![运动学 demo](examples/artifacts/kinematics.gif)
+![运动学 demo](examples/kinematics/kinematics.gif)
 
 ## 场景代码
 
@@ -166,23 +166,7 @@ img.free()
 
 ## 架构
 
-```mermaid
-flowchart LR
-    subgraph CGA核心
-        MV["Multivector [32]f64"] --> PRIM[图元类<br/>Point/Line/Plane/Sphere/Circle/Cylinder]
-        MOT[Motor versor] --> TRANS["X_cam = M·X·M̃"]
-        PRIM --> TRANS
-    end
-    subgraph 渲染引擎
-        SC[Scene/Mesh/Geometry] --> WMC["每帧: 图元共轭进相机空间 (CPU f64)"]
-        WMC --> HIT["mlx-v GPU 批量求交 (N=H·W 向量化 float32)"]
-        HIT --> SH[Blinn-Phong 着色]
-        SH --> PIX[(RGBA 帧)]
-        CAM[PerspectiveCamera/OrbitControls] --> WMC
-        LGT[3 种灯光] --> SH
-    end
-    CGA核心 --> 渲染引擎
-```
+![cga 架构图](docs/cga-architecture.svg)
 
 关键设计：图元级（blade）建模而非三角网格 —— 球/圆柱没有细分数，尺寸全部在
 geometry 构造参数里；像素级计算全部在 mlx-v GPU 上批量进行，V 层每帧只循环
@@ -230,28 +214,7 @@ V 无标量运算符重载，标量助手 `s_add`/`s_mul`/`s_clip`… 自由函�
 
 CGA 建模 + Motor + GPU 光线追踪 + 逆渲染回环：
 
-```mermaid
-flowchart LR
-    subgraph CGA核心[代数层: 同一套对象]
-        BL[blade 图元<br/>平面/球/圆柱/圆/盒]
-        MO[Motor versor<br/>compose/inverse/log/velocity]
-    end
-    subgraph 渲染层
-        RT[mlx-v GPU 光线追踪<br/>合成深度/RGB]
-        IR[逆渲染 round-trip<br/>模型→图像验证]
-    end
-    subgraph 机器人应用
-        A[仿真与合成数据]
-        B[运动学与轨迹]
-        C[几何感知输出]
-        D[重建回环验证]
-        E[统一坐标变换]
-    end
-    BL --> A & C
-    MO --> B & E
-    RT --> A
-    IR --> D
-```
+![CGA 机器人应用](docs/cga-robotics.svg)
 
 - **仿真与合成数据**：光线追踪合成深度/RGB，逐像素 GPU 批量，改视角只需重设相机
   Motor —— 适合感知训练数据的域随机化批量生成（带精确深度真值）。

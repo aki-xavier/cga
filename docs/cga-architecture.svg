@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cga-architecture-title cga-architecture-desc">
+      <title id="cga-architecture-title">cga 架构：代数核心与渲染引擎</title>
+      <desc id="cga-architecture-desc">cga 的两层架构：CGA 代数核心在 CPU 上以 [32]f64 multivector 建模图元与 Motor 变换，渲染引擎逐帧把图元共轭进相机空间，由 mlx-v GPU 批量求交并着色输出 RGBA 帧。</desc>
+      <defs>
+        <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap');</style>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Zones -->
+      <rect x="56" y="40" width="344" height="164" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="60" y="44" width="48" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="84" y="53" fill="rgba(45,49,66,0.45)" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle" letter-spacing="0.10em">CGA 核心</text>
+
+      <rect x="440" y="40" width="464" height="380" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="444" y="44" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="472" y="53" fill="rgba(45,49,66,0.45)" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle" letter-spacing="0.10em">渲染引擎</text>
+
+      <!-- Arrows -->
+      <line x1="204" y1="92" x2="228" y2="92" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="204" y1="164" x2="228" y2="164" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="300" y1="116" x2="300" y2="140" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="372" y1="164" x2="444" y2="164" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <line x1="516" y1="116" x2="516" y2="140" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="516" y1="188" x2="516" y2="212" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="516" y1="260" x2="516" y2="284" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="516" y1="332" x2="516" y2="356" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="612" y1="164" x2="588" y2="164" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="612" y1="308" x2="588" y2="308" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Nodes: CGA 核心 -->
+      <rect x="60" y="68" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="60" y="68" width="144" height="48" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="132" y="94" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist',sans-serif" text-anchor="middle">Multivector</text>
+      <text x="132" y="110" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">[32]f64 · 双精度</text>
+
+      <rect x="228" y="68" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="228" y="68" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="300" y="94" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">图元 (blade)</text>
+      <text x="300" y="110" fill="#4f5d75" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle">点/线/面/圆/球/柱</text>
+
+      <rect x="60" y="140" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="60" y="140" width="144" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="132" y="166" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist',sans-serif" text-anchor="middle">Motor versor</text>
+      <text x="132" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">exp · log · 插值</text>
+
+      <rect x="228" y="140" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="228" y="140" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="300" y="166" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">相机空间共轭</text>
+      <text x="300" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">X_cam = M·X·M̃</text>
+
+      <!-- Nodes: 渲染引擎 -->
+      <rect x="444" y="68" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="444" y="68" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="516" y="94" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist',sans-serif" text-anchor="middle">Scene / Mesh</text>
+      <text x="516" y="110" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">Geometry · Object3D</text>
+
+      <rect x="444" y="140" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="444" y="140" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="516" y="166" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">逐帧共轭进相机空间</text>
+      <text x="516" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">CPU f64</text>
+
+      <rect x="612" y="140" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="612" y="140" width="144" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="684" y="166" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist',sans-serif" text-anchor="middle">PerspectiveCamera</text>
+      <text x="684" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">OrbitControls</text>
+
+      <rect x="444" y="212" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="444" y="212" width="144" height="48" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="516" y="238" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">GPU 批量求交</text>
+      <text x="516" y="254" fill="#eb6c36" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">mlx-v · N=H·W · float32</text>
+
+      <rect x="444" y="284" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="444" y="284" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="516" y="310" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">Blinn-Phong 着色</text>
+      <text x="516" y="326" fill="#4f5d75" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle">材质 · 灯光</text>
+
+      <rect x="612" y="284" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="612" y="284" width="144" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <text x="684" y="310" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">灯光</text>
+      <text x="684" y="326" fill="#4f5d75" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle">环境 · 平行 · 点光</text>
+
+      <rect x="444" y="356" width="144" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="444" y="356" width="144" height="48" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="516" y="382" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">RGBA 帧</text>
+      <text x="516" y="398" fill="#4f5d75" font-size="9" font-family="'Geist Mono','PingFang SC',monospace" text-anchor="middle">输出帧缓冲</text>
+
+      <!-- Legend -->
+      <line x1="44" y1="500" x2="916" y2="500" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="44" y="508" fill="#4f5d75" font-size="8" font-family="'Geist Mono','PingFang SC',monospace" letter-spacing="0.14em">图例</text>
+
+      <line x1="104" y1="504" x2="136" y2="504" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="148" y="508" fill="#4f5d75" font-size="8" font-family="'Geist Mono','PingFang SC',monospace">数据流</text>
+
+      <rect x="268" y="496" width="20" height="16" rx="4" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="300" y="508" fill="#4f5d75" font-size="8" font-family="'Geist Mono','PingFang SC',monospace">GPU 批量求交 · 焦点</text>
+
+      <rect x="452" y="496" width="20" height="16" rx="4" fill="none" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="484" y="508" fill="#4f5d75" font-size="8" font-family="'Geist Mono','PingFang SC',monospace">模块分层</text>
+    </svg>
