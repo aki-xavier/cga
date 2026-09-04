@@ -150,22 +150,11 @@ fn box_crossings(p BoxParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, m
 	dp_x := dp.take_along_axis(i_x.expand_dims(1), -1)
 	mut n_e := eye.take_axis(i_e, 0).multiply(dp_e.sign().negative())
 	mut n_x := eye.take_axis(i_x, 0).multiply(dp_x.sign())
-	rot := mlx.stack([ax0, ax1, ax2], 0)
-	n_e = vecmat(n_e, mat3_from_mlx(rot))
-	n_x = vecmat(n_x, mat3_from_mlx(rot))
+	n_e = vecmat(n_e, p.axes)
+	n_x = vecmat(n_x, p.axes)
 	inf := mlx.full_like(t_entry, mlx.f32_scalar(f32(math.inf(1))), .float32)
 	ts := mlx.stack([mlx.where(valid, t_entry, inf), mlx.where(valid, t_exit, inf)], -1)
 	return ts, mlx.stack([n_e, n_x], 1), mlx.stack([valid, valid], -1)
-}
-
-// mat3_from_mlx reads a (3,3) array back into a Mat3 (CPU, small).
-fn mat3_from_mlx(m mlx.Array) Mat3 {
-	d := m.data_f32()
-	return mat3_new([f64(d[0]), f64(d[1]), f64(d[2])]!, [f64(d[3]), f64(d[4]), f64(d[5])]!, [
-		f64(d[6]),
-		f64(d[7]),
-		f64(d[8]),
-	]!)
 }
 
 fn box_contains(p BoxParams, pos mlx.Array) mlx.Array {
@@ -196,10 +185,11 @@ pub fn cone_crossings(p ConeParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Ar
 }
 
 fn cone_contains(p ConeParams, pos mlx.Array) mlx.Array {
+	p_l := affine_point_to_local(p.a_inv3, p.t_inv, pos)
 	k2 := 1.0 + (p.r / p.h) * (p.r / p.h)
-	s := mlx.s_sub(last_col(pos, 2), p.h / 2.0)
+	s := mlx.s_sub(last_col(p_l, 2), p.h / 2.0)
 	f :=
-		last_col(pos, 0).square().add(last_col(pos, 1).square()).add(s.multiply(s)).subtract(mlx.s_mul(s.multiply(s), k2))
+		last_col(p_l, 0).square().add(last_col(p_l, 1).square()).add(s.multiply(s)).subtract(mlx.s_mul(s.multiply(s), k2))
 	return mlx.s_le(f, 0.0).logical_and(mlx.s_ge(s, -p.h)).logical_and(mlx.s_le(s, 0.0))
 }
 
@@ -264,8 +254,9 @@ fn trimesh_crossings(p TrimeshParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.
 }
 
 fn trimesh_contains(p TrimeshParams, pos mlx.Array) mlx.Array {
-	shape := pos.shape()[..pos.shape().len - 1]
-	pts := pos.reshape([-1, 3])
+	p_l := affine_point_to_local(p.a_inv3, p.t_inv, pos)
+	shape := p_l.shape()[..p_l.shape().len - 1]
+	pts := p_l.reshape([-1, 3])
 	d := mlx.arr3(1.0, 0.0, 0.0).broadcast_to(pts.shape())
 	tall, _, _ := trimesh_mt_all(p.v0, p.e1, p.e2, p.nrm, pts, d)
 	count := tall.isfinite().astype(.int32).sum_axis(-1, false)

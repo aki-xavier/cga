@@ -229,10 +229,16 @@ pub fn box_intersect(p BoxParams, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Arra
 	i_exit := tmax.argmin_axis(-1, false)
 	inside_hit := valid.logical_and(mlx.s_le(t_entry, 1e-6))
 	t := mlx.where(valid.logical_and(inside_hit.logical_not()), t_entry, t_exit)
-	idx := mlx.where(inside_hit, i_exit, i_entry)
 	eye := mlx.eye(3, 3, 0, .float32)
-	mut n :=
-		eye.take_axis(idx, 0).multiply(dp.take_along_axis(idx.expand_dims(1), -1).squeeze_axis(-1).sign().negative().expand_dims(1))
+	// entry-face normal opposes the ray; exit-face normal points along it
+	// (same convention as box_crossings in csg.v)
+	n_e := eye.take_axis(i_entry, 0).multiply(dp.take_along_axis(i_entry.expand_dims(1),
+		-1).squeeze_axis(-1).sign().negative().expand_dims(1))
+	n_x := eye.take_axis(i_exit, 0).multiply(dp.take_along_axis(i_exit.expand_dims(1),
+		-1).squeeze_axis(-1).sign().expand_dims(1))
+	mut n := mlx.where(inside_hit.expand_dims(1), n_x, n_e)
+	// rotate from the box's local axis frame to camera space
+	n = vecmat(n, p.axes)
 	n = mlx.where(valid.expand_dims(1), n, mlx.zeros_like(n))
 	return t, n, valid
 }
