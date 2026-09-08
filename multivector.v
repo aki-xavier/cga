@@ -331,10 +331,11 @@ pub fn (m Multivector) conjugate() Multivector {
 	return m.reverse().grade_involution()
 }
 
-// dual is the Hodge dual: multiply by I^-1 = +blade31 (I = e123^einf^e0).
+// dual is the Hodge dual: multiply by I^-1 = -blade31.  On this null basis
+// the pseudoscalar I = e1e2e3e0einf squares to -1, so I^-1 = -I.
 pub fn (m Multivector) dual() Multivector {
 	mut i_inv := Multivector{}
-	i_inv.values[31] = 1.0
+	i_inv.values[31] = -1.0
 	return m.gp(i_inv)
 }
 
@@ -343,9 +344,71 @@ pub fn (m Multivector) undual() Multivector {
 	return m.dual().neg()
 }
 
-// meet returns self v other = (self* ^ other*)* for two direct-form primitives.
+// meet returns the regressive product (self* ^ o*)* — the geometric
+// intersection of two blades.  When the duals wedge to zero (contained or
+// parallel blades) it falls back to the linear intersection of the two blade
+// subspaces, which is exact for direct-form blades (CGA points/lines/planes
+// and any purely linear blade) and returns the contained blade, e.g.
+// meet(e12, e13) = e1 and meet(e12, e23) = e2.  Non-blade inputs panic.
 pub fn (m Multivector) meet(o Multivector) Multivector {
-	return m.dual().op(o.dual()).dual()
+	if m.is_zero() || o.is_zero() {
+		return mv_zero()
+	}
+	ga := m.blade_grade()
+	gb := o.blade_grade()
+	if ga < 0 || gb < 0 {
+		panic('meet: arguments must be blades')
+	}
+	if ga == 0 || gb == 0 {
+		return mv_zero()
+	}
+	w := m.dual().op(o.dual())
+	if !w.is_zero() {
+		return w.dual()
+	}
+	// The duals share a factor: intersection of the linear spans.
+	na := nullspace(rows_of_mask(blade_mask(m)))
+	nb := nullspace(rows_of_mask(blade_mask(o)))
+	mut merged := [][]f64{}
+	for r in na {
+		merged << r
+	}
+	for r in nb {
+		merged << r
+	}
+	c := nullspace(merged)
+	if c.len == 0 {
+		return mv_zero()
+	}
+	return wedge_rows(c)
+}
+
+// join returns the smallest blade spanning both self and o: the union of
+// their blade subspaces.  Non-blade inputs panic; scalar or zero inputs join
+// as the other blade.
+pub fn (m Multivector) join(o Multivector) Multivector {
+	if m.is_zero() {
+		return o
+	}
+	if o.is_zero() {
+		return m
+	}
+	ga := m.blade_grade()
+	gb := o.blade_grade()
+	if ga < 0 || gb < 0 {
+		panic('join: arguments must be blades')
+	}
+	if ga == 0 {
+		return o
+	}
+	if gb == 0 {
+		return m
+	}
+	mut rows := rows_of_mask(blade_mask(m))
+	for r in rows_of_mask(blade_mask(o)) {
+		rows << r
+	}
+	return wedge_rows(row_basis(rows))
 }
 
 // norm returns the euclidean norm sqrt(|<self.reverse(self)>_0|).
@@ -375,4 +438,261 @@ pub fn (m Multivector) bulk() Multivector {
 // weight returns the conformal part (components containing e0/einf).
 pub fn (m Multivector) weight() Multivector {
 	return m.sub(m.bulk())
+}
+
+// --- blade ops (inverse, projections, contractions) --------------------------
+
+// blade_grade returns the grade of a pure blade, or -1 when the multivector
+// holds mixed grades or is zero.
+fn (m Multivector) blade_grade() int {
+	mut g := -1
+	for i in 0 .. num_components {
+		if m.values[i] != 0.0 {
+			gi := bit_count(slot_mask[i])
+			if g != -1 && gi != g {
+				return -1
+			}
+			g = gi
+		}
+	}
+	return g
+}
+
+// inverse returns A^-1 = rev(A)/(A rev(A))_0 for an invertible blade or
+// versor; a general multivector with a non-scalar A*rev(A) panics.
+pub fn (m Multivector) inverse() Multivector {
+	prod := m.gp(m.reverse())
+	s := prod.values[0]
+	if math.abs(s) < 1e-12 || !prod.grade(0).eq(prod) {
+		panic('inverse: only blades and versors with nonzero norm are supported')
+	}
+	return m.reverse().div_scalar(s)
+}
+
+// lc is the left contraction A _| B: sums of <_A_g _B_h>_(h-g) for g <= h.
+pub fn (m Multivector) lc(o Multivector) Multivector {
+	mut res := Multivector{}
+	for ga in 1 .. num_grades {
+		a_g := m.grade(ga)
+		if a_g.is_zero() {
+			continue
+		}
+		for gb in ga .. num_grades {
+			b_g := o.grade(gb)
+			if b_g.is_zero() {
+				continue
+			}
+			res = res.add(a_g.gp(b_g).grade(gb - ga))
+		}
+	}
+	return res
+}
+
+// rc is the right contraction A |_ B: sums of <_A_g _B_h>_(g-h) for g >= h.
+pub fn (m Multivector) rc(o Multivector) Multivector {
+	mut res := Multivector{}
+	for ga in 1 .. num_grades {
+		a_g := m.grade(ga)
+		if a_g.is_zero() {
+			continue
+		}
+		for gb in 1 .. ga + 1 {
+			b_g := o.grade(gb)
+			if b_g.is_zero() {
+				continue
+			}
+			res = res.add(a_g.gp(b_g).grade(ga - gb))
+		}
+	}
+	return res
+}
+
+// commutator returns [self, o] = (self o - o self) / 2.
+pub fn (m Multivector) commutator(o Multivector) Multivector {
+	return m.gp(o).sub(o.gp(m)).mul_scalar(0.5)
+}
+
+// anticommutator returns {self, o} = (self o + o self) / 2.
+pub fn (m Multivector) anticommutator(o Multivector) Multivector {
+	return m.gp(o).add(o.gp(m)).mul_scalar(0.5)
+}
+
+// proj projects self onto the blade o: (self . o) o^-1.
+pub fn (m Multivector) proj(o Multivector) Multivector {
+	return m.ip(o).gp(o.inverse())
+}
+
+// rej returns the part of self orthogonal to the blade o.
+pub fn (m Multivector) rej(o Multivector) Multivector {
+	return m.sub(m.proj(o))
+}
+
+// reflect mirrors self across the plane with the given normal: v' = -n v n
+// with n the normalized normal; works for vectors and blades.
+pub fn (m Multivector) reflect(normal [3]f64) Multivector {
+	len2 := normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]
+	if len2 < 1e-18 {
+		panic('reflect: zero normal')
+	}
+	n := mv_vector(normal[0], normal[1], normal[2], 0.0, 0.0).div_scalar(math.sqrt(len2))
+	return n.gp(m).gp(n).neg()
+}
+
+// --- subspace helpers for meet/join ------------------------------------------
+
+// slot_mask maps a component slot to its generator bitmask (e1=1, e2=2,
+// e3=4, e0=8, einf=16).  Slots are ordered lexicographically by generator,
+// not by bitmask, so the mask must be looked up, never computed.
+const slot_mask = [
+	0,
+	1,
+	2,
+	4,
+	8,
+	16, // grade 0-1
+	3,
+	5,
+	9,
+	17,
+	6,
+	10,
+	18,
+	12,
+	20,
+	24, // grade 2
+	7,
+	11,
+	19,
+	13,
+	21,
+	25,
+	14,
+	22,
+	26,
+	28, // grade 3
+	15,
+	23,
+	27,
+	29,
+	30, // grade 4
+	31, // grade 5
+]
+
+// bit_count counts set bits of a small non-negative integer.
+fn bit_count(x int) int {
+	mut n := 0
+	mut v := x
+	for v > 0 {
+		n += v & 1
+		v >>= 1
+	}
+	return n
+}
+
+// blade_mask returns the generator bitmask of a pure blade.
+fn blade_mask(m Multivector) int {
+	mut mask := 0
+	for i in 0 .. num_components {
+		if m.values[i] != 0.0 {
+			mask |= slot_mask[i]
+		}
+	}
+	return mask
+}
+
+// rows_of_mask returns the generator basis vectors of a blade mask as rows.
+fn rows_of_mask(mask int) [][]f64 {
+	mut rows := [][]f64{}
+	for i in 0 .. 5 {
+		if mask & (1 << i) != 0 {
+			mut row := []f64{len: 5}
+			row[i] = 1.0
+			rows << row
+		}
+	}
+	return rows
+}
+
+// row_basis reduces rows to RREF and returns the pivot rows, a basis of the
+// row space.
+fn row_basis(rows [][]f64) [][]f64 {
+	mut mat := [][]f64{}
+	for row in rows {
+		mat << row.clone()
+	}
+	mut pivots := 0
+	for col in 0 .. 5 {
+		mut pivot := -1
+		for i in pivots .. mat.len {
+			if math.abs(mat[i][col]) > 1e-12 {
+				pivot = i
+				break
+			}
+		}
+		if pivot < 0 {
+			continue
+		}
+		tmp := mat[pivot]
+		mat[pivot] = mat[pivots]
+		mat[pivots] = tmp
+		scale := mat[pivots][col]
+		for c in col .. 5 {
+			mat[pivots][c] = mat[pivots][c] / scale
+		}
+		for i in 0 .. mat.len {
+			if i == pivots {
+				continue
+			}
+			f := mat[i][col]
+			if math.abs(f) < 1e-12 {
+				continue
+			}
+			for c in col .. 5 {
+				mat[i][c] = mat[i][c] - f * mat[pivots][c]
+			}
+		}
+		pivots++
+	}
+	mut basis := [][]f64{}
+	for i in 0 .. pivots {
+		basis << mat[i]
+	}
+	return basis
+}
+
+// nullspace returns a basis of the solutions x of rows . x = 0, i.e. the
+// orthogonal complement of the row space.
+fn nullspace(rows [][]f64) [][]f64 {
+	rref := row_basis(rows)
+	mut pivot_cols := []int{}
+	for row in rref {
+		for c in 0 .. 5 {
+			if math.abs(row[c]) > 1e-12 {
+				pivot_cols << c
+				break
+			}
+		}
+	}
+	mut basis := [][]f64{}
+	for fc in 0 .. 5 {
+		if pivot_cols.contains(fc) {
+			continue
+		}
+		mut v := []f64{len: 5}
+		v[fc] = 1.0
+		for i, pc in pivot_cols {
+			v[pc] = -rref[i][fc]
+		}
+		basis << v
+	}
+	return basis
+}
+
+// wedge_rows wedges the given independent 5D vectors in order.
+fn wedge_rows(rows [][]f64) Multivector {
+	mut res := mv_scalar(1.0)
+	for row in rows {
+		res = res.op(mv_vector(row[0], row[1], row[2], row[3], row[4]))
+	}
+	return res
 }
