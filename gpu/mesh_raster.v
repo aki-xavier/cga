@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { TriUvs, TrimeshGeometry, affine_from_motor, cylinder, e1, e2, plane, sphere, transform_point }
 
 // Software rasterizer for explicit triangle meshes.
 //
@@ -9,6 +11,7 @@ module cga
 // refraction), and faces are back-face culled.  A per-mesh base-colour texture
 // (Material.map) is sampled and post-multiplied, mirroring the ray-traced path.
 import mlx
+import mlx_ops
 import math
 
 // RastResult is the rasterized mesh output (linear float32 colour + depth).
@@ -176,10 +179,10 @@ pub fn rasterize_meshes(objs []Mesh, camera PerspectiveCamera, w int, h int, fx 
 		}
 		for o in valid_objs {
 			em, diff, spec, expo := o.material.shade_params()
-			em_arr << mlx.arr3v(em)
-			diff_arr << mlx.arr3v(diff)
-			spec_arr << mlx.arr3v(spec)
-			expo_arr << mlx.fs(expo)
+			em_arr << mlx_ops.arr3v(em)
+			diff_arr << mlx_ops.arr3v(diff)
+			spec_arr << mlx_ops.arr3v(spec)
+			expo_arr << mlx_ops.fs(expo)
 		}
 		// map each pixel's matidx (mesh index in `objs`, 0-based) to material params
 		mut mi_arr := []i32{len: k}
@@ -237,7 +240,7 @@ pub fn rasterize_meshes(objs []Mesh, camera PerspectiveCamera, w int, h int, fx 
 		color = mlx.array_f32(col_flat, [h, w, 3])
 	}
 
-	hits = mlx.array_f32(rast_hit_mask, [h, w]).greater(mlx.fs(0.0))
+	hits = mlx.array_f32(rast_hit_mask, [h, w]).greater(mlx_ops.fs(0.0))
 	return RastResult{
 		depth: mlx.array_f32(depth, [h, w])
 		color: color

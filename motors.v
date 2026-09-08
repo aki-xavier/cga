@@ -72,7 +72,7 @@ pub fn translator(displacement [3]f64) Multivector {
 
 // --- 3x3 matrix helpers -----------------------------------------------------
 
-type Mat3 = [3][3]f64
+pub type Mat3 = [3][3]f64
 
 fn mat3_identity() Mat3 {
 	mut m := Mat3{}
@@ -82,7 +82,7 @@ fn mat3_identity() Mat3 {
 	return m
 }
 
-fn mat3_new(r0 [3]f64, r1 [3]f64, r2 [3]f64) Mat3 {
+pub fn mat3_new(r0 [3]f64, r1 [3]f64, r2 [3]f64) Mat3 {
 	mut m := Mat3{}
 	m[0] = r0
 	m[1] = r1

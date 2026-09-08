@@ -4,7 +4,6 @@ module cga
 // primitives (cone / torus / ellipsoid / cyclide / trimesh) and the general
 // scale/mirror/shear wrapper.  Pure-CPU matrix helpers + the MLX `vecmat`
 // row-vector × matrix contraction.
-import mlx
 import math
 
 // mat3_transpose returns m^T.
@@ -45,17 +44,9 @@ pub fn mat3_to_mat4(l Mat3) [16]f64 {
 }
 
 // mat3_to_mlx builds a (3,3) float32 array from a Mat3.
-pub fn mat3_to_mlx(m Mat3) mlx.Array {
-	return mlx.array_f32([f32(m[0][0]), f32(m[0][1]), f32(m[0][2]), f32(m[1][0]), f32(m[1][1]),
-		f32(m[1][2]), f32(m[2][0]), f32(m[2][1]), f32(m[2][2])], [3, 3])
-}
 
 // vecmat computes v (...,3) · m (3,3) -> (...,3) (row-vector convention),
 // preserving full float32 precision (mlx matmul drops small-matrix precision).
-pub fn vecmat(v mlx.Array, m Mat3) mlx.Array {
-	mm := mat3_to_mlx(m)
-	return v.expand_dims(-1).multiply(mm).sum_axis(-2, false)
-}
 
 // affine_from_motor computes A = M·L and A^-1 = L^-1·M^-1, returning the 3x3
 // inverse block a_inv3, the inverse translation t_inv and the full forward 4x4.
@@ -76,22 +67,8 @@ pub fn affine_from_motor(m Multivector, linear Mat3) (Mat3, [3]f64, [16]f64) {
 
 // affine_to_local transforms rays into the local canonical frame:
 // o_l = o·a_inv3^T + t_inv, d_l = d·a_inv3^T, returns unit d and |d_l|.
-pub fn affine_to_local(a_inv3 Mat3, t_inv [3]f64, o mlx.Array, d mlx.Array) (mlx.Array, mlx.Array, mlx.Array) {
-	a3t := mat3_transpose(a_inv3)
-	t3 := mlx.arr3v(t_inv)
-	o_l := vecmat(o, a3t).add(t3)
-	d_l := vecmat(d, a3t)
-	mut lam := d_l.multiply(d_l).sum_axis(-1, true).sqrt()
-	lam = mlx.where(mlx.s_gt(lam, 1e-12), lam, mlx.ones_like(lam))
-	return o_l, d_l.divide(lam), lam
-}
 
 // affine_normal maps a local normal to camera space and normalises.
-pub fn affine_normal(n_l mlx.Array, a_inv3 Mat3) mlx.Array {
-	n := vecmat(n_l, a_inv3)
-	norm := n.multiply(n).sum_axis(-1, true).sqrt()
-	return n.divide(mlx.where(mlx.s_gt(norm, 1e-12), norm, mlx.ones_like(norm)))
-}
 
 // decompose_rigid factors a 4x4 affine into (motor, linear): A = motor . linear
 // via Newton polar decomposition (reflections absorbed into linear).

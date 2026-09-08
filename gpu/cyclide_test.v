@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { DupinCyclide, Geometry, csg_geometry, cyclide_geometry, dupin_cyclide, from_torus_inversion, motor_identity, point, sphere, sphere_from_dual }
 
 import mlx
 import math

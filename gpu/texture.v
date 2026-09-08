@@ -1,8 +1,11 @@
-module cga
+module cga_gpu
+
+import cga
 
 // Immutable linear RGBA texture sampled on the MLX device.  Source images are
 // decoded from PNG (sRGB -> linear) before entering the renderer.
 import mlx
+import mlx_ops
 import stbi
 
 pub enum WrapMode {
@@ -20,7 +23,7 @@ pub:
 
 // sRGB -> linear on an (N,3) encoded float array.
 fn srgb_to_linear_arr(rgb mlx.Array) mlx.Array {
-	return mlx.where(mlx.s_le(rgb, 0.04045), mlx.s_div(rgb, 12.92), mlx.s_pow(mlx.s_div(mlx.s_add(rgb, 0.055), 1.055),
+	return mlx.where(mlx_ops.s_le(rgb, 0.04045), mlx_ops.s_div(rgb, 12.92), mlx_ops.s_pow(mlx_ops.s_div(mlx_ops.s_add(rgb, 0.055), 1.055),
 		2.4))
 }
 
@@ -108,7 +111,7 @@ fn stbi_decode(data []u8) !([]u8, int, int) {
 fn wrap_value(value mlx.Array, mode WrapMode) mlx.Array {
 	return match mode {
 		.repeat { value.subtract(value.floor()) }
-		.clamp { mlx.s_clip(value, 0.0, 1.0) }
+		.clamp { mlx_ops.s_clip(value, 0.0, 1.0) }
 	}
 }
 
@@ -119,8 +122,8 @@ pub fn (t Texture) sample(uv mlx.Array, wrap_s WrapMode, wrap_t WrapMode) mlx.Ar
 	}
 	u := wrap_value(col(uv, 0), wrap_s)
 	v := wrap_value(col(uv, 1), wrap_t)
-	x := mlx.s_sub(mlx.s_mul(u, f64(t.width)), 0.5)
-	y := mlx.s_sub(mlx.s_mul(mlx.s_rsub(v, 1.0), f64(t.height)), 0.5)
+	x := mlx_ops.s_sub(mlx_ops.s_mul(u, f64(t.width)), 0.5)
+	y := mlx_ops.s_sub(mlx_ops.s_mul(mlx_ops.s_rsub(v, 1.0), f64(t.height)), 0.5)
 	x0 := x.floor().astype(.int32)
 	y0 := y.floor().astype(.int32)
 	fx := x.subtract(x0.astype(.float32)).expand_dims(1)
@@ -148,8 +151,8 @@ pub fn (t Texture) sample(uv mlx.Array, wrap_s WrapMode, wrap_t WrapMode) mlx.Ar
 	c10 := flat.take_axis(y0r.multiply(mlx.int_scalar(t.width)).add(x1), 0)
 	c01 := flat.take_axis(y1.multiply(mlx.int_scalar(t.width)).add(x0r), 0)
 	c11 := flat.take_axis(y1.multiply(mlx.int_scalar(t.width)).add(x1), 0)
-	omfx := mlx.fs(1.0).subtract(fx)
-	omfy := mlx.fs(1.0).subtract(fy)
+	omfx := mlx_ops.fs(1.0).subtract(fx)
+	omfy := mlx_ops.fs(1.0).subtract(fy)
 	top := c00.multiply(omfx).add(c10.multiply(fx))
 	bot := c01.multiply(omfx).add(c11.multiply(fx))
 	res := top.multiply(omfy).add(bot.multiply(fy)) // (count,4) raw interpolated

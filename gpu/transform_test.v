@@ -1,5 +1,7 @@
 // non-OOP — test file (exempt from the OOP rule)
-module cga
+module cga_gpu
+
+import cga { Geometry, Multivector, box_geometry, cone_geometry, csg_geometry, extrude, motor_identity, motor_rotor, plane, translator, trimesh_geometry }
 
 // Regression tests for geometry under non-identity transforms:
 //   - cone_contains / trimesh_contains now map query points back to the

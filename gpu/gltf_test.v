@@ -1,4 +1,4 @@
-module cga
+module cga_gpu
 
 import os
 import math

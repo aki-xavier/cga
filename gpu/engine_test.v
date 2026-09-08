@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, cone_geometry, cyclide_geometry, ellipsoid_geometry, sphere, sphere_geometry, torus_geometry, trimesh_geometry }
 
 import os
 

@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { BoxGeometry, ConeGeometry, CsgGeometry, CylinderGeometry, EllipsoidGeometry, Geometry, ObjMesh, PlaneGeometry, SphereGeometry, TorusGeometry, TrimeshGeometry, affine_geometry, cone_geometry, cylinder, decompose_rigid, ellipsoid_geometry, extrude, load_obj, loft, mat3_new, motor_identity, motor_rotor, plane, save_obj, sphere, sphere_geometry, torus_geometry, translator, triangulate, trimesh_geometry }
 
 import mlx
 import math

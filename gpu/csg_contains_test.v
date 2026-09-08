@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, box_geometry, csg_geometry, motor_identity, plane_geometry, sphere, sphere_geometry }
 
 import mlx
 

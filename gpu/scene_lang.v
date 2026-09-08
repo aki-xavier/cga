@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { CircleGeometry, CsgOp, Geometry, affine_geometry, box_geometry, circle, circle_geometry, clamp01, cone_geometry, csg_geometry, cyclide_geometry, cylinder, cylinder_geometry, decompose_rigid, ellipsoid_geometry, extrude, line, load_obj, loft, mat4_identity, mat4_mul, motor_identity, motor_rotor, plane, plane_geometry, sphere, sphere_geometry, torus_geometry, transformed_geometry, triangulate, trimesh_geometry, validate_profile }
 
 // CGS (CGA Scene) language: lexer + single-pass parser/evaluator producing an
 // engine Scene + PerspectiveCamera.  Port of cga_py/scene_lang.

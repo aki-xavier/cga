@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, csg_geometry, from_column_major, from_trs, mat4_identity, mat4_mul, to_column_major, transform_point, trimesh_geometry, trimesh_geometry_uv }
 
 // glTF 2.0 read + GLB write (geometry: TRIANGLES primitives; materials: solid
 // colour from the PBR base color / metalness / roughness / emissive factors —

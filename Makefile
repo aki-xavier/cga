@@ -8,7 +8,7 @@
 .PHONY: test run editor fmt
 
 test:
-	v test .
+	v -no-memory-limit test .  # gpu module (mlx) exceeds the 4032 MiB safety ceiling
 
 run:
 	v run examples/render_smoke.v

@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, Multivector, motor_from_matrix, motor_identity, vec3_cross }
 
 // Mesh, Scene, PerspectiveCamera and OrbitControls (three.js-style surface).
 import math

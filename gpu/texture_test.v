@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { box_geometry }
 
 import mlx
 import os

@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { sphere }
 
 import os
 

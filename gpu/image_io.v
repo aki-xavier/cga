@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga
 
 // Minimal PNG writer (RGBA, 8-bit) so render output can be saved to disk
 // without external dependencies.  Uses V's zlib + crc32 modules.

@@ -10,6 +10,7 @@ module main
 //   v run editor/server.v        (from the repo root)
 //   open http://127.0.0.1:8123
 import cga
+import cga_gpu
 import mlx
 import net.http
 import os
@@ -128,11 +129,11 @@ fn render_cgs(text string, w int, h int, aa int) ![]u8 {
 	}
 	mlx.default_stream().set_default()
 	asset_root := os.dir(@FILE) + '/../examples/cgs'
-	sc, mut cam := cga.cgs_load_result(text, asset_root)!
+	sc, mut cam := cga_gpu.cgs_load_result(text, asset_root)!
 	cam.aspect = f64(w) / f64(h)
-	mut r := cga.renderer(w, h, aa, 3)
+	mut r := cga_gpu.renderer(w, h, aa, 3)
 	img := r.render(sc, cam)
-	png := cga.frame_to_png_bytes(img)
+	png := cga_gpu.frame_to_png_bytes(img)
 	img.free()
 	// A render leaves thousands of dead mlx arrays whose Metal buffers are only
 	// released by the Boehm finalizers; the boxes are bytes-small so the GC heap

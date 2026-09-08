@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Mat3, Multivector, e1, e2, e3, motor_rotor, translator }
 
 // Scene-graph layer: Vec3 helpers, Color, Object3D, Mesh, Scene,
 // PerspectiveCamera and OrbitControls (the three.js-style surface).
@@ -14,9 +16,6 @@ pub fn vec3_unit(a [3]f64) [3]f64 {
 	return [a[0] / n, a[1] / n, a[2] / n]!
 }
 
-pub fn vec3_cross(a [3]f64, b [3]f64) [3]f64 {
-	return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]!
-}
 
 pub fn vec3_dot(a [3]f64, b [3]f64) f64 {
 	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]

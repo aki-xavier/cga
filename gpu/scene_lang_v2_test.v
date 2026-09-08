@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, SphereGeometry, circle, extrude, loft, plane, sphere }
 
 import math
 

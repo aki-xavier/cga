@@ -5,7 +5,6 @@ module cga
 // computes the parameters (CPU-side versor conjugation); the per-pixel
 // intersection kernels live in geometry_ops.v.
 import math
-import mlx
 
 // --- per-geometry camera-space parameters ------------------------------------
 
@@ -87,10 +86,10 @@ pub:
 	a_inv3 Mat3
 	t_inv  [3]f64
 	a_fwd  [16]f64
-	v0     mlx.Array
-	e1     mlx.Array
-	e2     mlx.Array
-	nrm    mlx.Array
+	v0     [][3]f64
+	e1     [][3]f64
+	e2     [][3]f64
+	nrm    [][3]f64
 	lo     [3]f64
 	hi     [3]f64
 }
@@ -383,131 +382,9 @@ pub fn cyclide_geometry(a f64, b f64, d f64, shift [3]f64) CyclideGeometry {
 
 // geom_to_camera conjugates a geometry's blade into camera space and returns
 // the camera-space parameters.
-pub fn geom_to_camera(g Geometry, m Multivector) GeometryParams {
-	return match g {
-		SphereGeometry {
-			s := m.apply(g.blade)
-			c, r := sphere_from_dual(s)
-			SphereParams{
-				c:    c
-				r:    r
-				axes: [vec3_unit(dir3(m.apply(e1()))), vec3_unit(dir3(m.apply(e2()))),
-					vec3_unit(dir3(m.apply(e3())))]!
-			}
-		}
-		PlaneGeometry {
-			pi := m.apply(g.blade)
-			PlaneParams{
-				n: vec3_unit(dir3(pi))
-				d: pi.einf_coeff()
-			}
-		}
-		CylinderGeometry {
-			CylinderParams{
-				q: m.apply(point(0.0, 0.0, 0.0)).coords()
-				u: vec3_unit(dir3(m.apply(e3())))
-				r: g.radius
-				h: g.half
-			}
-		}
-		BoxGeometry {
-			hf := g.half
-			BoxParams{
-				c:    m.apply(point(0.0, 0.0, 0.0)).coords()
-				axes: [vec3_unit(dir3(m.apply(e1()))), vec3_unit(dir3(m.apply(e2()))),
-					vec3_unit(dir3(m.apply(e3())))]!
-				half: hf
-			}
-		}
-		CircleGeometry {
-			CircleParams{
-				c: m.apply(point(0.0, 0.0, 0.0)).coords()
-				n: vec3_unit(dir3(m.apply(e3())))
-				r: g.radius
-			}
-		}
-		ConeGeometry {
-			ai, ti, af := affine_from_motor(m, identity3())
-			ConeParams{
-				a_inv3: ai
-				t_inv:  ti
-				a_fwd:  af
-				r:      g.radius
-				h:      g.height
-			}
-		}
-		TorusGeometry {
-			ai, ti, af := affine_from_motor(m, identity3())
-			TorusParams{
-				a_inv3: ai
-				t_inv:  ti
-				a_fwd:  af
-				major:  g.major
-				minor:  g.minor
-			}
-		}
-		EllipsoidGeometry {
-			rr := g.radii
-			diag := mat3_new([rr[0], 0.0, 0.0]!, [0.0, rr[1], 0.0]!, [0.0, 0.0, rr[2]]!)
-			ai, ti, af := affine_from_motor(m, diag)
-			EllipsoidParams{
-				a_inv3: ai
-				t_inv:  ti
-				a_fwd:  af
-			}
-		}
-		CyclideGeometry {
-			ai, ti, af := affine_from_motor(m, identity3())
-			sh := g.shift
-			CyclideParams{
-				a_inv3: ai
-				t_inv:  ti
-				a_fwd:  af
-				a:      g.a
-				b:      g.b
-				d:      g.d
-				c:      math.sqrt(g.a * g.a - g.b * g.b)
-				shift:  sh
-			}
-		}
-		TrimeshGeometry {
-			ai, ti, af := affine_from_motor(m, identity3())
-			glo := g.lo
-			ghi := g.hi
-			TrimeshParams{
-				a_inv3: ai
-				t_inv:  ti
-				a_fwd:  af
-				v0:     mlx.array_f32(to_f32_3(g.v0), [g.v0.len, 3])
-				e1:     mlx.array_f32(to_f32_3(g.e1), [g.e1.len, 3])
-				e2:     mlx.array_f32(to_f32_3(g.e2), [g.e2.len, 3])
-				nrm:    mlx.array_f32(to_f32_3(g.nrm), [g.nrm.len, 3])
-				lo:     glo
-				hi:     ghi
-			}
-		}
-		CsgGeometry {
-			mut ch := []GeometryParams{}
-			for c in g.children {
-				ch << geom_to_camera(c, m)
-			}
-			CsgParams{
-				op:       g.op
-				children: ch
-			}
-		}
-		AffineGeometry {
-			affine_to_camera(g, m)
-		}
-	}
-}
 
-fn to_f32_3(v [][3]f64) []f32 {
-	mut out := []f32{len: v.len * 3}
-	for i, p in v {
-		out[i * 3] = f32(p[0])
-		out[i * 3 + 1] = f32(p[1])
-		out[i * 3 + 2] = f32(p[2])
-	}
-	return out
+
+
+pub fn vec3_cross(a [3]f64, b [3]f64) [3]f64 {
+	return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]!
 }

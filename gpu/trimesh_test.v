@@ -1,4 +1,6 @@
-module cga
+module cga_gpu
+
+import cga { Geometry, motor_identity, plane, translator, trimesh_geometry }
 
 import mlx
 import math
