@@ -7,7 +7,7 @@ import cga { Geometry, csg_geometry, from_column_major, from_trs, mat4_identity,
 // no texturing).
 import encoding.binary
 import encoding.base64
-import json2
+import x.json2
 import os
 import math
 
