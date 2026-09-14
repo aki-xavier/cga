@@ -24,6 +24,13 @@ pub fn renderer(width int, height int, aa int, max_depth int) Renderer {
 	if aa < 1 {
 		panic('aa must be >= 1, got ${aa}')
 	}
+	// A frame needs a positive extent on both axes.  The ray bundle is built by concatenating one
+	// tile per supersample, so an empty frame builds an empty bundle, and its zero-length axis
+	// then propagates through every later broadcast as a shape error that names the array
+	// operation rather than the frame that asked for it.
+	if width < 1 || height < 1 {
+		panic('renderer needs a positive extent, got ${width}x${height}')
+	}
 	return Renderer{
 		width:     width
 		height:    height
@@ -171,6 +178,16 @@ fn (r Renderer) trace(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambien
 
 // nearest intersects a ray bundle against all objects and shades the nearest hit.
 fn (r Renderer) nearest(scene Scene, o mlx.Array, d mlx.Array, lit []Light, ambient ?Light, primary bool) (mlx.Array, mlx.Array, mlx.Array, mlx.Array, mlx.Array, mlx.Array, mlx.Array) {
+	// The ray bundle is the shape every later broadcast is measured against, so it is checked
+	// here rather than left to the first array operation that notices.  A bundle that is not
+	// (N, 3), or an empty one, would otherwise fail inside whichever broadcast reaches it first,
+	// and the error would name that operation instead of the caller that built the rays.
+	oshape := o.shape()
+	dshape := d.shape()
+	if oshape.len != 2 || oshape[1] != 3 || dshape.len != 2 || dshape[1] != 3 || dshape[0] != oshape[0]
+		|| oshape[0] < 1 {
+		panic('nearest needs matching ray bundles of shape (N, 3) with N >= 1, got o=${oshape} d=${dshape}')
+	}
 	n_rays := o.shape()[0]
 	mut best_t := mlx.full([n_rays], mlx.f32_scalar(f32(math.inf(1))), .float32)
 	mut best_n := mlx.zeros([n_rays, 3], .float32)
