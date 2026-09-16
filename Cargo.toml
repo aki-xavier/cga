@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cga-core",
+    "crates/cga-gpu",
+    "crates/cga-editor",
+    "crates/cga-examples",
+]
+
+[workspace.dependencies]
+mlx-rs = "0.32"
+
+# Lint policy for all workspace crates (each crate opts in via
+# `[lints] workspace = true`). Warn locally; CI may turn these into errors
+# with `RUSTFLAGS="-D warnings" cargo clippy --workspace`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

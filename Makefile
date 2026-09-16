@@ -1,21 +1,21 @@
-# V port build helper.
+# Rust port build helper.
 #
-# The `mlx` and `cga` modules resolve through V's default module path
-# (`~/.vmodules`); symlink them there once and no VMODULES env var is needed:
-#   ln -s ~/code/mlx-v ~/.vmodules/mlx
-#   ln -s "$(pwd)"     ~/.vmodules/cga
+# Workspace layout: crates/cga-core (pure f64 CPU algebra), crates/cga-gpu
+# (mlx-rs/Metal renderer), crates/cga-editor (CGS web editor),
+# crates/cga-examples (demo CLIs). Requires Rust stable + macOS Apple Silicon
+# (mlx-rs builds the MLX C++ core on first build — takes a few minutes once).
 
 .PHONY: test run editor fmt
 
 test:
-	v -no-memory-limit test .  # gpu module (mlx) exceeds the 4032 MiB safety ceiling
+	cargo test --workspace
 
 run:
-	v run examples/render_smoke.v
+	cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs render_smoke.png 640 480 2
 
 # The CGS editor web server (renders .cgs -> PNG at http://127.0.0.1:8123).
 editor:
-	v run editor/
+	cargo run --release -p cga-editor
 
 fmt:
-	v fmt -w .
+	cargo fmt --all

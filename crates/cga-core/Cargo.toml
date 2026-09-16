@@ -1,0 +1,10 @@
+[package]
+name = "cga-core"
+version = "0.1.0"
+edition = "2021"
+description = "Conformal Geometric Algebra (CGA) core, pure f64 CPU (port of the V `cga` module)."
+
+[dependencies]
+
+[lints]
+workspace = true

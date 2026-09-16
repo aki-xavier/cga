@@ -1,0 +1,13 @@
+[package]
+name = "cga-examples"
+version = "0.1.0"
+edition = "2021"
+description = "Demo CLIs (port of the V `examples/*/*.v` demos)."
+
+[dependencies]
+cga-core = { path = "../cga-core" }
+cga-gpu = { path = "../cga-gpu" }
+mlx-rs = { workspace = true }
+
+[lints]
+workspace = true

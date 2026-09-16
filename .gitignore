@@ -218,14 +218,6 @@ __marimo__/
 .DS_Store
 # demo 渲染输出
 /artifacts/
-# Rust (editor/)
+/render_smoke.png
+# Rust
 target/
-.vmodules
-# compiled demo binaries (`v run` leaves these next to the .v source)
-/examples/render_cgs
-/examples/demo_engine
-/examples/demo_advantage
-/examples/demo_kinematics
-/examples/demo_csg
-/examples/demo_gltf
-/examples/render_smoke
