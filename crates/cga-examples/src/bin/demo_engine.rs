@@ -1,10 +1,5 @@
 // Orbit demo: three.js-style scene + orbit animation -> animated GIF
 // (examples/engine/orbit.gif).  Run: cargo run -p cga-examples --bin demo_engine -- [frames]
-//
-// Port note: the V demo hardcodes `frames := 90` and silently ignores os.args;
-// the README invocation `v run examples/demo_engine.v 90` passes the frame
-// count explicitly, so the Rust port accepts an optional [frames] argument
-// (default 90).
 use cga_core::*;
 use cga_examples::{data_f32, mlx_frame_gc};
 use cga_gpu::*;
@@ -153,7 +148,7 @@ fn main() {
     } else {
         90
     };
-    // V: os.dir(@FILE) — Rust 版以仓库根目录为 CWD 运行
+    // 以仓库根目录为 CWD 运行
     let out_dir = "examples/engine";
 
     let sc = build_scene();
@@ -179,8 +174,7 @@ fn main() {
         let img = r.render(sc.clone(), camera);
         gif_frames.push(f32_rgba_to_u8(&data_f32(&img)));
         drop(img);
-        // 每帧收尾：释放死 Metal buffer（Rust drop），再把 MLX 不复用的
-        // cache 还给 OS（见 editor/server.v；V 里是 gc_collect + clear_cache）
+        // 每帧收尾：drop 释放死 Metal buffer，再把 MLX 不复用的 cache 还给 OS
         mlx_frame_gc();
         println!("frame {}/{} rendered", i + 1, frames);
     }

@@ -2,7 +2,7 @@
 name = "cga-examples"
 version = "0.1.0"
 edition = "2021"
-description = "Demo CLIs (port of the V `examples/*/*.v` demos)."
+description = "Demo CLIs for the cga crates."
 
 [dependencies]
 cga-core = { path = "../cga-core" }

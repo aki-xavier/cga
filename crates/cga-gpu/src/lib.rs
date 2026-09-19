@@ -1,8 +1,6 @@
-//! cga-gpu — MLX/Metal GPU batch kernels + ray tracing renderer
-//! (port of the V `cga_gpu` module).
+//! cga-gpu — MLX/Metal GPU batch kernels + ray tracing renderer.
 //!
-//! All submodules are re-exported flat at the crate root, mirroring the flat
-//! `module cga_gpu` namespace of the V original.
+//! All submodules are re-exported flat at the crate root.
 
 pub mod mlxops;
 pub use mlxops::*;

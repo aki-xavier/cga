@@ -2,9 +2,8 @@
 // colour from the PBR base color / metalness / roughness / emissive factors —
 // no texturing).
 //
-// Port note: V parsed the glTF JSON with `x.json2` struct decoding (missing
-// fields default to zero values); the Rust port walks `serde_json::Value`
-// with the same defaults. Base64 data URIs use the `base64` crate.
+// JSON is walked as `serde_json::Value`; missing fields default to zero values.
+// Base64 data URIs use the `base64` crate.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::Value;
@@ -29,7 +28,7 @@ struct GltfBufferView {
     buffer: i32,
     byte_offset: i32,
     #[allow(dead_code)]
-    // decoded for 1:1 parity with the V struct; read_accessor uses offsets/stride only
+    // kept for schema completeness; read_accessor uses offsets/stride only
     byte_length: i32,
     byte_stride: i32,
 }
@@ -514,7 +513,7 @@ fn resolve_gltf_buffer(path: &str, uri: &str, embedded: &[u8]) -> Result<Vec<u8>
     std::fs::read(&full).map_err(|_| format!("cannot read glTF buffer {full}"))
 }
 
-// --- JSON parsing (serde_json::Value walk, defaults mirror V's json2) ---------
+// --- JSON parsing (serde_json::Value walk, zero-value defaults) ---------------
 
 fn j_int(v: &Value, key: &str) -> i32 {
     v.get(key).and_then(|x| x.as_i64()).unwrap_or(0) as i32

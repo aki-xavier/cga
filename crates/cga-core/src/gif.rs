@@ -3,7 +3,7 @@
 // Encodes a sequence of RGBA frames with a global 256-colour palette
 // (median-cut quantisation over all frames) and the LZW image compression
 // required by the GIF format.  Used by the demos to assemble their PNG frames
-// into an animated .gif entirely in V.
+// into an animated .gif.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ fn gif_palette(frames: &[Vec<u8>], w: usize, h: usize) -> Vec<u8> {
     let mut boxes: Vec<Vec<GCColor>> = Vec::new();
     boxes.push(colors);
     while boxes.len() < GIF_PALETTE_ENTRIES {
-        // split the FIRST box with maximum length (> 1), matching the V loop.
+        // split the FIRST box with maximum length (> 1).
         let maxlen = boxes.iter().map(|b| b.len()).max().unwrap_or(0);
         if maxlen <= 1 {
             break;
@@ -229,8 +229,8 @@ impl GBitWriter {
 // gif_lzw compresses a stream of palette indices using the GIF LZW scheme.
 //
 // `overflow <<= 1` after the final dictionary step is intentionally dead:
-// it mirrors the V reference (which mirrors the decoder's bookkeeping) even
-// though nothing reads `overflow` afterwards.
+// it mirrors the decoder's bookkeeping even though nothing reads `overflow`
+// afterwards.
 #[allow(unused_assignments)]
 fn gif_lzw(indices: &[u8], min_code_size: u32) -> Vec<u8> {
     let clear: u32 = 1u32 << min_code_size;

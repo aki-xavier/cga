@@ -1,5 +1,5 @@
 // mesh_io: Wavefront OBJ read/write plus 4x4 (row-major) matrix helpers.
-// (glTF/GLB lives in mesh_io_gltf.v.)
+// (glTF/GLB lives in cga-gpu's mesh_io_gltf.rs.)
 
 // --- 4x4 row-major matrix helpers -------------------------------------------
 
@@ -203,9 +203,9 @@ fn mesh_vertex_world(m: &ObjMesh, p: [f64; 3]) -> [f64; 3] {
     p
 }
 
-// format_g9 emulates V's `{:.9g}` string interpolation (C `%g` with 9
-// significant digits: trailing zeros stripped, scientific notation below
-// 1e-4 or at/above 1e9).
+// format_g9 emulates `{:.9g}` string interpolation (C `%g` with 9 significant
+// digits: trailing zeros stripped, scientific notation below 1e-4 or at/above
+// 1e9).
 fn format_g9(v: f64) -> String {
     const P: i32 = 9;
     if v == 0.0 {

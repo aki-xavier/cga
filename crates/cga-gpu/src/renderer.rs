@@ -443,7 +443,7 @@ mod tests {
         })
     }
 
-    // --- gpu/engine_test.v ----------------------------------------------------
+    // --- engine tests ----------------------------------------------------------
 
     fn render_center(geom: Geometry, pos: [f64; 3], name: &str) -> [f32; 3] {
         let mut sc = scene(None);
@@ -625,7 +625,7 @@ mod tests {
         assert!(hit > 100);
     }
 
-    // --- gpu/render_quantitative_test.v ---------------------------------------
+    // --- render quantitative tests --------------------------------------------
     //
     // Render pipeline quantitative checks: sRGB roundtrip, ior=1 invisibility,
     // Beer absorption, shadow umbra.  Expected values derive from first principles.

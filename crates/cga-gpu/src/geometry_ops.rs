@@ -1,6 +1,6 @@
 // Per-pixel ray-intersection kernels (MLX batch, float32).  Each geometry
 // provides intersect / intersect_shadow / uv_at / bounds_camera over the
-// camera-space parameters computed in geometry.v.
+// camera-space parameters computed in cga-core's geometry.rs.
 
 use cga_core::{
     AffineParams, BoxParams, CircleParams, CylinderParams, GeometryParams, PlaneParams,
@@ -367,7 +367,7 @@ pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array
     ));
     let eye = ck(ops::eye::<f32>(3, Some(3), Some(0)));
     // entry-face normal opposes the ray; exit-face normal points along it
-    // (same convention as box_crossings in csg.v)
+    // (same convention as box_crossings in csg.rs)
     let n_e = ck(
         ck(eye.take_axis(&i_entry, 0)).multiply(ck(ck(ck(ops::sign(ck(ck(
             dp.take_along_axis(ck(i_entry.expand_dims(1)), -1)

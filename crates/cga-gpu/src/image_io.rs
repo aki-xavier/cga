@@ -1,8 +1,5 @@
-// Minimal PNG writer (RGBA, 8-bit) so render output can be saved to disk
-// without external dependencies.  Uses V's zlib + crc32 modules.
-//
-// Port note: the V original hand-rolled the PNG codec (zlib + crc32); the Rust
-// port uses the `image` crate instead. Public names/signatures are unchanged.
+// PNG read/write helpers (RGBA, 8-bit) built on the `image` crate, so render
+// output can be saved to disk and PNGs decoded back.
 
 use mlx_rs::Array;
 
@@ -65,12 +62,11 @@ pub fn load_png_rgba(path: &str) -> Result<(Vec<u8>, i32, i32), String> {
     decode_png_rgba(&data)
 }
 
-// decode_png_rgba decodes an 8-bit non-interlaced PNG (greyscale / RGB / RGBA /
-// greyscale+alpha) from raw bytes into RGBA bytes, returning (pixels, w, h).
+// decode_png_rgba decodes a PNG (greyscale / RGB / RGBA / greyscale+alpha) from
+// raw bytes into RGBA bytes, returning (pixels, w, h).
 //
-// Port note: the `image` crate accepts a superset of what the V decoder
-// supported (16-bit, interlaced and palette PNGs are decoded and converted to
-// RGBA8 instead of being rejected).
+// 16-bit, interlaced and palette PNGs are accepted too: the `image` crate
+// converts them to RGBA8 rather than rejecting them.
 pub fn decode_png_rgba(data: &[u8]) -> Result<(Vec<u8>, i32, i32), String> {
     if data.len() < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 {
         return Err("not a PNG".to_string());

@@ -1,7 +1,7 @@
 // Geometry types: CGA-blade primitives (sphere / plane / cylinder / box /
 // circle) plus their per-frame camera-space parameters.  `geom_to_camera`
 // computes the parameters (CPU-side versor conjugation); the per-pixel
-// intersection kernels live in geometry_ops.v.
+// intersection kernels live in cga-gpu's geometry_ops.rs.
 
 use crate::affine_geom::{AffineGeometry, AffineParams};
 use crate::csg_node::{CsgGeometry, CsgParams};
@@ -216,8 +216,7 @@ pub enum Geometry {
     CircleGeometry(CircleGeometry),
 }
 
-// TriUvs is one triangle's three UV pairs (u0,u1,u2), as scalars (fixed-array
-// struct fields trip a V 0.5.2 codegen bug).
+// TriUvs is one triangle's three UV pairs (u0,u1,u2), stored as scalars.
 #[derive(Clone, Copy, Debug)]
 pub struct TriUvs {
     pub u0x: f64,

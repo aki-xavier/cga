@@ -9,8 +9,8 @@ use crate::Multivector;
 #[derive(Clone, Debug)]
 pub struct AffineGeometry {
     // Single-element heap-backed slice.  A `&Geometry` field dangles for large
-    // sumtypes (V's escape analysis misses heap allocation), so we store the
-    // inner geometry in a slice whose backing array is always heap-allocated.
+    // sumtypes, so the inner geometry lives in a slice whose backing array is
+    // always heap-allocated.
     pub inner: Vec<Geometry>,
     pub linear: Mat3,
     pub motor: Multivector,

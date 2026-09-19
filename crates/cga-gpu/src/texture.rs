@@ -1,8 +1,7 @@
 // Immutable linear RGBA texture sampled on the MLX device.  Source images are
 // decoded from PNG (sRGB -> linear) before entering the renderer.
 //
-// Port note: V decoded arbitrary image bytes via stb_image (`stbi`); the Rust
-// port uses the `image` crate instead (PNG / JPEG / ...).
+// Decoding goes through the `image` crate (PNG / JPEG / ...).
 
 use mlx_rs::{ops, Array};
 
@@ -89,10 +88,10 @@ pub fn texture_from_png_bytes(data: &[u8]) -> Result<Texture, String> {
     Ok(texture_from_u8_rgba(&rgba, w, h))
 }
 
-// texture_from_bytes decodes image bytes (PNG / JPEG / ...) via stb_image to a
-// linear RGBA texture (used for glTF-embedded textures, which are often JPEG).
+// texture_from_bytes decodes image bytes (PNG / JPEG / ...) to a linear RGBA
+// texture (used for glTF-embedded textures, which are often JPEG).
 pub fn texture_from_bytes(data: &[u8]) -> Result<Texture, String> {
-    let img = image::load_from_memory(data).map_err(|e| format!("stbi decode failed: {e}"))?;
+    let img = image::load_from_memory(data).map_err(|e| format!("image decode failed: {e}"))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     Ok(texture_from_u8_rgba(&rgba.into_raw(), w as i32, h as i32))

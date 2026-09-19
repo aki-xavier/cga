@@ -586,7 +586,7 @@ mod tests {
         assert!((f64::from(n[2]) - 1.0).abs() < 1e-2);
     }
 
-    // --- extended modeling (gpu/extended_modeling_test.v) -------------------------
+    // --- extended modeling tests --------------------------------------------------
     // (glb / cgs tests live with mesh_io_gltf.rs / scene_lang.rs)
 
     fn em_ray(x: f64, y: f64, z: f64) -> Array {

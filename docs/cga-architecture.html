@@ -55,7 +55,7 @@
 
     <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cga-architecture-title cga-architecture-desc">
       <title id="cga-architecture-title">cga 架构：代数核心与渲染引擎</title>
-      <desc id="cga-architecture-desc">cga 的两层架构：CGA 代数核心在 CPU 上以 [32]f64 multivector 建模图元与 Motor 变换，渲染引擎逐帧把图元共轭进相机空间，由 mlx-v GPU 批量求交并着色输出 RGBA 帧。</desc>
+      <desc id="cga-architecture-desc">cga 的两层架构：CGA 代数核心在 CPU 上以 [32]f64 multivector 建模图元与 Motor 变换，渲染引擎逐帧把图元共轭进相机空间，由 mlx-rs GPU 批量求交并着色输出 RGBA 帧。</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
@@ -124,7 +124,7 @@
       <rect x="444" y="212" width="144" height="48" rx="6" fill="#f5f5f5"/>
       <rect x="444" y="212" width="144" height="48" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
       <text x="516" y="238" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif" text-anchor="middle">GPU 批量求交</text>
-      <text x="516" y="254" fill="#eb6c36" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">mlx-v · N=H·W · float32</text>
+      <text x="516" y="254" fill="#eb6c36" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">mlx-rs · N=H·W · float32</text>
 
       <rect x="444" y="284" width="144" height="48" rx="6" fill="#f5f5f5"/>
       <rect x="444" y="284" width="144" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>

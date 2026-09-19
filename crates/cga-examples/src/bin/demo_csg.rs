@@ -115,7 +115,7 @@ fn main() {
     let mut renderer = renderer(480, 360, 2, 3);
     let img = renderer.render(sc, camera);
 
-    // V: os.dir(@FILE) — Rust 版以仓库根目录为 CWD 运行
+    // 以仓库根目录为 CWD 运行
     let out = "examples/csg";
 
     save_frame_png(&format!("{out}/demo_csg.png"), &img);

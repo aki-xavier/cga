@@ -1,16 +1,15 @@
 //! mlxops — thin scalar-broadcast helpers over `mlx_rs::Array`.
 //!
-//! Port of the `mlx_ops` V module's scalar helpers (`fs`, `arr3`, `arr3v`,
-//! `s_add`, …). They all operate in float32, matching the render-kernel dtype.
+//! Scalar helpers (`fs`, `arr3`, `arr3v`, `s_add`, …) all operate in float32,
+//! matching the render-kernel dtype.
 //!
-//! The V originals panic on MLX errors (`check_res`), so these wrappers
-//! `unwrap()` internally and return `Array` directly, keeping call sites
-//! identical in shape to the V code.
+//! These wrappers `unwrap()` internally and return `Array` directly, so MLX
+//! errors panic where they occur.
 
 use mlx_rs::ops;
 use mlx_rs::Array;
 
-/// Unwrap helper mirroring V's `check_res` (panic on error).
+/// Unwrap helper for MLX results (panics on error).
 pub fn ck(r: Result<Array, mlx_rs::error::Exception>) -> Array {
     r.unwrap()
 }

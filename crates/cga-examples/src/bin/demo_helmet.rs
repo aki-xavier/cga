@@ -7,7 +7,7 @@ use cga_core::*;
 use cga_gpu::*;
 
 fn main() {
-    // V: os.dir(@FILE) — Rust 版以仓库根目录为 CWD 运行
+    // 以仓库根目录为 CWD 运行
     let out = "examples/helmet";
     let loaded = load_gltf(&format!("{out}/DamagedHelmet.glb")).unwrap();
 

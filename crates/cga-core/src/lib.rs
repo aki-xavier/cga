@@ -1,7 +1,6 @@
-//! cga-core — 5D Conformal Geometric Algebra core (port of the V `cga` module).
+//! cga-core — 5D Conformal Geometric Algebra core.
 //!
-//! Pure f64 CPU. All submodules are re-exported flat at the crate root,
-//! mirroring the flat `module cga` namespace of the V original.
+//! Pure f64 CPU. All submodules are re-exported flat at the crate root.
 
 pub mod util;
 pub use util::*;

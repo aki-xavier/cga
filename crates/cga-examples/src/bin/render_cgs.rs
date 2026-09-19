@@ -9,7 +9,7 @@ fn main() {
         std::process::exit(1);
     }
     let src = &args[1];
-    // V: src.all_before_last('.') + '.png'（不含 '.' 时返回原串）
+    // 未指定输出名时，把最后一个 '.' 换成 .png（不含 '.' 时追加 .png）
     let out = if args.len() > 2 {
         args[2].clone()
     } else {
@@ -34,7 +34,7 @@ fn main() {
         2
     };
     let text = std::fs::read_to_string(src).unwrap_or_else(|_| panic!("cannot read {src}"));
-    // V: src.all_before_last('/')（不含 '/' 时返回原串）
+    // 资产根目录 = 源文件路径中最后一个 '/' 之前的部分
     let asset_root = match src.rfind('/') {
         Some(i) => &src[..i],
         None => src.as_str(),

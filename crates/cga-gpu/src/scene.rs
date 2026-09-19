@@ -38,8 +38,8 @@ pub fn mesh(p: MeshParams) -> Mesh {
     }
 }
 
-// V struct embedding: Mesh.Object3D is flattened, so obj.position /
-// obj.motor() resolve through to the embedded node.
+// Mesh flattens Object3D through Deref, so obj.position / obj.motor() resolve
+// through to the embedded node.
 impl std::ops::Deref for Mesh {
     type Target = Object3D;
 

@@ -1,4 +1,4 @@
-// highlight.v — CGS syntax highlighting (port of editor/src/highlight.rs).
+// CGS syntax highlighting.
 //
 // A small hand-written lexer that classifies each span into a semantic class.
 // CGS documents are tiny, so we re-scan the whole text on every edit.
@@ -226,7 +226,7 @@ pub fn brace_fold_ranges(text: &str) -> Vec<FoldRange> {
 mod tests {
     use super::*;
 
-    // highlight_test.v — tests for CGS syntax highlighting.
+    // Tests for CGS syntax highlighting.
 
     fn span_classes(text: &str) -> Vec<HighlightClass> {
         let mut out: Vec<HighlightClass> = Vec::new();

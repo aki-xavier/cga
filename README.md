@@ -1,8 +1,8 @@
 # cga — 共形几何代数 (Conformal Geometric Algebra) 实验场
 
 5D 共形几何代数核心 + three.js 风格渲染引擎 + MLX/Metal GPU 批量光线追踪。
-**本项目已整体移植到 Rust**，GPU 计算依赖 [`mlx-rs`](https://github.com/oxideai/mlx-rs)
-（Apple MLX 的 Rust 绑定，Metal 后端）；原 V 实现已移除。
+**本项目为纯 Rust 实现**，GPU 计算依赖 [`mlx-rs`](https://github.com/oxideai/mlx-rs)
+（Apple MLX 的 Rust 绑定，Metal 后端）。
 
 把欧氏 3D 空间嵌入共形空间（基 `{e1, e2, e3, e0, e∞}`），点 / 线 / 面 / 圆 /
 球与刚体运动 (motor) 统一为代数元素：场景里的每一个对象都是一个 CGA blade，
@@ -234,7 +234,7 @@ CGA 建模 + Motor + GPU 光线追踪 + 逆渲染回环：
 ```text
 Cargo.toml                 # workspace（4 个 crate）
 crates/
-  cga-core/                # 纯 f64 CPU 代数核心（原 V `cga` 模块）
+  cga-core/                # 纯 f64 CPU 代数核心
     src/multivector.rs     32 分量多重向量 (gp/ip/op/reverse/dual/meet/norm)
     src/tables.rs          GP 积表（由 gen_tables.py 从积表定义重新生成）
     gen_tables.py          积表生成器（一次性脚本，输出 tables.rs）
@@ -248,7 +248,7 @@ crates/
     src/modeling.rs        耳切三角化 + extrude + loft
     src/mesh_io.rs         OBJ 读写 + 4x4 矩阵助手
     src/gif.rs             动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
-  cga-gpu/                 # mlx-rs/Metal GPU 内核（原 V `cga_gpu` 模块）
+  cga-gpu/                 # mlx-rs/Metal GPU 内核
     src/mlxops.rs          标量广播助手（fs/s_add/s_clip/…，原 mlx_ops 模块）
     src/scene_graph.rs     Vec3/Color/Object3D
     src/scene.rs           Mesh/Scene/PerspectiveCamera/OrbitControls
@@ -289,7 +289,7 @@ docs/                      架构图 / 机器人应用图 (svg)
   编辑器 highlight（cga-core 39 + cga-gpu 82 + cga-editor 7）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
-- 渲染结果与原 V 实现逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/
+- 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/
   helmet/csg 金样 RMSE = 0）。
 
 ## License

@@ -1,5 +1,5 @@
 // Triangle-mesh primitive: brute-force Möller–Trumbore over all faces (no BVH),
-// with the affine ray-inverse transform (see affine.v).
+// with the affine ray-inverse transform (see affine_geom.rs).
 
 use cga_core::TrimeshParams;
 use mlx_rs::ops;

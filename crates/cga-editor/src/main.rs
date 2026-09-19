@@ -1,5 +1,4 @@
-// main.rs — CGS editor web server (port of editor/server.v, itself a port of
-// cga_py/scene_lang/render_server.py plus the gpui editor's preview backend).
+// main.rs — CGS editor web server (serves the editor UI + renders CGS to PNG).
 //
 // Serves the web editor at `/` and renders CGS text to PNG at `POST /render`.
 // A CGS parse error returns HTTP 400 with the message (the parser is
@@ -8,9 +7,8 @@
 //   cargo run -p cga-editor        (from the rust/ workspace root)
 //   open http://127.0.0.1:8123
 
-// The V server never calls the highlighter — syntax highlighting runs
-// client-side in web/index.html (whose JS mirrors editor/highlight.v).  Keep
-// the module compiled for parity with the editor crate.
+// Syntax highlighting runs client-side in web/index.html; the server never
+// calls this module, which is kept compiled and tested alongside it.
 #[allow(dead_code)]
 mod highlight;
 
@@ -20,8 +18,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 const PORT: u16 = 8123;
 
-// index.html is embedded so the binary is self-contained (the V server read
-// it from disk with os.dir(@FILE) + '/web/index.html').
+// index.html is embedded so the binary is self-contained.
 const INDEX_HTML: &str = include_str!("../web/index.html");
 
 // Pasted CGS has no source file, so asset paths (material.map / mesh) resolve
@@ -29,8 +26,8 @@ const INDEX_HTML: &str = include_str!("../web/index.html");
 // rust/crates/cga-editor -> repo root is three levels up.
 const ASSET_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/cgs");
 
-// Number of http worker threads answering requests (V's http.Server runs a
-// similar pool).  A slow render only blocks the worker that issued it.
+// Number of http worker threads answering requests.  A slow render only blocks
+// the worker that issued it.
 const HTTP_WORKERS: usize = 4;
 
 // RenderJob is one /render request handed to the render thread.
@@ -131,8 +128,8 @@ fn bytes_response(
 }
 
 // query_param reads an int query parameter with a default.  A present but
-// non-numeric value parses to 0 (V's `string.int()` behaviour), which the
-// render size check below then rejects with a 400.
+// non-numeric value parses to 0, which the render size check below then rejects
+// with a 400.
 fn query_param(query: &str, key: &str, def: i32) -> i32 {
     for pair in query.split('&') {
         let kv: Vec<&str> = pair.split('=').collect();
@@ -161,11 +158,10 @@ fn render_cgs(text: &str, w: i32, h: i32, aa: i32) -> Result<Vec<u8>, String> {
     let img = r.render(sc, cam);
     let png = cga_gpu::frame_to_png_bytes(&img);
     // A render leaves thousands of dead mlx arrays whose Metal buffers are only
-    // released when the Rust `Array` handles drop; Rust's RAII drops handle
-    // that (replacing V's explicit mlx.gc_collect()), but MLX's caching
-    // allocator then hoards the freed Metal buffers without reusing them (V
-    // measured the cache growing past 2GB over a handful of identical 8MB-
-    // active renders), so hand the cache back to the OS after each render.
+    // released when the Rust `Array` handles drop; RAII handles that, but MLX's
+    // caching allocator then hoards the freed Metal buffers without reusing
+    // them (the cache grows past 2GB over a handful of identical 8MB-active
+    // renders), so hand the cache back to the OS after each render.
     let _ = mlx_rs::memory::clear_cache();
     Ok(png)
 }
@@ -181,9 +177,8 @@ fn render_loop(jobs: Receiver<RenderJob>) {
     let stream = mlx_rs::Stream::gpu();
     mlx_rs::with_stream(&stream, || {
         while let Ok(job) = jobs.recv() {
-            // Rust port addition: a renderer panic in V killed the whole
-            // process; catch it here so one bad CGS turns into a 400 instead
-            // of a dead server.
+            // Catch a renderer panic here so one bad CGS turns into a 400
+            // instead of a dead server.
             let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 render_cgs(&job.text, job.w, job.h, job.aa)
             })) {

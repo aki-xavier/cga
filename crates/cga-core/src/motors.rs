@@ -86,8 +86,7 @@ pub fn mat3_new(r0: [f64; 3], r1: [f64; 3], r2: [f64; 3]) -> Mat3 {
     [r0, r1, r2]
 }
 
-// (pub(crate): shared with affine.rs — V kept this module-private in the flat
-// `module cga` namespace, where motors.v and affine.v could both see it.)
+// (pub(crate): shared between motors.rs and affine.rs.)
 pub(crate) fn mat3_mul(a: Mat3, b: Mat3) -> Mat3 {
     let mut r = [[0.0; 3]; 3];
     for i in 0..3 {

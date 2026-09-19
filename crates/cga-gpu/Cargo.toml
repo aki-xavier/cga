@@ -2,7 +2,7 @@
 name = "cga-gpu"
 version = "0.1.0"
 edition = "2021"
-description = "cga GPU batch kernels (mlx-rs/Metal ray tracing), port of the V `cga_gpu` module."
+description = "cga GPU batch kernels (mlx-rs/Metal ray tracing)."
 
 [dependencies]
 cga-core = { path = "../cga-core" }

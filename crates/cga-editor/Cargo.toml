@@ -2,7 +2,7 @@
 name = "cga-editor"
 version = "0.1.0"
 edition = "2021"
-description = "CGS web live-preview editor (port of the V `editor/` server)."
+description = "CGS web live-preview editor server."
 
 [dependencies]
 cga-core = { path = "../cga-core" }

@@ -1,5 +1,5 @@
 // Intersection kernels for the non-blade primitives (cone / torus / ellipsoid /
-// cyclide), which use the affine ray-inverse transform (see affine.v).
+// cyclide), which use the affine ray-inverse transform (see affine_geom.rs).
 
 use cga_core::{mat3_transpose, ConeParams, CyclideParams, EllipsoidParams, TorusParams};
 use mlx_rs::complex64;

@@ -5,7 +5,7 @@
 //   - Point / PointPair / Line are direct (join) form; incidence is p.op(X) = 0.
 //   - Plane / Sphere / Circle are dual form; incidence is p.ip(X) = 0.
 //
-// In V the primitives are plain `Multivector` values (a motor is also just a
+// The primitives are plain `Multivector` values (a motor is also just a
 // multivector), so all algebra (gp/ip/op/dual/meet) composes freely.
 
 use crate::{einf, mv_vector, Multivector};

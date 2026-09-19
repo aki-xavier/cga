@@ -1,5 +1,5 @@
 // Kinematics demo: gears + crank-slider + spiral trajectory driven by Motor.
-// Saves PNG frames and an animated GIF (assembled in V).
+// Saves PNG frames and an animated GIF.
 use cga_core::*;
 use cga_examples::{data_f32, mlx_frame_gc};
 use cga_gpu::*;
@@ -284,11 +284,10 @@ fn main() {
         let img = r.render(ks.scene.clone(), cam);
         gif_frames.push(f32_rgba_to_u8(&data_f32(&img)));
         drop(img);
-        // 每帧收尾：释放死 Metal buffer（Rust drop），再把 MLX 不复用的
-        // cache 还给 OS（见 editor/server.v；V 里是 gc_collect + clear_cache）
+        // 每帧收尾：drop 释放死 Metal buffer，再把 MLX 不复用的 cache 还给 OS
         mlx_frame_gc();
     }
-    // V: os.dir(@FILE) — Rust 版以仓库根目录为 CWD 运行
+    // 以仓库根目录为 CWD 运行
     let out = "examples/kinematics";
     save_gif(&format!("{out}/kinematics.gif"), &gif_frames, 360, 270, 5);
 }

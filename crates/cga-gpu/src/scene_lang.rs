@@ -270,8 +270,8 @@ impl PartialEq for CgsValue {
     }
 }
 
-// fmt_f64 mirrors V's `${f64}` interpolation style (integral values print with
-// a trailing ".0").
+// fmt_f64 formats a float the way the CGS language does: integral values print
+// with a trailing ".0".
 fn fmt_f64(x: f64) -> String {
     if x.is_finite() && x.fract() == 0.0 && x.abs() < 1e16 {
         format!("{x:.1}")
@@ -631,7 +631,7 @@ pub struct SceneLoader {
     camera: Option<PerspectiveCamera>,
     modules: HashMap<String, Vec<CgsToken>>,
     params: HashMap<String, Vec<CgsToken>>, // module formal parameters (name -> body tokens)
-    param_order: Vec<String>,               // params keys in insertion order (V maps are ordered)
+    param_order: Vec<String>,               // params keys in insertion order
     collect: Vec<CollectedGeom>,
     collecting: bool,
 }
@@ -1892,7 +1892,7 @@ impl SceneLoader {
     }
 }
 
-// csg_op_name mirrors V's `${CsgOp}` interpolation (the enum variant name).
+// csg_op_name returns the lowercase CGS name of a CSG op.
 fn csg_op_name(op: CsgOp) -> &'static str {
     match op {
         CsgOp::Union => "union",
@@ -2127,7 +2127,7 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
 mod tests {
     use super::*;
 
-    // port of gpu/scene_lang_test.v ------------------------------------------------
+    // scene language tests -----------------------------------------------------
 
     #[test]
     fn test_cgs_orbit() {
@@ -2192,7 +2192,6 @@ mod tests {
         assert!(data[idx + 2] < 200.0);
     }
 
-    // port of gpu/scene_lang_v2_test.v ---------------------------------------------
     // CGS v2: variables, expressions, math functions, for+range, module, if-else,
     // echo, union grouping (OpenSCAD-aligned semantics).
 
