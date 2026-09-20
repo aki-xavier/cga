@@ -280,6 +280,10 @@ docs/                      架构图 / 机器人应用图 (svg)
 - `demo_gltf` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `demo_helmet` —— DamagedHelmet.glb 加载渲染 → `examples/helmet/demo_helmet.png`
 - `render_cgs <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
+- `stereo_pair [seed] [out_dir] [w h] [baseline]` —— 随机三维场景的**双目渲染**：两个朝向完全相同、
+  只沿 x 差一个基线的相机，产出一对严格校正的左右图（`left.png` / `right.png`）与几何真值
+  （`truth.txt`：焦距、基线、每物件的深度与视差）。供 r3d 的 `stereo` / `depth` 直接读取；
+  相机空间约定与 r3d 的 `Depth` 对齐（左图在前、经校正视差只在 x 上）
 
 ## 质量
 
