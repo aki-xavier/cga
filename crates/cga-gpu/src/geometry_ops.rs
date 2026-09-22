@@ -107,8 +107,10 @@ pub fn plane_shadow(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array) {
     (t, mask)
 }
 
-pub fn plane_uv(_p: PlaneParams, pos: &Array, _n: &Array) -> Array {
-    ck(ops::stack(&[&col(pos, 0), &col(pos, 2)], -1))
+pub fn plane_uv(p: PlaneParams, pos: &Array, _n: &Array) -> Array {
+    let foot = arr3v([p.n[0] * p.d, p.n[1] * p.d, p.n[2] * p.d]);
+    let q = ck(pos.subtract(&foot));
+    ck(ops::stack(&[&col(&q, 0), &col(&q, 2)], -1))
 }
 
 fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array, Array) {
