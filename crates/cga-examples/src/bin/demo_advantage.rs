@@ -1,5 +1,3 @@
-// Advantage demo: three panels (no-polygons / infinite geometry / transform
-// isomorphism).  Saves advantage_{a,b,c}.png.
 use cga_core::*;
 use cga_gpu::*;
 
@@ -16,7 +14,7 @@ fn render_panel(sc: Scene, cam_pos: [f64; 3], target: [f64; 3], name: &str) {
     cam.look_at(target, None);
     let mut r = renderer(400, 300, 2, 3);
     let img = r.render(sc, cam);
-    // 以仓库根目录为 CWD 运行
+
     let out_dir = "examples/advantage";
     let _ = std::fs::create_dir_all(out_dir);
     save_frame_png(&format!("{out_dir}/{name}.png"), &img);

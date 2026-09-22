@@ -1,5 +1,3 @@
-// Orbit demo: three.js-style scene + orbit animation -> animated GIF
-// (examples/engine/orbit.gif).  Run: cargo run -p cga-examples --bin demo_engine -- [frames]
 use cga_core::*;
 use cga_examples::{data_f32, mlx_frame_gc};
 use cga_gpu::*;
@@ -7,7 +5,7 @@ use std::f64::consts::PI;
 
 fn build_scene() -> Scene {
     let mut sc = scene(None);
-    // ground plane
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
         material: standard_material(MaterialParams {
@@ -24,7 +22,7 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // red sphere
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::SphereGeometry(sphere_geometry(1.0)),
         material: standard_material(MaterialParams {
@@ -41,7 +39,7 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // blue sphere
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::SphereGeometry(sphere_geometry(0.6)),
         material: standard_material(MaterialParams {
@@ -58,7 +56,7 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // gold cylinder (infinite)
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::CylinderGeometry(cylinder_geometry(0.7, -1.0)),
         material: standard_material(MaterialParams {
@@ -75,7 +73,7 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // green box
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::BoxGeometry(box_geometry(0.9, 0.9, 0.9)),
         material: standard_material(MaterialParams {
@@ -92,7 +90,7 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // purple disc (tilted)
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::CircleGeometry(circle_geometry(0.9)),
         material: standard_material(MaterialParams {
@@ -109,7 +107,7 @@ fn build_scene() -> Scene {
         rotation_angle: -0.4,
         motor: None,
     }));
-    // refractive glass sphere
+
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::SphereGeometry(sphere_geometry(0.8)),
         material: standard_material(MaterialParams {
@@ -148,7 +146,7 @@ fn main() {
     } else {
         90
     };
-    // 以仓库根目录为 CWD 运行
+
     let out_dir = "examples/engine";
 
     let sc = build_scene();
@@ -174,7 +172,7 @@ fn main() {
         let img = r.render(sc.clone(), camera);
         gif_frames.push(f32_rgba_to_u8(&data_f32(&img)));
         drop(img);
-        // 每帧收尾：drop 释放死 Metal buffer，再把 MLX 不复用的 cache 还给 OS
+
         mlx_frame_gc();
         println!("frame {}/{} rendered", i + 1, frames);
     }

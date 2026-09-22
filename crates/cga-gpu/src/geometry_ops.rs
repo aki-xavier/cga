@@ -1,7 +1,3 @@
-// Per-pixel ray-intersection kernels (MLX batch, float32).  Each geometry
-// provides intersect / intersect_shadow / uv_at / bounds_camera over the
-// camera-space parameters computed in cga-core's geometry.rs.
-
 use cga_core::{
     AffineParams, BoxParams, CircleParams, CylinderParams, GeometryParams, PlaneParams,
     SphereParams,
@@ -11,13 +7,10 @@ use mlx_rs::Array;
 
 use crate::mlxops::*;
 
-// col extracts column i of a (...,N) array as a (...,) array (last-axis index).
 #[inline]
 pub(crate) fn col(a: &Array, i: i32) -> Array {
     ck(a.take_axis(Array::from_slice(&[i], &[]), -1))
 }
-
-// --- sphere -----------------------------------------------------------------
 
 pub fn sphere_intersect(p: SphereParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let c = arr3v(p.c);
@@ -92,8 +85,6 @@ pub fn sphere_uv(p: SphereParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-// --- plane ------------------------------------------------------------------
-
 pub fn plane_intersect(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let n = arr3v(p.n);
     let denom = ck(ck(n.multiply(d)).sum_axes(&[-1], false));
@@ -119,8 +110,6 @@ pub fn plane_shadow(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array) {
 pub fn plane_uv(_p: PlaneParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&col(pos, 0), &col(pos, 2)], -1))
 }
-
-// --- cylinder ---------------------------------------------------------------
 
 fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array, Array) {
     let q = arr3v(p.q);
@@ -324,8 +313,6 @@ pub fn cylinder_uv(p: CylinderParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-// --- box --------------------------------------------------------------------
-
 pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let c = arr3v(p.c);
     let oc = ck(o.subtract(&c));
@@ -366,8 +353,7 @@ pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array
         &t_exit,
     ));
     let eye = ck(ops::eye::<f32>(3, Some(3), Some(0)));
-    // entry-face normal opposes the ray; exit-face normal points along it
-    // (same convention as box_crossings in csg.rs)
+
     let n_e = ck(
         ck(eye.take_axis(&i_entry, 0)).multiply(ck(ck(ck(ops::sign(ck(ck(
             dp.take_along_axis(ck(i_entry.expand_dims(1)), -1)
@@ -384,7 +370,7 @@ pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array
         .expand_dims(1))),
     );
     let mut n = ck(ops::select(ck(inside_hit.expand_dims(1)), &n_x, &n_e));
-    // rotate from the box's local axis frame to camera space
+
     n = crate::vecmat(&n, p.axes);
     n = ck(ops::select(
         ck(valid.expand_dims(1)),
@@ -478,8 +464,6 @@ pub fn box_uv(p: BoxParams, pos: &Array, _n: &Array) -> Array {
     ))
 }
 
-// --- circle -----------------------------------------------------------------
-
 pub fn circle_intersect(p: CircleParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let c = arr3v(p.c);
     let n = arr3v(p.n);
@@ -527,8 +511,6 @@ pub fn circle_uv(p: CircleParams, pos: &Array, _n: &Array) -> Array {
         -1,
     ))
 }
-
-// --- dispatch ---------------------------------------------------------------
 
 pub fn geom_intersect(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     match p {
@@ -581,7 +563,6 @@ pub fn geom_uv(p: &GeometryParams, pos: &Array, n: &Array) -> Array {
     }
 }
 
-// geom_bounds returns the camera-space AABB (lo, hi), or none if unbounded.
 pub fn geom_bounds(p: &GeometryParams) -> Option<[[f64; 3]; 2]> {
     match p {
         GeometryParams::SphereParams(p) => Some([lo(&p.c, p.r), hi(&p.c, p.r)]),

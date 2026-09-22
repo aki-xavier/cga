@@ -1,11 +1,3 @@
-// CGS (CGA Scene) language: lexer + single-pass parser/evaluator producing an
-// engine Scene + PerspectiveCamera.  Port of cga_py/scene_lang.
-//
-// Supports translate/rotate/scale/mirror modifiers, for/if/echo/module,
-// variables/expressions/math functions, all primitives, lights, camera,
-// background, CSG (difference/intersection/union), and
-// extrude/loft/mesh(.obj/.glb/.gltf).
-
 use std::collections::HashMap;
 use std::fmt;
 
@@ -25,7 +17,6 @@ use crate::shading::{
 };
 use crate::texture::texture_load;
 
-// TokenKind classifies a lexed token.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TokenKind {
     Ident,
@@ -66,7 +57,6 @@ impl fmt::Display for TokenKind {
     }
 }
 
-// punct_kind maps a single-character punctuation byte to its token kind.
 fn punct_kind(ch: u8) -> TokenKind {
     match ch {
         b'(' => TokenKind::Lparen,
@@ -82,7 +72,6 @@ fn punct_kind(ch: u8) -> TokenKind {
     }
 }
 
-// CgsToken is one lexed token.
 #[derive(Clone, Debug)]
 pub struct CgsToken {
     pub kind: TokenKind,
@@ -103,7 +92,6 @@ fn is_hex_digit(ch: u8) -> bool {
     ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch) || (b'A'..=b'F').contains(&ch)
 }
 
-// lex tokenises CGS source text.
 pub fn cgs_lex(text: &str) -> Result<Vec<CgsToken>, String> {
     let b = text.as_bytes();
     let mut toks: Vec<CgsToken> = Vec::new();
@@ -237,7 +225,6 @@ pub fn cgs_lex(text: &str) -> Result<Vec<CgsToken>, String> {
     Ok(toks)
 }
 
-// CgsVec3 is a 3-vector value in the CGS language (a `[x,y,z]` literal).
 #[derive(Clone, Copy, Debug)]
 pub struct CgsVec3 {
     pub x: f64,
@@ -245,9 +232,6 @@ pub struct CgsVec3 {
     pub z: f64,
 }
 
-// CgsValue is the dynamic value of the language (number / bool / string / list /
-// 3-vector).  A `[x,y,z]` literal with three numeric elements is a CgsVec3;
-// ranges and other lists stay `Vec<CgsValue>`.
 #[derive(Clone, Debug)]
 pub enum CgsValue {
     Num(f64),
@@ -270,8 +254,6 @@ impl PartialEq for CgsValue {
     }
 }
 
-// fmt_f64 formats a float the way the CGS language does: integral values print
-// with a trailing ".0".
 fn fmt_f64(x: f64) -> String {
     if x.is_finite() && x.fract() == 0.0 && x.abs() < 1e16 {
         format!("{x:.1}")
@@ -403,8 +385,6 @@ fn cgs_neg(v: &CgsValue, line: i32) -> Result<CgsValue, String> {
     }
 }
 
-// cgs_as_list normalises a 3-vector to a 3-element numeric list, so vector and
-// list arithmetic share one elementwise path.
 fn cgs_as_list(v: CgsValue) -> CgsValue {
     match v {
         CgsValue::Vec3(v3) => CgsValue::List(vec![
@@ -416,7 +396,6 @@ fn cgs_as_list(v: CgsValue) -> CgsValue {
     }
 }
 
-// BinOp is a binary operator in a CGS expression.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BinOp {
     Or,
@@ -434,7 +413,6 @@ enum BinOp {
     Mod,
 }
 
-// cgs_binop_from_text maps an operator token's text to a BinOp.
 fn cgs_binop_from_text(text: &str) -> Option<BinOp> {
     match text {
         "||" => Some(BinOp::Or),
@@ -499,7 +477,7 @@ fn cgs_binop(op: BinOp, a: CgsValue, b: CgsValue) -> Result<CgsValue, String> {
             _ => aa >= bb,
         }));
     }
-    // arithmetic: scalar or elementwise vector (scalar broadcast)
+
     let al = cgs_as_list(a);
     let bl = cgs_as_list(b);
     match al {
@@ -577,7 +555,7 @@ fn cgs_call_fn(name: &str, args: &[CgsValue], line: i32) -> Result<CgsValue, Str
             CgsValue::Num(a[0] * b[1] - a[1] * b[0]),
         ]));
     }
-    // unary math functions
+
     if args.len() == 1 {
         let x = cgs_num(&args[0], line, name)?;
         let v = match name {
@@ -622,7 +600,6 @@ fn cgs_call_fn(name: &str, args: &[CgsValue], line: i32) -> Result<CgsValue, Str
     Err(format!("CGS line {line}: {name} wrong arity"))
 }
 
-// SceneLoader parses CGS text.
 pub struct SceneLoader {
     toks: Vec<CgsToken>,
     pos: usize,
@@ -630,8 +607,8 @@ pub struct SceneLoader {
     scene: Scene,
     camera: Option<PerspectiveCamera>,
     modules: HashMap<String, Vec<CgsToken>>,
-    params: HashMap<String, Vec<CgsToken>>, // module formal parameters (name -> body tokens)
-    param_order: Vec<String>,               // params keys in insertion order
+    params: HashMap<String, Vec<CgsToken>>,
+    param_order: Vec<String>,
     collect: Vec<CollectedGeom>,
     collecting: bool,
 }
@@ -641,7 +618,6 @@ struct CollectedGeom {
     m4: [f64; 16],
 }
 
-// cgs_load parses CGS text into (Scene, PerspectiveCamera), panicking on error.
 pub fn cgs_load(text: &str, asset_root: &str) -> (Scene, PerspectiveCamera) {
     match cgs_load_result(text, asset_root) {
         Ok(r) => r,
@@ -649,8 +625,6 @@ pub fn cgs_load(text: &str, asset_root: &str) -> (Scene, PerspectiveCamera) {
     }
 }
 
-// cgs_load_result parses CGS text, returning the first error instead of
-// panicking (so callers such as the render server can report it cleanly).
 pub fn cgs_load_result(text: &str, asset_root: &str) -> Result<(Scene, PerspectiveCamera), String> {
     let toks = cgs_lex(text)?;
     let mut l = SceneLoader {
@@ -747,8 +721,6 @@ impl SceneLoader {
         self.pos = saved_pos;
         Ok(())
     }
-
-    // --- expression parser (precedence climbing) --------------------------------
 
     fn expr(
         &mut self,
@@ -887,7 +859,7 @@ impl SceneLoader {
             items.push(self.expr(scope, 1)?);
         }
         self.expect(TokenKind::Rbracket)?;
-        // A 3-element numeric literal is a vector (CgsVec3); anything else is a list.
+
         if items.len() == 3 {
             if let (CgsValue::Num(x), CgsValue::Num(y), CgsValue::Num(z)) =
                 (&items[0], &items[1], &items[2])
@@ -901,8 +873,6 @@ impl SceneLoader {
         }
         Ok(CgsValue::List(items))
     }
-
-    // --- statements -------------------------------------------------------------
 
     fn statement(
         &mut self,
@@ -1074,8 +1044,7 @@ impl SceneLoader {
                 t.line,
                 "camera.target",
             )?;
-            // perspective_camera panics on bad fov; the editor server has no panic
-            // recovery, so validate here
+
             if fov <= 0.0 || fov >= 180.0 {
                 return Err(format!(
                     "CGS line {}: camera.fov must be in (0, 180), got {}",
@@ -1132,7 +1101,7 @@ impl SceneLoader {
         mat: &HashMap<String, CgsValue>,
         scope: &mut HashMap<String, CgsValue>,
     ) -> Result<(), String> {
-        self.take(); // for
+        self.take();
         self.expect(TokenKind::Lparen)?;
         let vt = self.take();
         if vt.kind != TokenKind::Ident || self.peek().kind != TokenKind::Assign {
@@ -1167,7 +1136,7 @@ impl SceneLoader {
         mat: &HashMap<String, CgsValue>,
         scope: &mut HashMap<String, CgsValue>,
     ) -> Result<(), String> {
-        self.take(); // if
+        self.take();
         self.expect(TokenKind::Lparen)?;
         let cond = cgs_truthy(&self.expr(scope, 1)?);
         self.expect(TokenKind::Rparen)?;
@@ -1188,7 +1157,7 @@ impl SceneLoader {
     }
 
     fn echo_stmt(&mut self, scope: &HashMap<String, CgsValue>) -> Result<(), String> {
-        self.take(); // echo
+        self.take();
         self.expect(TokenKind::Lparen)?;
         let mut vals: Vec<CgsValue> = Vec::new();
         if self.peek().kind != TokenKind::Rparen {
@@ -1212,7 +1181,7 @@ impl SceneLoader {
     }
 
     fn module_def(&mut self) -> Result<(), String> {
-        self.take(); // module
+        self.take();
         let nt = self.take();
         if nt.kind != TokenKind::Ident {
             return Err(format!("CGS line {}: module missing name", nt.line));
@@ -1276,14 +1245,14 @@ impl SceneLoader {
         line: i32,
     ) -> Result<(), String> {
         self.expect(TokenKind::Semi)?;
-        // formal parameter names are tracked separately; simplified: only positional + keyword by name
+
         let body = match self.modules.get(name) {
             Some(b) => b.clone(),
             None => Vec::new(),
         };
         let mut scope: HashMap<String, CgsValue> = HashMap::new();
         scope.insert("pi".to_string(), CgsValue::Num(std::f64::consts::PI));
-        // find formal parameter names (stored as keys "name:param")
+
         let mut names: Vec<String> = Vec::new();
         let prefix = format!("{name}:");
         for k in &self.param_order {
@@ -1442,8 +1411,6 @@ impl SceneLoader {
         }
     }
 
-    // --- construction -----------------------------------------------------------
-
     fn call_args(
         &mut self,
         scope: &HashMap<String, CgsValue>,
@@ -1503,7 +1470,6 @@ impl SceneLoader {
         for pname in &names {
             if let Some(CgsValue::Num(x)) = merged.get(*pname) {
                 if x.is_nan() && *pname == "cylinder.h" {
-                    // h may be None -> use -1 sentinel
                     merged.insert(pname.to_string(), CgsValue::Num(-1.0));
                 }
             }
@@ -1892,7 +1858,6 @@ impl SceneLoader {
     }
 }
 
-// csg_op_name returns the lowercase CGS name of a CSG op.
 fn csg_op_name(op: CsgOp) -> &'static str {
     match op {
         CsgOp::Union => "union",
@@ -1901,8 +1866,6 @@ fn csg_op_name(op: CsgOp) -> &'static str {
     }
 }
 
-// cgs_arg_num reads a numeric arg with a 0.0 fallback (validation only;
-// build_geometry re-reads with proper errors).
 fn cgs_arg_num(args: &HashMap<String, CgsValue>, key: &str) -> f64 {
     cgs_num(
         &args.get(key).cloned().unwrap_or(CgsValue::Num(0.0)),
@@ -1912,10 +1875,6 @@ fn cgs_arg_num(args: &HashMap<String, CgsValue>, key: &str) -> f64 {
     .unwrap_or(0.0)
 }
 
-// validate_geometry_params turns constructor panics into clean CGS errors:
-// the geometry constructors panic on bad parameters (sphere r <= 0, plane
-// zero normal, loft unsorted zs, ...) and the editor server has no panic
-// recovery, so common user mistakes must error out here.
 fn validate_geometry_params(
     name: &str,
     args: &HashMap<String, CgsValue>,
@@ -1969,7 +1928,6 @@ fn validate_geometry_params(
             }
         }
         "loft" => {
-            // loft() panics on mismatched profile sizes or unsorted zs
             if let Some(CgsValue::List(raw)) = args.get("profiles") {
                 let mut m: i64 = -1;
                 for p in raw {
@@ -2031,8 +1989,7 @@ fn profile2d(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 2]>, Strin
                     }
                 }
             }
-            // triangulate/extrude panic on bad profiles; the server has no
-            // panic recovery, so validate here
+
             validate_profile(&pts).map_err(|e| format!("CGS line {line}: {e}"))?;
             Ok(pts)
         }
@@ -2127,8 +2084,6 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
 mod tests {
     use super::*;
 
-    // scene language tests -----------------------------------------------------
-
     #[test]
     fn test_cgs_orbit() {
         let text = std::fs::read_to_string(concat!(
@@ -2188,12 +2143,9 @@ mod tests {
         img.eval().unwrap();
         let data = img.as_slice::<f32>();
         let idx = 45 * 120 * 4 + 60 * 4;
-        // centre is not the sky-blue background
+
         assert!(data[idx + 2] < 200.0);
     }
-
-    // CGS v2: variables, expressions, math functions, for+range, module, if-else,
-    // echo, union grouping (OpenSCAD-aligned semantics).
 
     fn sl_sphere_radius(g: &Geometry) -> f64 {
         match g {
@@ -2248,7 +2200,7 @@ mod tests {
              for (j = [0:0.5:1]) translate([0, j, 0]) sphere(r=0.1);",
             "",
         );
-        assert_eq!(sc.objects.len(), 6); // [0:2] -> 3 + [0:0.5:1] -> 3
+        assert_eq!(sc.objects.len(), 6);
         assert!(sc.objects[0].position[0].abs() < 1e-9);
         assert!((sc.objects[1].position[0] - 1.0).abs() < 1e-9);
         assert!((sc.objects[2].position[0] - 2.0).abs() < 1e-9);
@@ -2297,7 +2249,6 @@ mod tests {
 
     #[test]
     fn test_cgs_echo() {
-        // echo runs without error and emits "ECHO: 3.0 [2.0, 4.0]"
         let (sc, _) = cgs_load("x = 1 + 2;\necho(x, [1, 2] * 2);", "");
         assert_eq!(sc.objects.len(), 0);
     }
@@ -2313,7 +2264,6 @@ mod tests {
 
     #[test]
     fn test_cgs_load_result_errors() {
-        // cgs_load_result returns an error instead of panicking.
         let mut saw_err = false;
         if let Err(e) = cgs_load_result("sphere(r=nope);", "") {
             assert!(e.contains("undefined variable"));
@@ -2335,7 +2285,6 @@ mod tests {
         }
         assert!(saw_err3);
 
-        // constructor-panic inputs must come back as clean errors (no panic)
         let bad = [
             "sphere(r=-1);|sphere.r must be > 0",
             "sphere();|sphere.r must be > 0",
@@ -2360,7 +2309,6 @@ mod tests {
             assert!(saw, "expected error for {:?}", parts[0]);
         }
 
-        // valid input still parses
         let (sc, _) = cgs_load_result("sphere(r=1);", "").expect("unexpected error");
         assert_eq!(sc.objects.len(), 1);
     }

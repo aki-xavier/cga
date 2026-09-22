@@ -1,55 +1,23 @@
-// stereo_pair.rs — 随机三维场景 + 双相机双目渲染，产出 r3d 可直接读的一对图。
-//
-// 为什么这样摆相机：r3d 把一对图当作**已校正**的左右目，左图在前、右图在后
-// （`r3d-pathways/src/depth/distance.rs` 的头注释）。所以两只相机必须**朝向完全相同**，
-// 只沿相机 x 轴平移一个基线 —— 做法是让两个相机的 target 各自正下方一点，
-// 于是 f = (0,0,−1) 对两者都精确成立，r = cross(f, up) = +x，得到一对严格校正的图。
-// 此时近处结构在左图中投影在更大的 x 上，位移为负，正是 r3d 的 `Depth` 读的符号。
-//
-// 相机空间约定（cga renderer）：X 右 / Y 下 / Z 前；`fov` 是**垂直**视场，
-// fx = fy · aspect，主点在 ((w−1)/2, (h−1)/2)。要给 r3d 一个单一焦距，aspect 必须等于
-// w/h，于是 focal_px = h / (2·tan(fov/2))。
-//
-// 输出 <out_dir>/left.png · <out_dir>/right.png · <out_dir>/truth.txt，并打印可直接粘贴的
-// r3d 命令行。渲染输出是 sRGB 编码的 8 位 RGBA（renderer.rs 出口做 sRGB encode），
-// 正是 `RgbImage::load` 期望的输入。
-//
-// 用法：cargo run --release -p cga-examples --bin stereo_pair -- [seed] [out_dir] [w] [h] [baseline]
-
 use cga_core::*;
 use cga_gpu::*;
 use std::fs;
 
-/// FOV 是所有帧共用的垂直视场角，度。
 const FOV: f64 = 50.0;
 
-/// CAM_Y 与 CAM_Z 是两个相机共同的高度与离原点的距离：都看 −z，只差 x 上的半个基线。
-///
-/// CAM_Y 取 2.5 而不是贴地的高度：画面**底边**落在地面上的深度是 CAM_Y / tan(fov/2)，
-/// 也就是 5.36，视差 9.6 像素——这样整幅地面都落在 `--search 10` 之内，
-/// 不留一条"太近而读不出"的边。抬相机不会破坏校正（两相机仍只差 x）。
+// 为什么: 取 2.5 而不是贴地——画面底边深度 ≈ CAM_Y / tan(fov/2) ≈ 5.36，对应视差 9.6 px，整幅地面都落在 `--search 10` 内，不留"太近读不出"的边；抬相机不影响 x 方向基线校正（两相机仍只差 x）。
 const CAM_Y: f64 = 2.5;
 const CAM_Z: f64 = 6.0;
 
-/// NEAR and FAR bound the depth a random object is placed at, in the camera's own Z: the disparity
-/// `focal·baseline/Z` then runs about 9.4 down to 4.5 pixels at a baseline of a tenth of a unit, which
-/// stands above the band's finest wavelength (3 px) and inside half of its coarsest (24 px).
+// 为什么: NEAR/FAR 让 disparity = focal·baseline/Z 落在 9.4~4.5 px，避开带通最细波长 3 px 与最粗半波长 24 px，确保条纹带内不会出现带外读数。
 const NEAR: f64 = 5.5;
 const FAR: f64 = 11.5;
 
-/// ROOM_X, ROOM_Y and BACK_Z state the room the scene is drawn in.  BACK_Z matters beyond the look of
-/// it: the back wall is the farthest surface the pair has, so it — not the farthest object — is the
-/// bound a run's `--furthest` must state, or the wall's own distance is clamped away.
 const ROOM_X: f64 = 6.0;
 const ROOM_Y: f64 = 5.0;
+// 为什么: 背墙是双目对里最远的表面，`--furthest` 必须以背墙距离（而非最远物体）声明，否则墙本身的距离会被 clamp 掉，立体匹配就会得到错误的视差。
 const BACK_Z: f64 = -6.0;
 
-/// OBJECTS 是随机场景里物件的数量。
 const OBJECTS: usize = 14;
-
-// --- 随机数 ------------------------------------------------------------------
-//
-// splitmix64：无外部依赖，同一种子在任何机器上给出同一个场景，这是"可复现"的全部要求。
 
 struct Rng {
     s: u64,
@@ -68,7 +36,6 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// unit is a uniform draw in [0, 1).
     fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / 9_007_199_254_740_992.0
     }
@@ -81,13 +48,6 @@ impl Rng {
         self.next_u64() % n
     }
 }
-
-// --- 程序化纹理 --------------------------------------------------------------
-//
-// 多倍频块状噪声：2、4、8、16 格每世界单位的随机块图案按半幅权重相加。
-// 单一频率的棋盘只能和自己混叠，掠射角上立刻出摩尔纹，而且约十像素的周期正好和视差同量级，
-// 相位读出会绕卷；一个带通滤波器组要的是**多个尺度上的边**。语料为同一个理由画的是
-// 方波的倍频叠加（`ROADMAP.md` 步骤 23）。
 
 fn block_texture(size: i32, base_cells: i32, octaves: i32, rng: &mut Rng) -> Texture {
     let n = size as usize;
@@ -114,7 +74,6 @@ fn block_texture(size: i32, base_cells: i32, octaves: i32, rng: &mut Rng) -> Tex
     }
     let mut rgba = vec![0u8; n * n * 4];
     for i in 0..n * n {
-        // 压到 0.12 .. 0.88：留开纯黑纯白，掠射角上不留过硬的黑白跳变
         let v = 0.12 + 0.76 * (field[i] / total).clamp(0.0, 1.0);
         let s = (v * 255.0 + 0.5) as u8;
         rgba[i * 4] = s;
@@ -124,8 +83,6 @@ fn block_texture(size: i32, base_cells: i32, octaves: i32, rng: &mut Rng) -> Tex
     }
     texture_from_u8_rgba(&rgba, size, size)
 }
-
-// --- 材质与场景 --------------------------------------------------------------
 
 fn mat(color: i32, roughness: f64, map: Option<Texture>) -> Material {
     let mut m = standard_material(MaterialParams {
@@ -141,8 +98,6 @@ fn mat(color: i32, roughness: f64, map: Option<Texture>) -> Material {
     m
 }
 
-/// Placement is one object the scene was drawn with: what it is, where it stands and how big it is —
-/// the world's own statement beside the picture, so a read can be checked against it.
 struct Placement {
     kind: &'static str,
     at: [f64; 3],
@@ -152,9 +107,6 @@ struct Placement {
 fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
     let mut sc = scene(None);
 
-    // 房间：地面 + 天花板 + 后墙 + 两片侧墙，把画面填满结构。
-    // 只有地面的话，天空与掠射角上的远地面都读不出位移，整幅距离场会被钳到最远，
-    // 拿到的一对图就只在几个物件上可用；房间把每个方向都换成一段可读的深度。
     let room = [
         ("floor", [0.0, 1.0, 0.0], 0.0),
         ("ceiling", [0.0, -1.0, 0.0], -ROOM_Y),
@@ -163,7 +115,6 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
         ("right wall", [-1.0, 0.0, 0.0], -ROOM_X),
     ];
     for (i, (_, normal, distance)) in room.iter().enumerate() {
-        // 天花板拿不到上面的直射光，给亮一点的自发色；其余用中灰
         let color = if i == 1 { 0xBFC5CC } else { 0x9AA0A6 };
         sc.add_mesh(mesh(MeshParams {
             geometry: Geometry::PlaneGeometry(plane_geometry(*normal, *distance)),
@@ -181,17 +132,14 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
     ];
     let mut placed = Vec::new();
     for _ in 0..OBJECTS {
-        // 深度 Z ∈ [NEAR, FAR]：视差 = focal·baseline/Z，取 baseline 0.1 时约 9.4 .. 4.5 像素，
-        // 落在 3 px 最细尺度之上、24 px 最粗尺度的半波长之内 —— 读数不绕卷的那个区间。
         let depth = rng.range(NEAR, FAR);
         let z = CAM_Z - depth;
-        // 横向随深度收窄：水平半视场 = Z·tan(hfov/2) = 0.622·Z，取它的一半留出边界余量
+
         let x = rng.range(-0.5, 0.5) * 0.62 * depth;
         let size = rng.range(0.20, 0.45);
         let color = palette[rng.below(palette.len() as u64) as usize];
         let map = Some(block_texture(256, 2, 4, rng));
 
-        // 三种实体：球 / 盒 / 柱。三类都落在地面上，都带随机偏航，柱另转成竖直。
         let (kind, geometry, y, axis, angle) = match rng.below(3) {
             0 => (
                 "sphere",
@@ -233,7 +181,6 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
         placed.push(Placement { kind, at, size });
     }
 
-    // 光照：环境 + 一盏方向光 + 一盏点光。方向光的 y 分量为正表示光从上方来。
     sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.45));
     sc.add_light(directional_light(
         color_hex(0xFFF6E8),
@@ -248,8 +195,6 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
 
     (sc, placed)
 }
-
-// --- 入口 -------------------------------------------------------------------
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -269,14 +214,10 @@ fn main() {
     let mut rng = Rng::new(seed);
     let (sc, placed) = build_scene(&mut rng);
 
-    // aspect = w / h 而非 fov 推出的横纵比：只有这样 fx 才等于 fy，
-    // r3d 的 Calibration 才有一个单一焦距可用。
     let aspect = f64::from(w) / f64::from(h);
     let focal_px = f64::from(h) / (2.0 * (FOV.to_radians() / 2.0).tan());
     let half = baseline / 2.0;
 
-    // 两个相机朝向完全相同：target 都在各自正下方一点，于是 f 与 r 逐分量相同，
-    // 两者只差 x 上的半个基线 —— 严格校正的一对。
     let mut cam_left = perspective_camera(
         FOV,
         aspect,
@@ -307,15 +248,16 @@ fn main() {
     let right_path = format!("{out_dir}/right.png");
     save_frame_png(&right_path, &right);
 
-    // 真值：场景自己的声明。深度是相机系下的 Z = CAM_Z − z。
     let mut depths: Vec<f64> = placed.iter().map(|p| CAM_Z - p.at[2]).collect();
     depths.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let (near, far) = (depths[0], depths[depths.len() - 1]);
-    // 房间后墙比任何物件都远，它才是这一对图最远的那个面
+
     let furthest = far.max(CAM_Z - BACK_Z);
 
     let mut truth = String::new();
-    truth.push_str(&format!("# seed {seed} · frame {w}x{h} · fov {FOV}° (vertical)\n"));
+    truth.push_str(&format!(
+        "# seed {seed} · frame {w}x{h} · fov {FOV}° (vertical)\n"
+    ));
     truth.push_str(&format!(
         "# focal_px {focal_px:.4} · baseline {baseline:.6} · camera y {CAM_Y} z {CAM_Z} · aspect {aspect:.6}\n"
     ));
@@ -335,11 +277,10 @@ fn main() {
     }
     fs::write(format!("{out_dir}/truth.txt"), &truth).unwrap();
 
-    // 像素每度：中心处的局部尺度 f·tan(1°)，fovea 的落点用的就是它。
     let px_per_deg = focal_px * 1.0f64.to_radians().tan();
     let d_near = focal_px * baseline / near;
     let d_far = focal_px * baseline / far;
-    // 画面底边落在地面上的那条带是最近的深度，搜索范围要把它一起盖住，否则近处地面读不出位移
+
     let floor_depth = CAM_Y / (FOV.to_radians() / 2.0).tan();
     let d_floor = focal_px * baseline / floor_depth;
     let search = d_near.max(d_floor).ceil().max(1.0);

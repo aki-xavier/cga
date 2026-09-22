@@ -1,10 +1,7 @@
-// Mesh, Scene, PerspectiveCamera and OrbitControls (three.js-style surface).
-
 use crate::scene_graph::{color_hex, identity3, object3d, vec3_dot, vec3_unit, Color, Object3D};
 use crate::shading::{Light, Material};
 use cga_core::{motor_from_matrix, motor_identity, vec3_cross, Geometry, Multivector};
 
-// Mesh binds a geometry, a material and a local pose (Object3D).
 #[derive(Clone, Debug)]
 pub struct Mesh {
     pub base: Object3D,
@@ -12,8 +9,6 @@ pub struct Mesh {
     pub material: Material,
 }
 
-// MeshParams configures a Mesh (position/rotation_axis/rotation_angle define
-// the pose; motor overrides them if given).
 pub struct MeshParams {
     pub geometry: Geometry,
     pub material: Material,
@@ -23,7 +18,6 @@ pub struct MeshParams {
     pub motor: Option<Multivector>,
 }
 
-// mesh builds a Mesh from params.
 pub fn mesh(p: MeshParams) -> Mesh {
     Mesh {
         base: object3d(
@@ -38,8 +32,6 @@ pub fn mesh(p: MeshParams) -> Mesh {
     }
 }
 
-// Mesh flattens Object3D through Deref, so obj.position / obj.motor() resolve
-// through to the embedded node.
 impl std::ops::Deref for Mesh {
     type Target = Object3D;
 
@@ -54,7 +46,6 @@ impl std::ops::DerefMut for Mesh {
     }
 }
 
-// Scene holds the object list, the light list and the background colour.
 #[derive(Clone, Debug)]
 pub struct Scene {
     pub objects: Vec<Mesh>,
@@ -62,7 +53,6 @@ pub struct Scene {
     pub background: Color,
 }
 
-// scene builds a Scene (default sky-blue background).
 pub fn scene(background: Option<Color>) -> Scene {
     Scene {
         objects: Vec::new(),
@@ -84,7 +74,6 @@ impl Scene {
     }
 }
 
-// PerspectiveCamera is a pinhole camera (world->camera motor from look_at).
 #[derive(Clone, Copy, Debug)]
 pub struct PerspectiveCamera {
     pub fov: f64,
@@ -97,7 +86,6 @@ pub struct PerspectiveCamera {
     pub motor: Multivector,
 }
 
-// perspective_camera builds a PerspectiveCamera.
 pub fn perspective_camera(
     fov: f64,
     aspect: f64,
@@ -123,7 +111,6 @@ pub fn perspective_camera(
 }
 
 impl PerspectiveCamera {
-    // look_at builds the world->camera motor (camera basis = {right, -up, forward}).
     pub fn look_at(&mut self, target: [f64; 3], up: Option<[f64; 3]>) {
         self.target = target;
         if let Some(u) = up {
@@ -149,8 +136,6 @@ impl PerspectiveCamera {
     }
 }
 
-// OrbitControls is the static spherical orbit helper (update() repositions the
-// camera).
 #[derive(Clone, Copy, Debug)]
 pub struct OrbitControls {
     pub target: [f64; 3],
@@ -174,7 +159,6 @@ pub fn orbit_controls(
 }
 
 impl OrbitControls {
-    // update repositions the camera (spherical orbit around `target`).
     pub fn update(&self, camera: &mut PerspectiveCamera) {
         let ce = self.elevation.cos();
         let x = self.radius * ce * self.azimuth.sin();

@@ -1,9 +1,3 @@
-// Modeling builders: ear-clipping triangulation + extrude / loft.
-// Pure data transforms producing watertight triangle meshes (vertices, faces).
-
-// --- ear clipping -----------------------------------------------------------
-
-// signed_area returns the signed area of a 2D profile (CCW positive).
 pub fn signed_area(profile: &[[f64; 2]]) -> f64 {
     let n = profile.len();
     let mut acc = 0.0;
@@ -18,7 +12,6 @@ fn cross2(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
 
-// segs_intersect reports whether the open segments p1-p2 and p3-p4 cross.
 fn segs_intersect(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], p4: [f64; 2]) -> bool {
     let d1 = cross2(p3, p4, p1);
     let d2 = cross2(p3, p4, p2);
@@ -28,9 +21,6 @@ fn segs_intersect(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], p4: [f64; 2]) -> boo
         && ((d3 > 1e-12 && d4 < -1e-12) || (d3 < -1e-12 && d4 > 1e-12))
 }
 
-// validate_profile reports the conditions under which triangulate/extrude
-// would panic (too few points, duplicate consecutive points, zero area,
-// self-intersection) — for callers without panic recovery (the CGS server).
 pub fn validate_profile(profile: &[[f64; 2]]) -> Result<(), String> {
     let n = profile.len();
     if n < 3 {
@@ -49,10 +39,9 @@ pub fn validate_profile(profile: &[[f64; 2]]) -> Result<(), String> {
     if signed_area(profile).abs() < 1e-12 {
         return Err("profile is degenerate (zero area / collinear)".to_string());
     }
-    // non-adjacent edge crossings (ear clipping cannot handle those)
+
     for i in 0..n {
         for j in i + 1..n {
-            // skip adjacent edges (sharing a vertex)
             if j == i || j == (i + 1) % n || i == (j + 1) % n {
                 continue;
             }
@@ -73,8 +62,6 @@ fn in_tri(p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
     cross2(a, b, p) >= -1e-12 && cross2(b, c, p) >= -1e-12 && cross2(c, a, p) >= -1e-12
 }
 
-// triangulate ear-clips a simple polygon (no self-intersection, no holes) into
-// CCW triangle indices.
 pub fn triangulate(profile: &[[f64; 2]]) -> Vec<[i32; 3]> {
     let n = profile.len();
     if n < 3 {
@@ -83,11 +70,6 @@ pub fn triangulate(profile: &[[f64; 2]]) -> Vec<[i32; 3]> {
     let pts = profile.to_vec();
     let mut idx: Vec<usize> = (0..n).collect();
     if signed_area(&pts) < 0.0 {
-        // CW input: walk the vertices in reverse via idx.  NOTE: pts stays in
-        // the original order — the ear loop below indexes pts THROUGH idx, so
-        // permuting pts as well would cancel the reversal (that double
-        // reversal made every CW profile fail; extrude/loft never hit it
-        // because they pre-CCW their profiles).
         for (i, v) in idx.iter_mut().enumerate() {
             *v = n - 1 - i;
         }
@@ -107,7 +89,7 @@ pub fn triangulate(profile: &[[f64; 2]]) -> Vec<[i32; 3]> {
             let b = pts[i1];
             let c = pts[i2];
             if cross2(a, b, c) <= 1e-12 {
-                continue; // concave or collinear, not an ear
+                continue;
             }
             let mut inside = false;
             for &j in &idx {
@@ -138,8 +120,6 @@ pub fn triangulate(profile: &[[f64; 2]]) -> Vec<[i32; 3]> {
     tris
 }
 
-// --- extrude / loft ---------------------------------------------------------
-
 fn ccw(profile: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let pts = profile.to_vec();
     if signed_area(&pts) < 0.0 {
@@ -152,7 +132,6 @@ fn ccw(profile: &[[f64; 2]]) -> Vec<[f64; 2]> {
     pts
 }
 
-// extrude extrudes a 2D profile along +Z from 0 to height.
 pub fn extrude(profile: &[[f64; 2]], height: f64) -> (Vec<[f64; 3]>, Vec<[i32; 3]>) {
     if height <= 0.0 {
         panic!("extrude height must be > 0, got {height}");
@@ -179,7 +158,6 @@ pub fn extrude(profile: &[[f64; 2]], height: f64) -> (Vec<[f64; 3]>, Vec<[i32; 3
     (verts, faces)
 }
 
-// loft lofts equal-vertex-count profiles at strictly increasing zs.
 pub fn loft(profiles: &[Vec<[f64; 2]>], zs: &[f64]) -> (Vec<[f64; 3]>, Vec<[i32; 3]>) {
     if profiles.len() != zs.len() || profiles.len() < 2 {
         panic!(
@@ -239,7 +217,7 @@ mod tests {
     fn test_signed_area() {
         let sq = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         assert!(signed_area(&sq) > 0.0);
-        // reversed is negative
+
         let mut rev: Vec<[f64; 2]> = Vec::new();
         for i in 0..sq.len() {
             rev.push(sq[sq.len() - 1 - i]);
@@ -259,7 +237,6 @@ mod tests {
 
     #[test]
     fn test_triangulate_concave() {
-        // L-shaped (concave) polygon, 6 vertices -> 4 triangles
         let l = vec![
             [0.0, 0.0],
             [2.0, 0.0],
@@ -277,7 +254,7 @@ mod tests {
         let sq = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let (verts, faces) = extrude(&sq, 2.0);
         assert!(verts.len() == 8);
-        // 4 side quads (8 tris) + 2 caps (4 tris) = 12
+
         assert!(faces.len() == 12);
         for f in faces {
             for i in f {

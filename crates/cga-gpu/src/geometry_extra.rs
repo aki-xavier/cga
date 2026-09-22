@@ -1,6 +1,3 @@
-// Intersection kernels for the non-blade primitives (cone / torus / ellipsoid /
-// cyclide), which use the affine ray-inverse transform (see affine_geom.rs).
-
 use cga_core::{mat3_transpose, ConeParams, CyclideParams, EllipsoidParams, TorusParams};
 use mlx_rs::complex64;
 use mlx_rs::ops;
@@ -9,9 +6,6 @@ use mlx_rs::Array;
 use crate::mlxops::*;
 use crate::{affine_normal, affine_to_local, col, vecmat};
 
-// dk_roots solves a monic quartic t^4 + c3 t^3 + c2 t^2 + c1 t + c0 by
-// Durand-Kerner iteration (50 rounds, complex64).  Returns (N,4) sorted real
-// roots (invalid = +inf).
 fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> Array {
     let rad = s_add(
         &ck(ck(ops::stack(
@@ -40,7 +34,6 @@ fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> Array {
         ck(ck(ck(idx4.expand_dims(1)).eq(ck(idx4.expand_dims(0)))).as_type::<f32>()).expand_dims(0),
     );
     for _ in 0..50 {
-        // pz := c0c.add(z.multiply(c1c.add(z.multiply(c2c.add(z.multiply(c3c.add(z)))))))
         let t4 = ck(c3c.add(&z));
         let t3 = ck(c2c.add(ck(z.multiply(&t4))));
         let t2 = ck(c1c.add(ck(z.multiply(&t3))));
@@ -60,7 +53,6 @@ pub(crate) fn inf_like(a: &Array) -> Array {
     ck(ops::full_like(a, fs(f64::INFINITY), None))
 }
 
-// affine_bounds transforms a local AABB's 8 corners by a_fwd (row-major 4x4).
 pub(crate) fn affine_bounds(lo: [f64; 3], hi: [f64; 3], a_fwd: &[f64; 16]) -> [[f64; 3]; 2] {
     let mut minp = [0.0; 3];
     let mut maxp = [0.0; 3];
@@ -100,8 +92,6 @@ pub(crate) fn affine_bounds(lo: [f64; 3], hi: [f64; 3], a_fwd: &[f64; 16]) -> [[
     }
     [minp, maxp]
 }
-
-// --- cone -------------------------------------------------------------------
 
 pub(crate) fn cone_local_interval(
     r: f64,
@@ -241,8 +231,6 @@ pub fn cone_uv(p: ConeParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-// --- ellipsoid --------------------------------------------------------------
-
 pub fn ellipsoid_intersect(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let b = s_mul(&ck(ck(o_l.multiply(&d_u)).sum_axes(&[-1], false)), 2.0);
@@ -310,8 +298,6 @@ pub fn ellipsoid_uv(p: EllipsoidParams, pos: &Array, _n: &Array) -> Array {
     );
     ck(ops::stack(&[&u, &v], -1))
 }
-
-// --- torus ------------------------------------------------------------------
 
 pub(crate) fn torus_local_crossings(
     major: f64,
@@ -448,8 +434,6 @@ pub fn torus_uv(p: TorusParams, pos: &Array, _n: &Array) -> Array {
     );
     ck(ops::stack(&[&u, &v], -1))
 }
-
-// --- cyclide ----------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cyclide_local_crossings(
@@ -623,10 +607,6 @@ mod tests {
         sphere_from_dual, CsgOp, DupinCyclide, Geometry,
     };
 
-    // Dupin cyclide tests: blade construction (sphere-family envelope / versor
-    // inversion) + engine analytic intersection.
-    // Gate: ring cyclide (a=1, b=0.98, d=0.3, c=sqrt(a^2-b^2) ~= 0.199) with c<d<a.
-
     const CGA_A: f64 = 1.0;
     const CGA_B: f64 = 0.98;
     const CGA_D: f64 = 0.3;
@@ -635,7 +615,6 @@ mod tests {
         (CGA_A * CGA_A - CGA_B * CGA_B).sqrt()
     }
 
-    // canonical ring cyclide x-axis intersections (descending)
     fn cga_x1() -> f64 {
         CGA_A + CGA_D - cga_c()
     }
@@ -673,8 +652,6 @@ mod tests {
         (t.item_cast::<f32>(), mask.as_slice::<bool>()[0])
     }
 
-    // --- algebra model -----------------------------------------------------------
-
     #[test]
     fn test_cyclide_param_implicit_consistency() {
         let cy = cga_cy();
@@ -691,13 +668,12 @@ mod tests {
 
     #[test]
     fn test_cyclide_kind() {
-        assert_eq!(cga_cy().kind(), "ring"); // c < d < a
+        assert_eq!(cga_cy().kind(), "ring");
         assert_eq!(
             dupin_cyclide(1.0, 0.6, 1.5, [0.0, 0.0, 0.0]).kind(),
             "spindle"
-        ); // d > a
+        );
         assert_eq!(dupin_cyclide(1.0, 0.6, 0.3, [0.0, 0.0, 0.0]).kind(), "horn");
-        // d < c
     }
 
     #[test]
@@ -812,8 +788,6 @@ mod tests {
             assert!((c[2] - p[2] / r2).abs() < 1e-6);
         }
     }
-
-    // --- engine ------------------------------------------------------------------
 
     #[test]
     fn test_cyclide_ray_hits_implicit() {

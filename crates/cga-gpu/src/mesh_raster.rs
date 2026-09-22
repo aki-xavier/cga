@@ -1,12 +1,3 @@
-// Software rasterizer for explicit triangle meshes.
-//
-// The hybrid renderer ray-traces CGA analytic primitives (plane/sphere/
-// cylinder/.../CSG) and rasterizes `TrimeshGeometry` meshes — fast, with no
-// O(rays x faces) memory blowup — then composites the two paths by camera-space
-// depth.  Rasterized meshes are shaded with direct lighting (no shadows /
-// refraction), and faces are back-face culled.  A per-mesh base-colour texture
-// (Material.map) is sampled and post-multiplied, mirroring the ray-traced path.
-
 use crate::mlxops::*;
 use crate::scene::{Mesh, PerspectiveCamera};
 use crate::scene_graph::identity3;
@@ -15,16 +6,13 @@ use crate::texture::WrapMode;
 use cga_core::{affine_from_motor, transform_point, Geometry, TriUvs};
 use mlx_rs::{ops, Array};
 
-// RastResult is the rasterized mesh output (linear float32 colour + depth).
 #[derive(Clone, Debug)]
 pub struct RastResult {
-    pub depth: Array, // [H,W] float32 camera-space z, +inf where no mesh hit
-    pub color: Array, // [H,W,3] float32 linear colour where a mesh is nearest
-    pub hit: Array,   // [H,W] bool mask of mesh-covered pixels
+    pub depth: Array,
+    pub color: Array,
+    pub hit: Array,
 }
 
-// transform_normal rotates a 3-vector by the 3x3 part of a row-major 4x4
-// (correct for motor transforms; affine scale would need the inverse transpose).
 fn transform_normal(m: [f64; 16], p: [f64; 3]) -> [f64; 3] {
     [
         m[0] * p[0] + m[1] * p[1] + m[2] * p[2],
@@ -33,8 +21,6 @@ fn transform_normal(m: [f64; 16], p: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-// rasterize_meshes rasterizes the given (direct TrimeshGeometry) mesh objects
-// and shades them, returning a depth + colour buffer composited over all meshes.
 #[allow(clippy::too_many_arguments)]
 pub fn rasterize_meshes(
     objs: &[Mesh],
@@ -48,7 +34,6 @@ pub fn rasterize_meshes(
     lit: &[Light],
     ambient: Option<Light>,
 ) -> RastResult {
-    // CPU buffers (H*W)
     let pixel_count = (w * h) as usize;
     let mut depth = vec![f32::INFINITY; pixel_count];
     let mut pos = vec![0f32; pixel_count * 3];
@@ -56,7 +41,6 @@ pub fn rasterize_meshes(
     let mut uvbuf = vec![0f32; pixel_count * 2];
     let mut matidx = vec![-1i32; pixel_count];
 
-    // face list per mesh (camera space)
     let mut face_data: Vec<Vec<RastFace>> = Vec::new();
     for obj in objs {
         let geom = match &obj.geometry {
@@ -110,10 +94,8 @@ pub fn rasterize_meshes(
         face_data.push(faces);
     }
 
-    // rasterize
     for (mi, faces) in face_data.iter().enumerate() {
         for f in faces {
-            // back-face cull: normal must face the camera (origin)
             let center = [
                 (f.a[0] + f.b[0] + f.c[0]) / 3.0,
                 (f.a[1] + f.b[1] + f.c[1]) / 3.0,
@@ -122,7 +104,7 @@ pub fn rasterize_meshes(
             if f.n[0] * center[0] + f.n[1] * center[1] + f.n[2] * center[2] >= 0.0 {
                 continue;
             }
-            // must be in front of the near plane
+
             if f.a[2] <= 1e-4 || f.b[2] <= 1e-4 || f.c[2] <= 1e-4 {
                 continue;
             }
@@ -144,14 +126,14 @@ pub fn rasterize_meshes(
                 let pyc = f64::from(py) + 0.5;
                 for px in xmin..xmax + 1 {
                     let pxc = f64::from(px) + 0.5;
-                    // barycentric (edge) weights
+
                     let wa = ((sbx - pxc) * (scy - pyc) - (sby - pyc) * (scx - pxc)) / denom;
                     let wb = ((scx - pxc) * (say - pyc) - (scy - pyc) * (sax - pxc)) / denom;
                     let wc = 1.0 - wa - wb;
                     if wa < 0.0 || wb < 0.0 || wc < 0.0 {
                         continue;
                     }
-                    // perspective-correct depth + position
+
                     let za = f.a[2];
                     let zb = f.b[2];
                     let zc = f.c[2];
@@ -174,7 +156,7 @@ pub fn rasterize_meshes(
                     nrm[off * 3] = f.n[0] as f32;
                     nrm[off * 3 + 1] = f.n[1] as f32;
                     nrm[off * 3 + 2] = f.n[2] as f32;
-                    // perspective-correct UVs (if the mesh has them)
+
                     if f.has_uv {
                         let uu =
                             (wa * f.uv.u0x / za + wb * f.uv.u1x / zb + wc * f.uv.u2x / zc) / inv_w;
@@ -189,7 +171,6 @@ pub fn rasterize_meshes(
         }
     }
 
-    // gather rasterized pixels, shade in a batch
     let mut idxs: Vec<usize> = Vec::new();
     for (i, &mi) in matidx.iter().enumerate() {
         if mi >= 0 {
@@ -206,10 +187,10 @@ pub fn rasterize_meshes(
         let k = idxs.len() as i32;
         let pp = Array::from_slice(&f32s_from_pos(&pos, &idxs), &[k, 3]);
         let nn = Array::from_slice(&f32s_from_nrm(&nrm, &idxs), &[k, 3]);
-        // view direction = -normalize(pos) (camera at origin)
+
         let vv =
             ck(ck(pp.negative()).divide(ck(ck(ck(pp.multiply(&pp)).sum_axes(&[-1], true)).sqrt())));
-        // aggregate per-mesh materials
+
         let mut em_arr: Vec<Array> = Vec::new();
         let mut diff_arr: Vec<Array> = Vec::new();
         let mut spec_arr: Vec<Array> = Vec::new();
@@ -227,7 +208,7 @@ pub fn rasterize_meshes(
             spec_arr.push(arr3v(spec));
             expo_arr.push(fs(expo));
         }
-        // map each pixel's matidx (mesh index in `objs`, 0-based) to material params
+
         let mut mi_arr = vec![0i32; k as usize];
         for oi in 0..k as usize {
             mi_arr[oi] = matidx[idxs[oi]];
@@ -243,7 +224,7 @@ pub fn rasterize_meshes(
         );
         shaded.eval().unwrap();
         let mut sdata = shaded.as_slice::<f32>().to_vec();
-        // apply the base-colour texture (post-multiply, like the ray-traced map)
+
         for (mi, o) in valid_objs.iter().enumerate() {
             if let Some(t) = &o.material.map {
                 let mut uv_list: Vec<f32> = Vec::new();
@@ -271,7 +252,7 @@ pub fn rasterize_meshes(
                 }
             }
         }
-        // scatter back
+
         let mut col_flat = vec![0f32; pixel_count * 3];
         for oi in 0..k as usize {
             let o = idxs[oi];
@@ -290,7 +271,6 @@ pub fn rasterize_meshes(
     }
 }
 
-// RastFace is one camera-space triangle.
 struct RastFace {
     a: [f64; 3],
     b: [f64; 3],

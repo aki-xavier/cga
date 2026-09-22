@@ -1,6 +1,3 @@
-// CSG booleans: the solid protocol (crossings / contains) plus the recursive
-// CsgGeometry combinator.
-
 use cga_core::{
     mat3_transpose, BoxParams, ConeParams, CyclideParams, CylinderParams, EllipsoidParams,
     GeometryParams, Mat3, PlaneParams, SphereParams, TorusParams, TrimeshParams,
@@ -15,18 +12,14 @@ use crate::{
     trimesh_mt_all, vecmat,
 };
 
-// last_col extracts the i-th component along the last axis.
 #[inline]
 fn last_col(a: &Array, i: i32) -> Array {
     ck(a.take_axis(Array::from_slice(&[i], &[]), -1))
 }
 
-// affine_point_to_local maps a point into the local canonical frame.
 pub(crate) fn affine_point_to_local(a_inv3: Mat3, t_inv: [f64; 3], pos: &Array) -> Array {
     ck(vecmat(pos, mat3_transpose(a_inv3)).add(arr3v(t_inv)))
 }
-
-// --- crossings / contains for blade solids ----------------------------------
 
 fn sphere_crossings(p: SphereParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let c = arr3v(p.c);
@@ -252,8 +245,6 @@ fn box_contains(p: BoxParams, pos: &Array) -> Array {
     inside
 }
 
-// --- affine-solid crossings / contains --------------------------------------
-
 pub fn cone_crossings(p: ConeParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (enter, exit_, valid, n0, n1) = cone_local_interval(p.r, p.h, &o_l, &d_u);
@@ -287,7 +278,6 @@ fn cone_contains(p: ConeParams, pos: &Array) -> Array {
 }
 
 fn ellipsoid_crossings(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    // local unit sphere crossings, then affine transform
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let b = s_mul(&ck(ck(o_l.multiply(&d_u)).sum_axes(&[-1], false)), 2.0);
     let cq = s_sub(&ck(ck(o_l.multiply(&o_l)).sum_axes(&[-1], false)), 1.0);
@@ -368,8 +358,6 @@ fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
     ck(ck(ck(count.remainder(&two)).eq(&one)).reshape(&shape))
 }
 
-// --- dispatch ---------------------------------------------------------------
-
 pub fn geom_crossings(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     match p {
         GeometryParams::SphereParams(p) => sphere_crossings(*p, o, d),
@@ -421,9 +409,6 @@ mod tests {
         mask.eval().unwrap();
         (t.item_cast::<f32>(), mask.as_slice::<bool>()[0])
     }
-
-    // CSG solid-protocol membership (contains) for union / difference /
-    // intersection, including a nested tree.
 
     fn cc_contains(g: &Geometry, pts: &[[f64; 3]]) -> Vec<bool> {
         let p = crate::geom_to_camera(g, &motor_identity());
@@ -525,7 +510,7 @@ mod tests {
                 Geometry::BoxGeometry(box_geometry(4.0, 4.0, 4.0)),
             ],
         ));
-        // inside sphere | inside box | outside both
+
         assert_eq!(
             cc_contains(&g, &[[0.9, 0.0, 0.0], [1.5, 0.0, 0.0], [3.0, 0.0, 0.0]]),
             [true, true, false]
@@ -541,7 +526,7 @@ mod tests {
                 Geometry::SphereGeometry(sphere_geometry(1.0)),
             ],
         ));
-        // in box not sphere | in sphere | outside box
+
         assert_eq!(
             cc_contains(&g, &[[1.5, 0.0, 0.0], [0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]),
             [true, false, false]
@@ -557,7 +542,7 @@ mod tests {
                 Geometry::SphereGeometry(sphere_geometry(1.0)),
             ],
         ));
-        // in both | in box not sphere | outside both
+
         assert_eq!(
             cc_contains(&g, &[[0.5, 0.0, 0.0], [1.5, 0.0, 0.0], [3.0, 0.0, 0.0]]),
             [true, false, false]
@@ -573,7 +558,7 @@ mod tests {
                 Geometry::SphereGeometry(sphere_geometry(1.0)),
             ],
         ));
-        // half-space y<0
+
         let g = Geometry::CsgGeometry(csg_geometry(
             CsgOp::Intersection,
             vec![

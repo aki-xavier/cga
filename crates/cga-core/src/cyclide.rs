@@ -1,14 +1,3 @@
-// Dupin cyclide — a non-blade quartic surface, plus its blade constructions
-// (a family of spheres whose envelope is the cyclide; versor inversion of a
-// torus).  This is a computable geometric model (not a Multivector subclass).
-//
-// Canonical form (design parameters a, b, d; c = sqrt(a^2 - b^2), a > b > 0):
-//   directrix ellipse   E(u) = (a cos u, b sin u, 0)          (xy plane)
-//   focal hyperbola     H(v) = (c/cos v, 0, b tan v)          (xz plane)
-//   implicit: (x^2+y^2+z^2+b^2-d^2)^2 - 4(a x - c d)^2 - 4 b^2 y^2 = 0
-//   d classification: c<d<a ring | d>a spindle | 0<d<c horn
-//   degenerate a=b (c=0): torus (major radius a, minor radius d, axis z).
-
 use crate::primitives::{circle, point, sphere};
 use crate::Multivector;
 
@@ -20,7 +9,6 @@ pub struct DupinCyclide {
     pub shift: [f64; 3],
 }
 
-// dupin_cyclide builds an elliptic Dupin cyclide from design parameters a, b, d.
 pub fn dupin_cyclide(a: f64, b: f64, d: f64, shift: [f64; 3]) -> DupinCyclide {
     if !(a > b && b > 0.0) {
         panic!("need a > b > 0, got a={}, b={}", a, b);
@@ -32,12 +20,10 @@ pub fn dupin_cyclide(a: f64, b: f64, d: f64, shift: [f64; 3]) -> DupinCyclide {
 }
 
 impl DupinCyclide {
-    // c returns the ellipse linear eccentricity sqrt(a^2 - b^2).
     pub fn c(&self) -> f64 {
         (self.a * self.a - self.b * self.b).sqrt()
     }
 
-    // kind returns "ring", "spindle" or "horn" according to d vs c, a.
     pub fn kind(&self) -> &'static str {
         let c = self.c();
         if c < self.d && self.d < self.a {
@@ -49,23 +35,19 @@ impl DupinCyclide {
         "horn"
     }
 
-    // spine returns the sphere centre E(u) on the directrix ellipse.
     pub fn spine(&self, u: f64) -> [f64; 3] {
         [self.a * u.cos(), self.b * u.sin(), 0.0]
     }
 
-    // radius returns the generating-sphere radius r(u) = d - c cos u.
     pub fn radius(&self, u: f64) -> f64 {
         self.d - self.c() * u.cos()
     }
 
-    // generator_sphere returns one sphere S(u) of the one-parameter family.
     pub fn generator_sphere(&self, u: f64) -> Multivector {
         let sp = self.spine(u);
         sphere(sp, self.radius(u))
     }
 
-    // focal_spheres returns the two fixed focal spheres (Maxwell property).
     pub fn focal_spheres(&self) -> (Multivector, Multivector) {
         let c = self.c();
         (
@@ -74,7 +56,6 @@ impl DupinCyclide {
         )
     }
 
-    // tangency_residual returns the tangency residuals (should be ~0).
     pub fn tangency_residual(&self, u: f64) -> [f64; 2] {
         let sp = self.spine(u);
         let r = self.radius(u);
@@ -84,7 +65,6 @@ impl DupinCyclide {
         [d1 - r - (self.a - self.d), d2 + r - (self.a + self.d)]
     }
 
-    // characteristic_circle returns the curvature-line circle = S(u) meet S(u+du).
     pub fn characteristic_circle(&self, u: f64) -> Multivector {
         let c = self.c();
         let cu = u.cos();
@@ -106,7 +86,6 @@ impl DupinCyclide {
         circle(center, rho2.sqrt(), ep)
     }
 
-    // surface parametrises the surface point at (u, v).
     pub fn surface(&self, u: f64, v: f64) -> [f64; 3] {
         let a = self.a;
         let b = self.b;
@@ -123,7 +102,6 @@ impl DupinCyclide {
         [x + self.shift[0], y + self.shift[1], z + self.shift[2]]
     }
 
-    // implicit evaluates F at (x, y, z) in world coordinates (F < 0 = inside).
     pub fn implicit(&self, x: f64, y: f64, z: f64) -> f64 {
         let a = self.a;
         let b = self.b;
@@ -137,7 +115,6 @@ impl DupinCyclide {
         (rho + bb) * (rho + bb) - 4.0 * (a * sx - c * d) * (a * sx - c * d) - 4.0 * b * b * sy * sy
     }
 
-    // gradient returns grad F (shift-independent direction).
     pub fn gradient(&self, x: f64, y: f64, z: f64) -> [f64; 3] {
         let a = self.a;
         let b = self.b;
@@ -156,7 +133,6 @@ impl DupinCyclide {
         ]
     }
 
-    // normal returns the unit normal (gradient direction, pointing outside).
     pub fn normal(&self, x: f64, y: f64, z: f64) -> [f64; 3] {
         let g = self.gradient(x, y, z);
         let n = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
@@ -166,12 +142,10 @@ impl DupinCyclide {
         [g[0] / n, g[1] / n, g[2] / n]
     }
 
-    // contains reports whether the point is inside (F < 0).
     pub fn contains(&self, x: f64, y: f64, z: f64) -> bool {
         self.implicit(x, y, z) < 0.0
     }
 
-    // uv recovers the (u, v) parameters of a surface point.
     pub fn uv(&self, x: f64, y: f64, z: f64) -> [f64; 2] {
         let a = self.a;
         let b = self.b;
@@ -186,12 +160,10 @@ impl DupinCyclide {
         [u, v]
     }
 
-    // inversion_versor returns the unit-sphere inversion versor s = e0 - 0.5 einf.
     pub fn inversion_versor(&self) -> Multivector {
         sphere([0.0, 0.0, 0.0], 1.0)
     }
 
-    // invert_point inverts a point through the unit sphere: x -> x / |x|^2.
     pub fn invert_point(&self, p: &Multivector) -> Multivector {
         let s = self.inversion_versor();
         let out = s.gp(p).gp(&s);
@@ -200,9 +172,6 @@ impl DupinCyclide {
     }
 }
 
-// from_torus_inversion recovers cyclide parameters from a torus inverted through
-// the unit sphere (torus major radius `major`, minor radius `minor`, axis z,
-// translated by shift_x along x).
 pub fn from_torus_inversion(major: f64, minor: f64, shift_x: f64) -> DupinCyclide {
     let r = major;
     let rr = minor;
@@ -220,7 +189,7 @@ pub fn from_torus_inversion(major: f64, minor: f64, shift_x: f64) -> DupinCyclid
         }
     }
     let mut ys = [1.0 / xs[0], 1.0 / xs[1], 1.0 / xs[2], 1.0 / xs[3]];
-    ys.sort_by(|a: &f64, b: &f64| a.total_cmp(b)); // ascending
+    ys.sort_by(|a: &f64, b: &f64| a.total_cmp(b));
     let y1 = ys[3];
     let y2 = ys[2];
     let y3 = ys[1];

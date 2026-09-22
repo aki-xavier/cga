@@ -1,17 +1,6 @@
-// CGA Motor — the rigid-body transform (versor) in conformal space.
-//
-// A motor M (an even-grade versor) acts on any object O by the sandwich product
-//   O' = M O M~   (M~ = reverse(M))
-// Basic versors: rotor R = exp(-theta/2 B) (rotation), translator
-// T = 1 - (t/2) v ^ einf (translation), motor M = T R.
-//
-// A motor is just a multivector with even-grade components; in this port the
-// motor functions below operate on plain `Multivector` values.
-
 use crate::{e0, einf, mv_scalar, mv_vector, Multivector};
 use std::f64::consts::PI;
 
-/// Quaternion is an (w, x, y, z) quaternion (MJCF convention).
 #[derive(Clone, Copy, Debug)]
 pub struct Quaternion {
     pub w: f64,
@@ -20,12 +9,10 @@ pub struct Quaternion {
     pub z: f64,
 }
 
-/// motor_identity returns the identity motor.
 pub fn motor_identity() -> Multivector {
     mv_scalar(1.0)
 }
 
-/// motor_rotor builds a rotor for rotation by `angle` about `axis` (radians).
 pub fn motor_rotor(axis: [f64; 3], angle: f64) -> Multivector {
     let mut ax = axis[0];
     let mut ay = axis[1];
@@ -42,15 +29,13 @@ pub fn motor_rotor(axis: [f64; 3], angle: f64) -> Multivector {
     let sf = half.sin();
     let mut vals = [0.0; 32];
     vals[0] = s;
-    vals[6] = -sf * az; // e12
-    vals[7] = sf * ay; // e13
-    vals[10] = -sf * ax; // e23
+    vals[6] = -sf * az;
+    vals[7] = sf * ay;
+    vals[10] = -sf * ax;
     Multivector { values: vals }
 }
 
-/// rotor_from_quaternion builds a rotor from an (w, x, y, z) quaternion.
-/// The quaternion need not be unit: the axis is normalised and the angle uses
-/// the scale-invariant form 2*atan2(|xyz|, w).
+// 为什么: 四元数不必单位化——轴向归一后用 scale-invariant 形式 2·atan2(|xyz|, w) 提取角度，对未归一四元数也鲁棒。
 pub fn rotor_from_quaternion(q: Quaternion) -> Multivector {
     let w = q.w;
     let x = q.x;
@@ -64,13 +49,10 @@ pub fn rotor_from_quaternion(q: Quaternion) -> Multivector {
     motor_rotor([x / n, y / n, z / n], angle)
 }
 
-/// translator builds the translator T = 1 - (t ^ einf) / 2.
 pub fn translator(displacement: [f64; 3]) -> Multivector {
     let tv = mv_vector(displacement[0], displacement[1], displacement[2], 0.0, 0.0);
     mv_scalar(1.0).sub(&tv.op(&einf()).mul_scalar(0.5))
 }
-
-// --- 3x3 matrix helpers -----------------------------------------------------
 
 pub type Mat3 = [[f64; 3]; 3];
 
@@ -86,7 +68,6 @@ pub fn mat3_new(r0: [f64; 3], r1: [f64; 3], r2: [f64; 3]) -> Mat3 {
     [r0, r1, r2]
 }
 
-// (pub(crate): shared between motors.rs and affine.rs.)
 pub(crate) fn mat3_mul(a: Mat3, b: Mat3) -> Mat3 {
     let mut r = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -119,8 +100,6 @@ fn mat3_add_scaled(a: Mat3, s: f64, b: Mat3) -> Mat3 {
     r
 }
 
-/// matrix_to_quaternion converts a 3x3 rotation matrix to an (w, x, y, z)
-/// quaternion.
 pub fn matrix_to_quaternion(m: Mat3) -> Quaternion {
     let trace = m[0][0] + m[1][1] + m[2][2];
     if trace > 0.0 {
@@ -159,35 +138,26 @@ pub fn matrix_to_quaternion(m: Mat3) -> Quaternion {
     }
 }
 
-/// motor_from_matrix builds M = T(t) . R from a 3x3 rotation and translation.
 pub fn motor_from_matrix(r: Mat3, t: [f64; 3]) -> Multivector {
     translator(t).gp(&rotor_from_quaternion(matrix_to_quaternion(r)))
 }
 
-// --- motor operations (on Multivector) --------------------------------------
-
 impl Multivector {
-    /// apply returns M . obj . M~ (the versor conjugation).  The result keeps
-    /// the object's blade structure; call `.coords()` / `.euclidean_vector()`
-    /// on it.
+    // 为什么: 这是 versor 共轭 M·obj·M~，保持 obj 的 blade 结构（grade 不变）；用 motor 当旋转/平移作用到任意 blade 上时都靠它。
     pub fn apply(&self, obj: &Multivector) -> Multivector {
         self.gp(obj).gp(&self.reverse())
     }
 
-    /// compose returns self . other (apply other first, then self).
     pub fn compose(&self, other: &Multivector) -> Multivector {
         self.gp(other)
     }
 
-    /// interpolate returns M(t) = self . exp(t . log(self^-1 . other)).
     pub fn interpolate(&self, other: &Multivector, t: f64) -> Multivector {
         let delta = self.reverse().gp(other);
         self.gp(&motor_exp(&delta.log(), t))
     }
 
-    /// to_matrix returns the equivalent 4x4 homogeneous transform [R|t],
-    /// flattened row-major into 16 components (row r, col c is at index
-    /// 4*r + c).
+    // 为什么: 4×4 齐次变换 [R|t] 展平为行优先 16 分量（行 r、列 c 落在下标 4r+c），与 GLM/glm 习惯一致，便于直接喂给现有 GPU 代码。
     pub fn to_matrix(&self) -> [f64; 16] {
         let origin_t = self.apply(&e0());
         let tx = origin_t.values[1];
@@ -218,8 +188,6 @@ impl Multivector {
         ]
     }
 
-    /// log returns the bivector Bv with exp(-Bv) = self (SE(3) matrix
-    /// logarithm).
     pub fn log(&self) -> Multivector {
         let t = self.to_matrix();
         let r = mat3_new([t[0], t[1], t[2]], [t[4], t[5], t[6]], [t[8], t[9], t[10]]);
@@ -235,7 +203,6 @@ impl Multivector {
         let mut w_bar = [0.0; 3];
 
         let v_bar: [f64; 3] = if theta < 1e-9 {
-            // pure translation
             tv
         } else {
             let sin_theta = theta.sin();
@@ -243,7 +210,6 @@ impl Multivector {
                 let c = theta / (2.0 * sin_theta);
                 w_bar = [c * antisym[0], c * antisym[1], c * antisym[2]];
             } else {
-                // theta ~ pi: recover axis from the symmetric part
                 let mut axis = [0.0; 3];
                 for i in 0..3 {
                     let val = (r[i][i] + 1.0) / 2.0;
@@ -267,7 +233,7 @@ impl Multivector {
                 }
                 w_bar = [axis[0] * theta, axis[1] * theta, axis[2] * theta];
             }
-            // SO(3) left-Jacobian inverse
+
             let bx = w_bar[0];
             let by = w_bar[1];
             let bz = w_bar[2];
@@ -285,22 +251,20 @@ impl Multivector {
     }
 }
 
-/// velocity_bivector builds the twist bivector V = w + v ^ einf.
 pub fn velocity_bivector(angular: [f64; 3], linear: [f64; 3]) -> Multivector {
     let wx = angular[0];
     let wy = angular[1];
     let wz = angular[2];
     let mut vals = [0.0; 32];
-    vals[6] = wz; // e12
-    vals[7] = -wy; // e13
-    vals[10] = wx; // e23
+    vals[6] = wz;
+    vals[7] = -wy;
+    vals[10] = wx;
     let rot = Multivector { values: vals };
     let tv = mv_vector(linear[0], linear[1], linear[2], 0.0, 0.0);
     rot.add(&tv.op(&einf()))
 }
 
-/// motor_exp computes exp(-scale . B), where B is a bivector (half-twist
-/// convention B = 1/2 (w_bivector + v ^ einf)).
+// 为什么: 沿 bivector B 做指数 exp(-scale·B)；这里 B 采用 half-twist 约定 B = ½(ω + v∧einf)，使小 twist 可线性化、与 SE(3) twist theory 一致。
 pub fn motor_exp(b: &Multivector, scale: f64) -> Multivector {
     let bv = b.mul_scalar(scale);
     let vals = bv.values;
@@ -319,17 +283,16 @@ pub fn motor_exp(b: &Multivector, scale: f64) -> Multivector {
         if v_norm < 1e-12 {
             return motor_identity();
         }
-        // pure translation: Bv is nilpotent, series truncates
+
         return mv_scalar(1.0).sub(&bv);
     }
     if v_norm < 1e-12 {
-        // pure rotation through the origin
         return motor_rotor(
             [w_bar[0] / theta, w_bar[1] / theta, w_bar[2] / theta],
             theta,
         );
     }
-    // general screw: Rodrigues + SO(3) left Jacobian
+
     let bx = w_bar[0];
     let by = w_bar[1];
     let bz = w_bar[2];
@@ -349,7 +312,6 @@ pub fn motor_exp(b: &Multivector, scale: f64) -> Multivector {
     motor_from_matrix(r, t)
 }
 
-/// extract_velocity derives angular/linear velocity from two adjacent motors.
 pub fn extract_velocity(
     m_curr: &Multivector,
     m_prev: &Multivector,
@@ -388,7 +350,6 @@ mod tests {
 
     #[test]
     fn test_rotor_z_quarter() {
-        // rotate (1,0,0) by 90 deg about +z -> (0,1,0)
         let r = motor_rotor([0.0, 0.0, 1.0], PI / 2.0);
         let q = r.apply(&point_mv(1.0, 0.0, 0.0)).coords();
         assert!((q[0] - 0.0).abs() < 1e-6);
@@ -423,9 +384,7 @@ mod tests {
 
     #[test]
     fn test_rotor_from_quaternion_scaled() {
-        // 2x the quaternion for 60 deg about +z must give the same rotor as the
-        // unit quaternion (scale-invariant angle): e1 -> (cos60, sin60, 0)
-        let c = (PI / 6.0).cos(); // half-angle 30 deg
+        let c = (PI / 6.0).cos();
         let s = (PI / 6.0).sin();
         let q = Quaternion {
             w: 2.0 * c,
@@ -439,7 +398,7 @@ mod tests {
         assert!((p[0] - 0.5).abs() < 1e-9);
         assert!((p[1] - 3.0_f64.sqrt() / 2.0).abs() < 1e-9);
         assert!(p[2].abs() < 1e-9);
-        // and the axis stays +z (not distorted by the scale)
+
         let p2 = rotor_from_quaternion(q)
             .apply(&point_mv(0.0, 0.0, 1.0))
             .coords();
@@ -450,7 +409,6 @@ mod tests {
 
     #[test]
     fn test_extract_velocity() {
-        // pure rotation about z at 1 rad/s
         let dt = 0.1;
         let m0 = motor_rotor([0.0, 0.0, 1.0], 0.0);
         let m1 = motor_rotor([0.0, 0.0, 1.0], 0.1);

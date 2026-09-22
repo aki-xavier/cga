@@ -1,13 +1,9 @@
-// GLB mesh round-trip demo: extrude an L-shape, save it as .glb (with a node
-// transform), reload it, and render the loaded mesh.
-// Run: cargo run -p cga-examples --bin demo_gltf
 use cga_core::*;
 use cga_gpu::*;
 
 fn main() {
-    // 以仓库根目录为 CWD 运行
     let out = "examples/gltf";
-    // L-shaped extrusion
+
     let (verts, faces) = extrude(
         &[
             [0.0, 0.0],
@@ -19,12 +15,9 @@ fn main() {
         ],
         0.8,
     );
-    // row-major transform: translate y by 0.6
+
     let t: [f64; 16] = [
-        1.0, 0.0, 0.0, 0.0, //
-        0.0, 1.0, 0.0, 0.6, //
-        0.0, 0.0, 1.0, 0.0, //
-        0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ];
     save_glb(
         &format!("{out}/demo_gltf.glb"),
@@ -36,7 +29,6 @@ fn main() {
         }],
     );
 
-    // reload and render the loaded mesh(es) (world transform baked in)
     let loaded = load_gltf(&format!("{out}/demo_gltf.glb")).unwrap();
     let mut sc = scene(None);
     sc.add_mesh(mesh(MeshParams {

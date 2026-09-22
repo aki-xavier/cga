@@ -1,12 +1,8 @@
-// Materials and lights plus the batched Blinn-Phong shading kernel.
-
 use crate::mlxops::*;
 use crate::scene_graph::{color_rgb, dir3, vec3_unit, Color};
 use crate::texture::Texture;
 use cga_core::{clamp01, mv_vector, point, Multivector};
 use mlx_rs::{ops, Array};
-
-// --- Material ---------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MaterialKind {
@@ -27,7 +23,6 @@ pub struct Material {
     pub map: Option<Texture>,
 }
 
-// MaterialParams configures a standard material.
 pub struct MaterialParams {
     pub color: Color,
     pub roughness: f64,
@@ -38,7 +33,6 @@ pub struct MaterialParams {
     pub absorption: f64,
 }
 
-// standard_material builds a MeshStandardMaterial (Lambert + Blinn-Phong).
 pub fn standard_material(p: MaterialParams) -> Material {
     Material {
         kind: MaterialKind::Standard,
@@ -53,7 +47,6 @@ pub fn standard_material(p: MaterialParams) -> Material {
     }
 }
 
-// basic_material builds a MeshBasicMaterial (unlit flat colour).
 pub fn basic_material(color: Color, opacity: f64) -> Material {
     Material {
         kind: MaterialKind::Basic,
@@ -62,14 +55,13 @@ pub fn basic_material(color: Color, opacity: f64) -> Material {
         metalness: 0.0,
         emissive: color_rgb(0.0, 0.0, 0.0),
         opacity: clamp01(opacity),
-        ior: 1.5, // matches the Python Material base default (used for Fresnel)
+        ior: 1.5,
         absorption: 0.0,
         map: None,
     }
 }
 
 impl Material {
-    // shade_params returns (emissive, diff, spec, expo) as linear-space f64 triples.
     pub fn shade_params(&self) -> ([f64; 3], [f64; 3], [f64; 3], f64) {
         let crgb = self.color.rgb();
         if self.kind == MaterialKind::Basic {
@@ -89,8 +81,6 @@ impl Material {
         (em, diff, spec, expo)
     }
 }
-
-// --- Lights -----------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LightKind {
@@ -138,7 +128,6 @@ pub fn point_light(color: Color, intensity: f64, position: [f64; 3]) -> Light {
     }
 }
 
-// light_to_camera conjugates a light into camera space (ambient unchanged).
 pub fn light_to_camera(l: Light, m: Multivector) -> Light {
     match l.kind {
         LightKind::Directional => {
@@ -161,8 +150,6 @@ pub fn light_to_camera(l: Light, m: Multivector) -> Light {
     }
 }
 
-// light_direction_at returns (unit light direction (N,3), attenuation).
-// Attenuation is a (N,1) array for point lights, a 0-d scalar for directional.
 pub fn light_direction_at(l: Light, p: &Array) -> (Array, Array) {
     match l.kind {
         LightKind::Directional => {
@@ -183,8 +170,6 @@ pub fn light_direction_at(l: Light, p: &Array) -> (Array, Array) {
     }
 }
 
-// light_far returns the shadow-ray maximum distance (a 0-d scalar for
-// directional lights, a (N,) array for point lights).
 pub fn light_far(l: Light, p: &Array) -> Array {
     if l.kind == LightKind::Point {
         let lv = ck(ops::broadcast_to(arr3v(l.position), p.shape())).subtract(p);
@@ -194,11 +179,6 @@ pub fn light_far(l: Light, p: &Array) -> Array {
     fs(f64::INFINITY)
 }
 
-// --- batched shading --------------------------------------------------------
-
-// shade_batched computes per-pixel Blinn-Phong colour in linear space.
-// emissive/diff/spec are (N,3); expo is (N,1); p/n/d are (N,3); vis is a list
-// of per-light (N,) visibility arrays (or empty).
 #[allow(clippy::too_many_arguments)]
 pub fn shade_batched(
     emissive: &Array,

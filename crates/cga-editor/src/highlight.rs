@@ -1,9 +1,3 @@
-// CGS syntax highlighting.
-//
-// A small hand-written lexer that classifies each span into a semantic class.
-// CGS documents are tiny, so we re-scan the whole text on every edit.
-
-// HighlightClass is one semantic syntax class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightClass {
     Comment,
@@ -17,7 +11,6 @@ pub enum HighlightClass {
     Plain,
 }
 
-// HighlightSpan is one classified byte span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighlightSpan {
     pub start: usize,
@@ -25,7 +18,6 @@ pub struct HighlightSpan {
     pub class: HighlightClass,
 }
 
-// highlight_tokenize scans `text` into ordered, non-overlapping spans.
 pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
     let b = text.as_bytes();
     let n = b.len();
@@ -33,7 +25,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
     let mut i = 0;
     while i < n {
         let c = b[i];
-        // line comment
+
         if c == b'/' && i + 1 < n && b[i + 1] == b'/' {
             let s = i;
             while i < n && b[i] != b'\n' {
@@ -50,7 +42,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
             i += 1;
             continue;
         }
-        // 0x hex colour
+
         if c == b'0' && i + 1 < n && (b[i + 1] == b'x' || b[i + 1] == b'X') {
             let s = i;
             i += 2;
@@ -64,7 +56,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
             });
             continue;
         }
-        // number (float / exponent)
+
         if c.is_ascii_digit() {
             let s = i;
             while i < n && (b[i].is_ascii_digit() || b[i] == b'.') {
@@ -90,7 +82,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
             });
             continue;
         }
-        // identifier / keyword
+
         if c.is_ascii_alphabetic() || c == b'_' {
             let s = i;
             while i < n && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
@@ -105,7 +97,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
             }
             continue;
         }
-        // two-character operators
+
         if i + 1 < n {
             let two = (b[i], b[i + 1]);
             if matches!(
@@ -126,7 +118,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
                 continue;
             }
         }
-        // single-character operators
+
         if matches!(
             c,
             b'+' | b'-' | b'*' | b'/' | b'%' | b'<' | b'>' | b'!' | b':'
@@ -139,7 +131,7 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
             i += 1;
             continue;
         }
-        // punctuation
+
         if matches!(
             c,
             b'[' | b']' | b'{' | b'}' | b'(' | b')' | b',' | b';' | b'='
@@ -157,7 +149,6 @@ pub fn highlight_tokenize(text: &str) -> Vec<HighlightSpan> {
     out
 }
 
-// classify_word maps an identifier to a semantic class (none = plain variable).
 pub fn classify_word(word: &str) -> Option<HighlightClass> {
     match word {
         "module" | "for" | "if" | "else" | "echo" | "union" => Some(HighlightClass::Keyword),
@@ -172,7 +163,6 @@ pub fn classify_word(word: &str) -> Option<HighlightClass> {
     }
 }
 
-// highlight_color maps a semantic class to a 0xRRGGBB colour.
 pub fn highlight_color(class: HighlightClass) -> i32 {
     match class {
         HighlightClass::Comment => 0x6a737d,
@@ -187,14 +177,12 @@ pub fn highlight_color(class: HighlightClass) -> i32 {
     }
 }
 
-// FoldRange is a brace-fold region (line numbers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FoldRange {
     pub start: usize,
     pub end: usize,
 }
 
-// brace_fold_ranges finds `{ … }` fold regions (comments skipped).
 pub fn brace_fold_ranges(text: &str) -> Vec<FoldRange> {
     let mut starts: Vec<usize> = Vec::new();
     let mut ranges: Vec<FoldRange> = Vec::new();
@@ -226,8 +214,6 @@ pub fn brace_fold_ranges(text: &str) -> Vec<FoldRange> {
 mod tests {
     use super::*;
 
-    // Tests for CGS syntax highlighting.
-
     fn span_classes(text: &str) -> Vec<HighlightClass> {
         let mut out: Vec<HighlightClass> = Vec::new();
         for s in highlight_tokenize(text) {
@@ -240,10 +226,10 @@ mod tests {
     fn test_highlight_keywords_and_types() {
         let spans = highlight_tokenize("for (i = [0:2]) sphere(r=1);");
         let classes = span_classes("for (i = [0:2]) sphere(r=1);");
-        assert!(classes.contains(&HighlightClass::Keyword)); // for
-        assert!(classes.contains(&HighlightClass::Typ)); // sphere
-        assert!(classes.contains(&HighlightClass::Number)); // 0, 2, 1
-        assert!(classes.contains(&HighlightClass::Punctuation)); // ( ) [ ] = ; etc
+        assert!(classes.contains(&HighlightClass::Keyword));
+        assert!(classes.contains(&HighlightClass::Typ));
+        assert!(classes.contains(&HighlightClass::Number));
+        assert!(classes.contains(&HighlightClass::Punctuation));
         let _ = spans;
     }
 
@@ -253,7 +239,7 @@ mod tests {
         assert!(!spans.is_empty());
         assert!(spans[0].class == HighlightClass::Comment);
         assert!(spans[0].start == 0);
-        assert!(spans[0].end == 8); // '// hello'
+        assert!(spans[0].end == 8);
     }
 
     #[test]
@@ -272,8 +258,8 @@ mod tests {
     fn test_highlight_functions_and_constants() {
         let spans = highlight_tokenize("translate([sin(pi), 0, 0]) sphere(r=1);");
         let classes = span_classes("translate([sin(pi), 0, 0]) sphere(r=1);");
-        assert!(classes.contains(&HighlightClass::Function)); // sin
-        assert!(classes.contains(&HighlightClass::Constant)); // pi
+        assert!(classes.contains(&HighlightClass::Function));
+        assert!(classes.contains(&HighlightClass::Constant));
         let _ = spans;
     }
 

@@ -1,10 +1,3 @@
-// glTF 2.0 read + GLB write (geometry: TRIANGLES primitives; materials: solid
-// colour from the PBR base color / metalness / roughness / emissive factors —
-// no texturing).
-//
-// JSON is walked as `serde_json::Value`; missing fields default to zero values.
-// Base64 data URIs use the `base64` crate.
-
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::Value;
 
@@ -28,7 +21,6 @@ struct GltfBufferView {
     buffer: i32,
     byte_offset: i32,
     #[allow(dead_code)]
-    // kept for schema completeness; read_accessor uses offsets/stride only
     byte_length: i32,
     byte_stride: i32,
 }
@@ -91,22 +83,18 @@ struct GltfRoot {
     materials: Vec<GltfMaterial>,
 }
 
-// GltfMeshOut is one loaded mesh (vertices, faces, world transform) plus its
-// solid-colour PBR material (base colour + metalness / roughness / emissive) and
-// per-vertex UVs.
 #[derive(Clone, Debug)]
 pub struct GltfMeshOut {
     pub vertices: Vec<[f64; 3]>,
     pub faces: Vec<[i32; 3]>,
     pub world: [f64; 16],
-    pub uv: Vec<[f64; 2]>, // parallel to vertices; empty when none
+    pub uv: Vec<[f64; 2]>,
     pub color: [f64; 3],
     pub metalness: f64,
     pub roughness: f64,
     pub emissive: [f64; 3],
 }
 
-// GltfMeshIn is one input entry for save_glb.
 #[derive(Clone, Debug)]
 pub struct GltfMeshIn {
     pub vertices: Vec<[f64; 3]>,
@@ -160,7 +148,6 @@ fn node_local_matrix(n: &GltfNode) -> [f64; 16] {
     from_trs(t, r, sc)
 }
 
-// save_glb writes meshes as a GLB file (each mesh = one TRIANGLES primitive).
 pub fn save_glb(path: &str, meshes: &[GltfMeshIn]) {
     let mut blob: Vec<u8> = Vec::new();
     let mut nodes: Vec<String> = Vec::new();
@@ -251,7 +238,7 @@ pub fn save_glb(path: &str, meshes: &[GltfMeshIn]) {
             "{{\"mesh\":{mi},\"name\":\"mesh_{mi}\"{node_extra}}}"
         ));
     }
-    // The scene's `nodes` must be node *indices*, not the node objects.
+
     let mut node_indices: Vec<String> = Vec::with_capacity(nodes.len());
     for i in 0..nodes.len() {
         node_indices.push(i.to_string());
@@ -369,7 +356,7 @@ fn load_gltf_visit(
                 verts.push([pos[i], pos[i + 1], pos[i + 2]]);
                 i += 3;
             }
-            // per-vertex UVs (TEXCOORD_0, VEC2) when present
+
             let mut uvs: Vec<[f64; 2]> = Vec::new();
             if let Some(uv_idx) = prim.attributes.get("TEXCOORD_0") {
                 let uvdata = read_accessor(gltf, bins, *uv_idx as usize);
@@ -399,9 +386,7 @@ fn load_gltf_visit(
                 faces.push([raw_idx[i], raw_idx[i + 1], raw_idx[i + 2]]);
                 i += 3;
             }
-            // material: solid colour from the glTF PBR params (no textures).  The
-            // base colour comes from baseColorFactor, with a small default metalness
-            // so the mesh still shades visibly under direct lighting.
+
             let mut color = [1.0, 1.0, 1.0];
             let mut metalness = 0.05;
             let mut roughness = 0.5;
@@ -448,8 +433,6 @@ fn load_gltf_visit(
     }
 }
 
-// gltf_to_geometry bakes loaded glTF meshes (world transforms applied) into a
-// single Geometry (a union when the file holds several meshes).
 pub fn gltf_to_geometry(outs: &[GltfMeshOut]) -> Geometry {
     let mut kids: Vec<Geometry> = Vec::new();
     for o in outs {
@@ -472,8 +455,6 @@ pub fn gltf_to_geometry(outs: &[GltfMeshOut]) -> Geometry {
     Geometry::CsgGeometry(csg_geometry(CsgOp::Union, kids))
 }
 
-// gltf_material builds a solid-colour Material from a loaded GltfMeshOut using
-// its base colour + metalness / roughness / emissive (no textures are loaded).
 pub fn gltf_material(o: GltfMeshOut) -> Material {
     standard_material(MaterialParams {
         color: color_rgb(o.color[0], o.color[1], o.color[2]),
@@ -486,9 +467,6 @@ pub fn gltf_material(o: GltfMeshOut) -> Material {
     })
 }
 
-// resolve_gltf_buffer returns the bytes for one glTF buffer.  `uri` may be empty
-// (GLB embedded BIN chunk), a data URI (base64), or a path relative to the
-// containing .gltf file.
 fn resolve_gltf_buffer(path: &str, uri: &str, embedded: &[u8]) -> Result<Vec<u8>, String> {
     if uri.is_empty() {
         return Ok(embedded.to_vec());
@@ -512,8 +490,6 @@ fn resolve_gltf_buffer(path: &str, uri: &str, embedded: &[u8]) -> Result<Vec<u8>
     };
     std::fs::read(&full).map_err(|_| format!("cannot read glTF buffer {full}"))
 }
-
-// --- JSON parsing (serde_json::Value walk, zero-value defaults) ---------------
 
 fn j_int(v: &Value, key: &str) -> i32 {
     v.get(key).and_then(|x| x.as_i64()).unwrap_or(0) as i32
@@ -631,14 +607,11 @@ fn parse_gltf_root(json_text: &str) -> Result<GltfRoot, String> {
     Ok(root)
 }
 
-// load_gltf reads a .glb (binary) or .gltf (JSON) file and returns
-// [(vertices, faces, world_transform)].
 pub fn load_gltf(path: &str) -> Result<Vec<GltfMeshOut>, String> {
     let data = std::fs::read(path).map_err(|_| format!("cannot read {path}"))?;
     let mut json_text = String::new();
     let mut bin_chunk: Vec<u8> = Vec::new();
     if data.len() >= 4 && u32::from_le_bytes(data[0..4].try_into().unwrap()) == 0x46546C67 {
-        // GLB binary container: 12-byte header + JSON + optional BIN chunks.
         if u32::from_le_bytes(data[4..8].try_into().unwrap()) != 2 {
             return Err(format!("{path}: only glTF 2.0 supported"));
         }
@@ -655,14 +628,13 @@ pub fn load_gltf(path: &str) -> Result<Vec<GltfMeshOut>, String> {
             offset += 8 + clen;
         }
     } else {
-        // Plain .gltf JSON document.
         json_text = String::from_utf8_lossy(&data).into_owned();
     }
     let gltf = parse_gltf_root(&json_text).map_err(|e| format!("bad glTF JSON: {e}"))?;
     if gltf.scenes.is_empty() {
         return Ok(Vec::new());
     }
-    // Resolve every buffer once (bufferView.buffer indexes into this list).
+
     let mut bins: Vec<Vec<u8>> = vec![Vec::new(); gltf.buffers.len()];
     for (i, buf) in gltf.buffers.iter().enumerate() {
         bins[i] = resolve_gltf_buffer(path, &buf.uri, &bin_chunk)?;
@@ -723,7 +695,6 @@ mod tests {
 
     #[test]
     fn test_gltf_json_roundtrip() {
-        // plain .gltf (JSON) with an external .bin buffer, like a typical exporter
         let (verts, faces) = tetra();
         let mut bin: Vec<u8> = Vec::new();
         for p in &verts {
@@ -774,21 +745,18 @@ mod tests {
                 color: Some([0.8, 0.2, 0.2]),
             }],
         );
-        // the color must be written as a baseColorFactor material
+
         let data = std::fs::read("/tmp/cga_color.glb").expect("read glb");
         let text = String::from_utf8_lossy(&data);
         assert!(text.contains("baseColorFactor"));
         assert!(text.contains("0.8,0.2,0.2"));
-        // and the file must still load back
+
         let out = load_gltf("/tmp/cga_color.glb").unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].vertices.len(), 4);
         std::fs::remove_file("/tmp/cga_color.glb").ok();
     }
 
-    // test_gltf_solid_color_material loads a real asset and checks the loader no
-    // longer decodes textures — the resulting Material is a plain solid colour built
-    // from the PBR factor (no `map`), so meshes render uniformly.
     #[test]
     fn test_gltf_solid_color_material() {
         let path = concat!(
@@ -798,9 +766,9 @@ mod tests {
         let out = load_gltf(path).unwrap();
         assert_eq!(out.len(), 1);
         let m = out[0].clone();
-        // the mesh still carries geometry + per-vertex UVs
+
         assert!(!m.uv.is_empty());
-        // and the Material the renderer consumes is untextured solid colour
+
         let mat = gltf_material(m);
         assert!(mat.map.is_none());
         assert!(mat.metalness >= 0.0 && mat.metalness <= 1.0);

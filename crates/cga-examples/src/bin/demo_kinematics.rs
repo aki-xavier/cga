@@ -1,5 +1,3 @@
-// Kinematics demo: gears + crank-slider + spiral trajectory driven by Motor.
-// Saves PNG frames and an animated GIF.
 use cga_core::*;
 use cga_examples::{data_f32, mlx_frame_gc};
 use cga_gpu::*;
@@ -118,14 +116,14 @@ fn build_scene() -> KinScene {
     ks.scene
         .add_light(point_light(color_hex(0xFFFFFF), 0.5, [-4.0, 6.0, 4.0]));
     ks.scene.add_light(ambient_light(color_hex(0xFFFFFF), 0.4));
-    // gears: big (16 teeth) at origin, small (8 teeth) at x=2.4
+
     ks.big = gear_meshes(&mut ks, 1.28, 1.6, 16, 0.4, color_hex(0xC8A24A));
     ks.small = gear_meshes(&mut ks, 0.64, 0.8, 8, 0.4, color_hex(0x9BA1A6));
     for &idx in &ks.small.clone() {
         let m = translator([2.4, 0.0, 0.0]).gp(&ks.scene.objects[idx].motor());
         ks.scene.objects[idx].motor_override = Some(m);
     }
-    // crank-slider (rear z=2.6 plane)
+
     let crank_c = [-1.6, 0.6, 2.6];
     ks.scene.add_mesh(mesh(MeshParams {
         geometry: Geometry::CylinderGeometry(cylinder_geometry(0.55, 0.25)),
@@ -193,7 +191,7 @@ fn build_scene() -> KinScene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    // spiral ball
+
     ks.scene.add_mesh(mesh(MeshParams {
         geometry: Geometry::SphereGeometry(sphere_geometry(0.18)),
         material: standard_material(MaterialParams {
@@ -284,10 +282,10 @@ fn main() {
         let img = r.render(ks.scene.clone(), cam);
         gif_frames.push(f32_rgba_to_u8(&data_f32(&img)));
         drop(img);
-        // 每帧收尾：drop 释放死 Metal buffer，再把 MLX 不复用的 cache 还给 OS
+
         mlx_frame_gc();
     }
-    // 以仓库根目录为 CWD 运行
+
     let out = "examples/kinematics";
     save_gif(&format!("{out}/kinematics.gif"), &gif_frames, 360, 270, 5);
 }

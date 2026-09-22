@@ -1,9 +1,5 @@
-// PNG read/write helpers (RGBA, 8-bit) built on the `image` crate, so render
-// output can be saved to disk and PNGs decoded back.
-
 use mlx_rs::Array;
 
-// save_frame_png writes an (H, W, 4) float32 render frame as a PNG file.
 pub fn save_frame_png(path: &str, img: &Array) {
     let sh = img.shape();
     let h = sh[0];
@@ -13,7 +9,6 @@ pub fn save_frame_png(path: &str, img: &Array) {
     save_png_rgba(path, w, h, &f32_rgba_to_u8(&data));
 }
 
-// frame_to_png_bytes encodes an (H, W, 4) float32 render frame as PNG bytes.
 pub fn frame_to_png_bytes(img: &Array) -> Vec<u8> {
     let sh = img.shape();
     let h = sh[0];
@@ -23,7 +18,6 @@ pub fn frame_to_png_bytes(img: &Array) -> Vec<u8> {
     encode_png_rgba(w, h, &f32_rgba_to_u8(&data))
 }
 
-// encode_png_rgba encodes an RGBA image (row-major bytes) as PNG bytes.
 pub fn encode_png_rgba(width: i32, height: i32, rgba: &[u8]) -> Vec<u8> {
     let img = image::RgbaImage::from_raw(width as u32, height as u32, rgba.to_vec())
         .expect("RGBA buffer size does not match width*height*4");
@@ -33,13 +27,11 @@ pub fn encode_png_rgba(width: i32, height: i32, rgba: &[u8]) -> Vec<u8> {
     out.into_inner()
 }
 
-// save_png_rgba writes an RGBA image (row-major bytes) as a PNG file.
 pub fn save_png_rgba(path: &str, width: i32, height: i32, rgba: &[u8]) {
     std::fs::write(path, encode_png_rgba(width, height, rgba))
         .unwrap_or_else(|_| panic!("cannot write {path}"));
 }
 
-// f32_rgba_to_u8 converts float RGBA (0..255) to byte RGBA.
 pub fn f32_rgba_to_u8(data: &[f32]) -> Vec<u8> {
     let mut out = vec![0u8; data.len()];
     for (i, v) in data.iter().enumerate() {
@@ -55,18 +47,11 @@ pub fn f32_rgba_to_u8(data: &[f32]) -> Vec<u8> {
     out
 }
 
-// load_png_rgba decodes an 8-bit non-interlaced PNG (greyscale / RGB / RGBA /
-// greyscale+alpha) into RGBA bytes, returning (pixels, width, height).
 pub fn load_png_rgba(path: &str) -> Result<(Vec<u8>, i32, i32), String> {
     let data = std::fs::read(path).map_err(|_| format!("cannot read {path}"))?;
     decode_png_rgba(&data)
 }
 
-// decode_png_rgba decodes a PNG (greyscale / RGB / RGBA / greyscale+alpha) from
-// raw bytes into RGBA bytes, returning (pixels, w, h).
-//
-// 16-bit, interlaced and palette PNGs are accepted too: the `image` crate
-// converts them to RGBA8 rather than rejecting them.
 pub fn decode_png_rgba(data: &[u8]) -> Result<(Vec<u8>, i32, i32), String> {
     if data.len() < 8 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 {
         return Err("not a PNG".to_string());

@@ -1,31 +1,19 @@
-//! mlxops — thin scalar-broadcast helpers over `mlx_rs::Array`.
-//!
-//! Scalar helpers (`fs`, `arr3`, `arr3v`, `s_add`, …) all operate in float32,
-//! matching the render-kernel dtype.
-//!
-//! These wrappers `unwrap()` internally and return `Array` directly, so MLX
-//! errors panic where they occur.
-
 use mlx_rs::ops;
 use mlx_rs::Array;
 
-/// Unwrap helper for MLX results (panics on error).
 pub fn ck(r: Result<Array, mlx_rs::error::Exception>) -> Array {
     r.unwrap()
 }
 
-/// fs returns a 0-d float32 scalar array (broadcasts in elementwise ops).
 #[inline]
 pub fn fs(v: f64) -> Array {
     Array::from_f32(v as f32)
 }
 
-/// arr3 builds a (3,) float32 array from three f64 values.
 pub fn arr3(a: f64, b: f64, c: f64) -> Array {
     Array::from_slice(&[a as f32, b as f32, c as f32], &[3])
 }
 
-/// arr3v builds a (3,) float32 array from a [f64; 3].
 pub fn arr3v(v: [f64; 3]) -> Array {
     arr3(v[0], v[1], v[2])
 }

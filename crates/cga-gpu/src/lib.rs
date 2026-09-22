@@ -1,7 +1,3 @@
-//! cga-gpu — MLX/Metal GPU batch kernels + ray tracing renderer.
-//!
-//! All submodules are re-exported flat at the crate root.
-
 pub mod mlxops;
 pub use mlxops::*;
 

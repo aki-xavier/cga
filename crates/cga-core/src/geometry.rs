@@ -1,14 +1,7 @@
-// Geometry types: CGA-blade primitives (sphere / plane / cylinder / box /
-// circle) plus their per-frame camera-space parameters.  `geom_to_camera`
-// computes the parameters (CPU-side versor conjugation); the per-pixel
-// intersection kernels live in cga-gpu's geometry_ops.rs.
-
 use crate::affine_geom::{AffineGeometry, AffineParams};
 use crate::csg_node::{CsgGeometry, CsgParams};
 use crate::primitives::{circle, cylinder, plane, sphere, Cylinder};
 use crate::{Mat3, Multivector};
-
-// --- per-geometry camera-space parameters ------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 pub struct SphereParams {
@@ -28,7 +21,7 @@ pub struct CylinderParams {
     pub q: [f64; 3],
     pub u: [f64; 3],
     pub r: f64,
-    pub h: f64, // half-length; -1.0 means infinite cylinder
+    pub h: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,7 +88,6 @@ pub struct TrimeshParams {
     pub hi: [f64; 3],
 }
 
-// GeometryParams is the sum of all camera-space parameter variants.
 #[derive(Clone, Debug)]
 pub enum GeometryParams {
     AffineParams(AffineParams),
@@ -111,8 +103,6 @@ pub enum GeometryParams {
     PlaneParams(PlaneParams),
     SphereParams(SphereParams),
 }
-
-// --- geometry structs --------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 pub struct SphereGeometry {
@@ -144,7 +134,7 @@ pub fn plane_geometry(normal: [f64; 3], distance: f64) -> PlaneGeometry {
 #[derive(Clone, Copy, Debug)]
 pub struct CylinderGeometry {
     pub radius: f64,
-    pub half: f64, // -1.0 = infinite
+    pub half: f64,
     pub blade: Cylinder,
 }
 
@@ -199,7 +189,6 @@ pub fn circle_geometry(radius: f64) -> CircleGeometry {
     }
 }
 
-// Geometry is the sum type of all renderable geometries.
 #[derive(Clone, Debug)]
 pub enum Geometry {
     AffineGeometry(AffineGeometry),
@@ -216,7 +205,6 @@ pub enum Geometry {
     CircleGeometry(CircleGeometry),
 }
 
-// TriUvs is one triangle's three UV pairs (u0,u1,u2), stored as scalars.
 #[derive(Clone, Copy, Debug)]
 pub struct TriUvs {
     pub u0x: f64,
@@ -234,12 +222,11 @@ pub struct TrimeshGeometry {
     pub e1: Vec<[f64; 3]>,
     pub e2: Vec<[f64; 3]>,
     pub nrm: Vec<[f64; 3]>,
-    pub uv: Vec<TriUvs>, // per-face; empty when the mesh has no UVs
+    pub uv: Vec<TriUvs>,
     pub lo: [f64; 3],
     pub hi: [f64; 3],
 }
 
-// trimesh_geometry builds a triangle mesh (flat shading, no BVH).
 pub fn trimesh_geometry(vertices: &[[f64; 3]], faces: &[[i32; 3]]) -> TrimeshGeometry {
     if faces.is_empty() {
         panic!("trimesh needs >= 1 face");
@@ -292,8 +279,6 @@ pub fn trimesh_geometry(vertices: &[[f64; 3]], faces: &[[i32; 3]]) -> TrimeshGeo
     }
 }
 
-// trimesh_geometry_uv is trimesh_geometry but also carries per-vertex UVs
-// (parallel to `vertices`) as per-face UV triples for texture sampling.
 pub fn trimesh_geometry_uv(
     vertices: &[[f64; 3]],
     faces: &[[i32; 3]],
@@ -402,9 +387,6 @@ pub fn cyclide_geometry(a: f64, b: f64, d: f64, shift: [f64; 3]) -> CyclideGeome
     }
     CyclideGeometry { a, b, d, shift }
 }
-
-// geom_to_camera conjugates a geometry's blade into camera space and returns
-// the camera-space parameters.
 
 pub fn vec3_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [

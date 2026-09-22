@@ -1,12 +1,9 @@
-// CSG boolean demo: difference / intersection / union side by side.
-// Run: cargo run -p cga-examples --bin demo_csg
 use cga_core::*;
 use cga_gpu::*;
 
 fn main() {
     let mut sc = scene(None);
 
-    // ground plane
     sc.add_mesh(mesh(MeshParams {
         geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
         material: standard_material(MaterialParams {
@@ -24,7 +21,6 @@ fn main() {
         motor: None,
     }));
 
-    // difference: box with a spherical hole (box half 0.8, sphere 0.55)
     let diff = Geometry::CsgGeometry(csg_geometry(
         CsgOp::Difference,
         vec![
@@ -49,7 +45,6 @@ fn main() {
         motor: None,
     }));
 
-    // intersection: box clipped by a larger sphere -> rounded box
     let inter = Geometry::CsgGeometry(csg_geometry(
         CsgOp::Intersection,
         vec![
@@ -74,7 +69,6 @@ fn main() {
         motor: None,
     }));
 
-    // union: box + sphere
     let un = Geometry::CsgGeometry(csg_geometry(
         CsgOp::Union,
         vec![
@@ -115,7 +109,6 @@ fn main() {
     let mut renderer = renderer(480, 360, 2, 3);
     let img = renderer.render(sc, camera);
 
-    // 以仓库根目录为 CWD 运行
     let out = "examples/csg";
 
     save_frame_png(&format!("{out}/demo_csg.png"), &img);

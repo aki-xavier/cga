@@ -1,8 +1,3 @@
-// Off-screen ray tracing renderer (MLX batch).  render(scene, camera) returns
-// an (H, W, 4) float32 RGBA frame (0..255).  Supports opaque + transparent
-// materials (Whitted Fresnel reflection / Beer refraction), hard shadows, SSAA
-// and sRGB encode.
-
 use crate::geom_kernels::geom_to_camera;
 use crate::geometry_ops::{geom_bounds, geom_intersect, geom_shadow, geom_uv};
 use crate::mesh_raster::rasterize_meshes;
@@ -15,6 +10,19 @@ use crate::texture::WrapMode;
 use cga_core::{Geometry, GeometryParams};
 use mlx_rs::{ops, Array};
 
+#[derive(Clone, Debug)]
+pub struct Truth {
+    pub hit: Array,
+
+    pub t: Array,
+
+    pub normal: Array,
+
+    pub index: Array,
+
+    pub vis: Vec<Array>,
+}
+
 #[derive(Debug)]
 pub struct Renderer {
     pub width: i32,
@@ -24,15 +32,11 @@ pub struct Renderer {
     pub cam: Option<PerspectiveCamera>,
 }
 
-// renderer builds a Renderer (aa = supersampling factor).
 pub fn renderer(width: i32, height: i32, aa: i32, max_depth: i32) -> Renderer {
     if aa < 1 {
         panic!("aa must be >= 1, got {}", aa);
     }
-    // A frame needs a positive extent on both axes.  The ray bundle is built by concatenating one
-    // tile per supersample, so an empty frame builds an empty bundle, and its zero-length axis
-    // then propagates through every later broadcast as a shape error that names the array
-    // operation rather than the frame that asked for it.
+
     if width < 1 || height < 1 {
         panic!("renderer needs a positive extent, got {}x{}", width, height);
     }
@@ -46,7 +50,6 @@ pub fn renderer(width: i32, height: i32, aa: i32, max_depth: i32) -> Renderer {
 }
 
 impl Renderer {
-    // build_rays builds the (aa^2 * H * W, 3) camera-space unit ray directions.
     fn build_rays(&mut self) -> Array {
         let hh = self.height;
         let ww = self.width;
@@ -82,8 +85,11 @@ impl Renderer {
         ck(rays.divide(&n))
     }
 
-    // render produces the (H, W, 4) uint8 RGBA frame.
     pub fn render(&mut self, scene: Scene, camera: PerspectiveCamera) -> Array {
+        self.render_with_truth(scene, camera).0
+    }
+
+    pub fn render_with_truth(&mut self, scene: Scene, camera: PerspectiveCamera) -> (Array, Truth) {
         self.cam = Some(camera);
         let rays = self.build_rays();
         let o = ck(ops::zeros_like(&rays));
@@ -101,7 +107,7 @@ impl Renderer {
                 lit.push(light_to_camera(*light, camera.motor));
             }
         }
-        // ray-trace CGA analytic primitives; rasterize direct triangle meshes
+
         let mut ray_objs: Vec<Mesh> = Vec::new();
         let mut mesh_objs: Vec<Mesh> = Vec::new();
         for obj in &scene.objects {
@@ -115,12 +121,13 @@ impl Renderer {
         s2.objects = ray_objs;
         let in_medium = ck(ops::zeros::<bool>(&[n_rays]));
         let sigma = ck(ops::zeros::<f32>(&[n_rays]));
-        let (mut rgb, t) = self.trace(&s2, &o, &rays, &lit, ambient, &bg, &in_medium, &sigma, 0);
+        let (mut rgb, t, truth) =
+            self.trace(&s2, &o, &rays, &lit, ambient, &bg, &in_medium, &sigma, 0);
         let s = self.aa * self.aa;
         if s > 1 {
             rgb = ck(ck(rgb.reshape(&[s, n_rays / s, 3])).mean_axes(&[0], false));
         }
-        // camera-space depth of the analytic hit (min over subsamples) for compositing
+
         let mut dz = ck(t.multiply(ck(rays.take_axis(Array::from_int(2), 1))));
         if s > 1 {
             dz = ck(ck(dz.reshape(&[s, n_rays / s])).min_axes(&[0], false));
@@ -135,7 +142,7 @@ impl Renderer {
             let rr = rasterize_meshes(&mesh_objs, &camera, ww, hh, fx, fy, cx, cy, &lit, ambient);
             let rt_d = ck(dz.reshape(&[hh, ww]));
             let closer = ck(rr.depth.lt(&rt_d));
-            // rgb is [H*W,3]; flatten rr to match before compositing
+
             rgb = ck(ops::select(
                 ck(ck(closer.reshape(&[hh * ww])).expand_dims(1)),
                 ck(rr.color.reshape(&[hh * ww, 3])),
@@ -153,12 +160,12 @@ impl Renderer {
             -1,
         ));
         rgba = s_clip(&s_add(&s_mul(&rgba, 255.0), 0.5), 0.0, 255.0);
-        ck(rgba.reshape(&[self.height, self.width, 4]))
+        (
+            ck(rgba.reshape(&[self.height, self.width, 4])),
+            truth.expect("the primary pass states a truth"),
+        )
     }
 
-    // trace returns the (N,3) linear colour + the primary ray distance for a ray
-    // bundle.  Transparent hits split into Fresnel reflection + refraction (Beer
-    // absorption) up to max_depth.
     #[allow(clippy::too_many_arguments)]
     fn trace(
         &self,
@@ -171,13 +178,25 @@ impl Renderer {
         in_medium: &Array,
         sigma: &Array,
         depth: i32,
-    ) -> (Array, Array) {
-        let (hit, t, n0, local, op, ior, abso) =
+    ) -> (Array, Array, Option<Truth>) {
+        let (hit, t, n0, local, op, ior, abso, index, vis) =
             self.nearest(scene, o, d, lit, ambient, depth == 0);
         let mut cos_i = ck(ck(ck(d.multiply(&n0)).sum_axes(&[-1], true)).negative());
         let n = ck(ops::select(s_lt(&cos_i, 0.0), ck(n0.negative()), &n0));
         cos_i = ck(cos_i.abs());
         let mut result = ck(ops::select(ck(hit.expand_dims(1)), &local, bg));
+
+        let truth = if depth == 0 {
+            Some(Truth {
+                hit: hit.clone(),
+                t: t.clone(),
+                normal: n.clone(),
+                index,
+                vis,
+            })
+        } else {
+            None
+        };
         if depth < self.max_depth {
             let need = ck(hit.logical_and(s_lt(&op, 1.0)));
             if ck(need.sum(None)).item_cast::<f32>() > 0.0 {
@@ -202,7 +221,7 @@ impl Renderer {
                     .add(ck(n.multiply(ck(ck(eta.multiply(&cos_i)).subtract(&cos_t))))));
                 let entering = ck(in_medium.logical_not());
                 let sig_next = ck(ops::select(&entering, &abso, fs(0.0)));
-                let (refl, _) = self.trace(
+                let (refl, _, _) = self.trace(
                     scene,
                     &ck(p.add(s_mul(&n, 1e-3))),
                     &d_r,
@@ -213,7 +232,7 @@ impl Renderer {
                     sigma,
                     depth + 1,
                 );
-                let (refr, _) = self.trace(
+                let (refr, _, _) = self.trace(
                     scene,
                     &ck(p.subtract(s_mul(&n, 1e-3))),
                     &d_t,
@@ -239,10 +258,9 @@ impl Renderer {
             ck(ck(ck(ck(sigma.negative()).multiply(&t)).expand_dims(1)).exp()),
             fs(1.0),
         ));
-        (ck(result.multiply(&att)), t)
+        (ck(result.multiply(&att)), t, truth)
     }
 
-    // nearest intersects a ray bundle against all objects and shades the nearest hit.
     fn nearest(
         &self,
         scene: &Scene,
@@ -251,11 +269,17 @@ impl Renderer {
         lit: &[Light],
         ambient: Option<Light>,
         primary: bool,
-    ) -> (Array, Array, Array, Array, Array, Array, Array) {
-        // The ray bundle is the shape every later broadcast is measured against, so it is checked
-        // here rather than left to the first array operation that notices.  A bundle that is not
-        // (N, 3), or an empty one, would otherwise fail inside whichever broadcast reaches it first,
-        // and the error would name that operation instead of the caller that built the rays.
+    ) -> (
+        Array,
+        Array,
+        Array,
+        Array,
+        Array,
+        Array,
+        Array,
+        Array,
+        Vec<Array>,
+    ) {
         let oshape = o.shape();
         let dshape = d.shape();
         if oshape.len() != 2
@@ -306,7 +330,7 @@ impl Renderer {
             ));
         }
         let hit = ck(best_t.is_finite());
-        // gather per-object material scalars
+
         let mut op = ck(ops::ones::<f32>(&[n_rays]));
         let mut ior = ck(ops::full::<f32>(&[n_rays], &fs(1.5)));
         let mut abso = ck(ops::zeros::<f32>(&[n_rays]));
@@ -333,7 +357,7 @@ impl Renderer {
             &best_n,
         ));
         let p = ck(o.add(ck(ck(best_t.expand_dims(1)).multiply(d))));
-        // shadow rays
+
         let p_s = ck(p.add(s_mul(&best_n, 1e-3)));
         let mut vis: Vec<Array> = Vec::new();
         for light in lit {
@@ -355,7 +379,7 @@ impl Renderer {
             }
             vis.push(v);
         }
-        // batched shading
+
         let mut acc = ck(ops::zeros::<f32>(&[n_rays, 3]));
         if !objs.is_empty() {
             let mut em_arr: Vec<Array> = Vec::new();
@@ -389,11 +413,10 @@ impl Renderer {
                 }
             }
         }
-        (hit, best_t, best_n, acc, op, ior, abso)
+        (hit, best_t, best_n, acc, op, ior, abso, best_idx, vis)
     }
 }
 
-// render_frame is the single-frame convenience entry point.
 pub fn render_frame(
     scene: Scene,
     camera: PerspectiveCamera,
@@ -442,8 +465,6 @@ mod tests {
             absorption: 0.0,
         })
     }
-
-    // --- engine tests ----------------------------------------------------------
 
     fn render_center(geom: Geometry, pos: [f64; 3], name: &str) -> [f32; 3] {
         let mut sc = scene(None);
@@ -508,10 +529,6 @@ mod tests {
 
     #[test]
     fn test_render_cyclide_nonempty() {
-        // ring cyclide (c < d < a): a=1, b=0.98, d=0.3 gives c~=0.199, a proper
-        // torus-like ring.  (d == c would be a degenerate horn with a cusp that
-        // fills the frame.)  The centre pixel is the ring's hole, so count
-        // red-dominant pixels instead of sampling the centre.
         let mut sc = scene(None);
         sc.add_mesh(mesh(MeshParams {
             geometry: Geometry::CyclideGeometry(cyclide_geometry(1.0, 0.98, 0.3, [0.0, 0.0, 0.0])),
@@ -625,11 +642,6 @@ mod tests {
         assert!(hit > 100);
     }
 
-    // --- render quantitative tests --------------------------------------------
-    //
-    // Render pipeline quantitative checks: sRGB roundtrip, ior=1 invisibility,
-    // Beer absorption, shadow umbra.  Expected values derive from first principles.
-
     fn rq_linear_to_srgb255(lum: f64) -> i32 {
         let l = lum.clamp(0.0, 1.0);
         let s = if l <= 0.0031308 {
@@ -693,7 +705,7 @@ mod tests {
     #[test]
     fn test_render_ior1_invisible() {
         let mut sc = rq_wall_scene();
-        // ior=1 & opacity=0 & absorption=0 -> exactly invisible (F=0, no bending)
+
         sc.add_mesh(mesh(MeshParams {
             geometry: Geometry::SphereGeometry(sphere_geometry(0.8)),
             material: standard_material(MaterialParams {
@@ -755,7 +767,7 @@ mod tests {
                 assert!((f64::from(px[i]) - f64::from(want)).abs() <= 2.0);
             }
         }
-        // sigma=0 -> no attenuation (exact wall colour)
+
         let px0 = rq_slab(1.0, 0.0);
         assert!(px0[0] as i32 == 204 && px0[1] as i32 == 51 && px0[2] as i32 == 51);
     }
@@ -817,7 +829,6 @@ mod tests {
 
     #[test]
     fn test_render_shadow_umbra_is_ambient_only() {
-        // umbra = ambient only: white ground dec=1.0, L = 0.2
         let mut r = renderer(96, 96, 1, 3);
         let img = r.render(rq_shadow_scene(Some(1.0)), rq_shadow_cam());
         let p = rq_px(&img, 96, 48, 48);

@@ -1,5 +1,3 @@
-// geom_kernels — mlx batch kernels extracted from the cga root package.
-
 use cga_core::{
     affine_from_motor, e1, e2, e3, mat3_new, mat3_transpose, motor_identity, point,
     sphere_from_dual, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry, GeometryParams,
@@ -374,7 +372,7 @@ pub fn csg_bounds(p: &CsgParams) -> Option<[[f64; 3]; 2]> {
         }
         return Some([bmin, bmax]);
     }
-    // intersection
+
     let mut bmin = [0.0; 3];
     let mut bmax = [0.0; 3];
     let mut first = true;
@@ -407,7 +405,6 @@ pub(crate) fn to_f32_3(v: &[[f64; 3]]) -> Vec<f32> {
     out
 }
 
-// tri_mlx converts the CPU TrimeshParams fields to mlx arrays for the kernels.
 pub(crate) fn tri_mlx(p: &TrimeshParams) -> (Array, Array, Array, Array) {
     (
         Array::from_slice(&to_f32_3(&p.v0), &[p.v0.len() as i32, 3]),
@@ -424,12 +421,6 @@ mod tests {
         affine_geometry, box_geometry, cone_geometry, csg_geometry, decompose_rigid, extrude,
         motor_rotor, translator, trimesh_geometry,
     };
-
-    // Regression tests for geometry under non-identity transforms:
-    //   - cone_contains / trimesh_contains now map query points back to the
-    //     local frame (they used to ignore a_inv3/t_inv);
-    //   - box_intersect now rotates normals into camera space and flips the
-    //     exit-face normal for inside starts (matching box_crossings).
 
     fn tf_ray(x: f64, y: f64, z: f64) -> Array {
         Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
@@ -467,8 +458,7 @@ mod tests {
     #[test]
     fn test_moved_cone_contains() {
         let g = Geometry::ConeGeometry(cone_geometry(1.0, 2.0));
-        // cone translated +1 in x: (1.2,0,0) -> local (0.2,0,0), inside;
-        // (1.6,0,0) -> local (0.6,0,0), outside (radius at s=-1 is 0.5)
+
         assert_eq!(
             tf_contains(
                 &g,
@@ -477,7 +467,7 @@ mod tests {
             ),
             [true, false]
         );
-        // the identity case the old code already got right
+
         assert_eq!(
             tf_contains(&g, &motor_identity(), &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]),
             [true, false]
@@ -488,9 +478,7 @@ mod tests {
     fn test_moved_mesh_contains() {
         let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
         let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
-        // mesh translated +5 in x: (5.5,0.4,0.5) inside; (5.5,1.5,0.5) outside.
-        // (y=0.4 avoids the side-quad diagonal, where the parity ray would
-        // double-count the two triangles sharing the edge.)
+
         assert_eq!(
             tf_contains(
                 &g,
@@ -507,7 +495,6 @@ mod tests {
 
     #[test]
     fn test_csg_moved_cone_contains() {
-        // realistic path: cone as a CSG child, the whole node moved
         let g = Geometry::CsgGeometry(csg_geometry(
             CsgOp::Union,
             vec![
@@ -547,10 +534,6 @@ mod tests {
 
     #[test]
     fn test_rotated_box_normal() {
-        // box rotated 30 deg about x; a ray straight down -z hits the tilted local
-        // +z face (not an edge at this angle): plane n.x = 0.5 with
-        // n = R_x(30) . [0,0,1] = [0, -sin(30), cos(30)], so
-        // t = (0.866 * 5 - 0.5) / 0.866 = 4.4226
         let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
         let m = motor_rotor([1.0, 0.0, 0.0], std::f64::consts::PI / 6.0);
         let (t, n, hit) = tf_hit(&g, &m, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -563,8 +546,6 @@ mod tests {
 
     #[test]
     fn test_box_inside_exit_normal() {
-        // ray starts inside an axis-aligned box and exits through the +x face:
-        // the outward normal is +x (used to be flipped to -x)
         let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
         let (t, n, hit) = tf_hit(&g, &motor_identity(), [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         assert!(hit);
@@ -576,7 +557,6 @@ mod tests {
 
     #[test]
     fn test_box_entry_normal_unchanged() {
-        // axis-aligned box from outside: identical behaviour before/after the fix
         let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
         let (t, n, hit) = tf_hit(&g, &motor_identity(), [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(hit);
@@ -585,9 +565,6 @@ mod tests {
         assert!(f64::from(n[1]).abs() < 1e-2);
         assert!((f64::from(n[2]) - 1.0).abs() < 1e-2);
     }
-
-    // --- extended modeling tests --------------------------------------------------
-    // (glb / cgs tests live with mesh_io_gltf.rs / scene_lang.rs)
 
     fn em_ray(x: f64, y: f64, z: f64) -> Array {
         Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
@@ -621,8 +598,6 @@ mod tests {
         got.eval().unwrap();
         got.as_slice::<bool>().to_vec()
     }
-
-    // --- affine ------------------------------------------------------------------
 
     #[test]
     fn test_affine_scaled_sphere() {
@@ -661,11 +636,8 @@ mod tests {
         assert!((tm[11] - 3.0).abs() < 1e-4);
     }
 
-    // --- new primitives ----------------------------------------------------------
-
     #[test]
     fn test_cone_side_ray() {
-        // r=1 h=2 (k=0.5): at z=-0.5 (s=-1.5) the radius is 0.75 -> t = 4.25
         let g = Geometry::ConeGeometry(cone_geometry(1.0, 2.0));
         let (t, _, m) = em_hit(&g, [5.0, 0.0, -0.5], [-1.0, 0.0, 0.0]);
         assert!(m);
@@ -708,10 +680,8 @@ mod tests {
         let g = Geometry::EllipsoidGeometry(cga_core::ellipsoid_geometry(2.0, 1.0, 1.0));
         let (t, _, m) = em_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
-        assert!((f64::from(t) - 4.0).abs() < 1e-4); // z semi-axis = 1
+        assert!((f64::from(t) - 4.0).abs() < 1e-4);
     }
-
-    // --- modeling builders -------------------------------------------------------
 
     #[test]
     fn test_earclip_l_shape() {
@@ -723,7 +693,7 @@ mod tests {
             [2.0, 4.0],
             [0.0, 4.0],
         ];
-        assert_eq!(cga_core::triangulate(&l).len(), 4); // 6-vertex L -> 4 triangles
+        assert_eq!(cga_core::triangulate(&l).len(), 4);
     }
 
     #[test]
@@ -742,7 +712,7 @@ mod tests {
         let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
         let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
-        assert!((f64::from(t) - 3.5).abs() < 1e-5); // top cap z = 1.5
+        assert!((f64::from(t) - 3.5).abs() < 1e-5);
         let (_, _, m2) = em_hit(&g, [3.0, 3.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(!m2);
         assert_eq!(
@@ -764,10 +734,8 @@ mod tests {
         let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
         let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
-        assert!((f64::from(t) - 4.0).abs() < 1e-4); // top cap z = 1
+        assert!((f64::from(t) - 4.0).abs() < 1e-4);
     }
-
-    // --- mesh IO -----------------------------------------------------------------
 
     #[test]
     fn test_obj_roundtrip() {
@@ -793,10 +761,6 @@ mod tests {
         }
         let _ = std::fs::remove_file("/tmp/cga_em_obj.obj");
     }
-
-    // --- CGS v3 ------------------------------------------------------------------
-    // (test_cgs_glb_roundtrip lives with mesh_io_gltf.rs; the cgs_load-dependent
-    // tests below were enabled once scene_lang.rs landed)
 
     fn geom_kind(g: &Geometry) -> &'static str {
         match g {
@@ -851,7 +815,6 @@ mod tests {
 
     #[test]
     fn test_cgs_gltf_mesh() {
-        // save a GLB then load it back through the CGS mesh() primitive
         let (verts, faces) = extrude(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], 1.0);
         crate::save_glb(
             "/tmp/cga_cgs.glb",

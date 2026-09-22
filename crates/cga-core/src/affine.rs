@@ -1,13 +1,7 @@
-// Affine geometry helpers: the ray-inverse-transform used by non-blade
-// primitives (cone / torus / ellipsoid / cyclide / trimesh) and the general
-// scale/mirror/shear wrapper.  Pure-CPU matrix helpers + the MLX `vecmat`
-// row-vector × matrix contraction.
-
 use crate::mesh_io::mat4_mul;
 use crate::motors::{mat3_mul, mat3_new, motor_from_matrix, Mat3};
 use crate::Multivector;
 
-// mat3_transpose returns m^T.
 pub fn mat3_transpose(m: Mat3) -> Mat3 {
     mat3_new(
         [m[0][0], m[1][0], m[2][0]],
@@ -16,7 +10,6 @@ pub fn mat3_transpose(m: Mat3) -> Mat3 {
     )
 }
 
-// mat3_inv returns the inverse of a 3x3 matrix (adjugate / det).
 pub fn mat3_inv(m: Mat3) -> Mat3 {
     let a = m[0][0];
     let b = m[0][1];
@@ -41,7 +34,6 @@ pub fn mat3_inv(m: Mat3) -> Mat3 {
     )
 }
 
-// mat3_to_mat4 embeds a 3x3 linear block in a row-major 4x4 matrix.
 pub fn mat3_to_mat4(l: Mat3) -> [f64; 16] {
     [
         l[0][0], l[0][1], l[0][2], 0.0, l[1][0], l[1][1], l[1][2], 0.0, l[2][0], l[2][1], l[2][2],
@@ -49,13 +41,6 @@ pub fn mat3_to_mat4(l: Mat3) -> [f64; 16] {
     ]
 }
 
-// mat3_to_mlx builds a (3,3) float32 array from a Mat3.
-
-// vecmat computes v (...,3) · m (3,3) -> (...,3) (row-vector convention),
-// preserving full float32 precision (mlx matmul drops small-matrix precision).
-
-// affine_from_motor computes A = M·L and A^-1 = L^-1·M^-1, returning the 3x3
-// inverse block a_inv3, the inverse translation t_inv and the full forward 4x4.
 pub fn affine_from_motor(m: Multivector, linear: Mat3) -> (Mat3, [f64; 3], [f64; 16]) {
     let m4 = m.to_matrix();
     let minv4 = m.reverse().to_matrix();
@@ -71,13 +56,6 @@ pub fn affine_from_motor(m: Multivector, linear: Mat3) -> (Mat3, [f64; 3], [f64;
     (a_inv3, t_inv, a_fwd)
 }
 
-// affine_to_local transforms rays into the local canonical frame:
-// o_l = o·a_inv3^T + t_inv, d_l = d·a_inv3^T, returns unit d and |d_l|.
-
-// affine_normal maps a local normal to camera space and normalises.
-
-// decompose_rigid factors a 4x4 affine into (motor, linear): A = motor . linear
-// via Newton polar decomposition (reflections absorbed into linear).
 pub fn decompose_rigid(m4: [f64; 16]) -> (Multivector, Mat3) {
     let b = mat3_new(
         [m4[0], m4[1], m4[2]],
@@ -85,7 +63,7 @@ pub fn decompose_rigid(m4: [f64; 16]) -> (Multivector, Mat3) {
         [m4[8], m4[9], m4[10]],
     );
     let t = [m4[3], m4[7], m4[11]];
-    mat3_inv(b); // singularity check (panics if det ~ 0)
+    mat3_inv(b);
     let mut x = b;
     for _ in 0..30 {
         let xit = mat3_transpose(mat3_inv(x));

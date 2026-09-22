@@ -1,6 +1,3 @@
-// Triangle-mesh primitive: brute-force Möller–Trumbore over all faces (no BVH),
-// with the affine ray-inverse transform (see affine_geom.rs).
-
 use cga_core::TrimeshParams;
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -8,7 +5,6 @@ use mlx_rs::Array;
 use crate::mlxops::*;
 use crate::{affine_normal, affine_to_local, col, inf_like, tri_mlx};
 
-// cross3 is the (...,3) row-wise cross product (mlx has no cross).
 fn cross3(a: &Array, b: &Array) -> Array {
     let a0 = ck(a.take_axis(Array::from_slice(&[0], &[]), -1));
     let a1 = ck(a.take_axis(Array::from_slice(&[1], &[]), -1));
@@ -93,7 +89,6 @@ pub fn trimesh_shadow(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array)
 }
 
 pub fn trimesh_uv(_p: &TrimeshParams, pos: &Array, _n: &Array) -> Array {
-    // v1: no mesh texture coordinates
     ck(ops::zeros::<f32>(&[pos.shape()[0], 2]))
 }
 
@@ -101,8 +96,6 @@ pub fn trimesh_uv(_p: &TrimeshParams, pos: &Array, _n: &Array) -> Array {
 mod tests {
     use super::*;
     use cga_core::{motor_identity, translator, trimesh_geometry, Geometry};
-
-    // Möller–Trumbore triangle-mesh intersection correctness (no BVH; brute force).
 
     fn tm_ray(x: f64, y: f64, z: f64) -> Array {
         Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
@@ -124,7 +117,6 @@ mod tests {
     }
 
     fn tm_triangle() -> Geometry {
-        // triangle in the z=1 plane, centroid (2/3, 2/3, 1), normal +z
         Geometry::TrimeshGeometry(trimesh_geometry(
             &[[0.0, 0.0, 1.0], [2.0, 0.0, 1.0], [0.0, 2.0, 1.0]],
             &[[0, 1, 2]],
@@ -182,12 +174,11 @@ mod tests {
         ));
         let (t, _, m) = tm_hit(&g, [2.0 / 3.0, 2.0 / 3.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
-        assert!((f64::from(t) - 3.0).abs() < 1e-3); // nearest face is at z=2
+        assert!((f64::from(t) - 3.0).abs() < 1e-3);
     }
 
     #[test]
     fn test_trimesh_translated_by_motor() {
-        // local triangle at z=1, motor translates by +z=2 -> world z=3
         let g = tm_triangle();
         let p = crate::geom_to_camera(&g, &translator([0.0, 0.0, 2.0]));
         let (t, _, mask) = crate::geom_intersect(

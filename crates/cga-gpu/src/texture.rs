@@ -1,8 +1,3 @@
-// Immutable linear RGBA texture sampled on the MLX device.  Source images are
-// decoded from PNG (sRGB -> linear) before entering the renderer.
-//
-// Decoding goes through the `image` crate (PNG / JPEG / ...).
-
 use mlx_rs::{ops, Array};
 
 use crate::geometry_ops::col;
@@ -17,13 +12,12 @@ pub enum WrapMode {
 
 #[derive(Clone, Debug)]
 pub struct Texture {
-    pub pixels: Array, // (height, width, 4) float32 raw texels in [0,1]
+    pub pixels: Array,
     pub height: i32,
     pub width: i32,
-    pub is_linear: bool, // true for data maps (metallicRoughness/normal), false for sRGB colour maps
+    pub is_linear: bool,
 }
 
-// sRGB -> linear on an (N,3) encoded float array.
 fn srgb_to_linear_arr(rgb: &Array) -> Array {
     ck(ops::select(
         s_le(rgb, 0.04045),
@@ -32,7 +26,6 @@ fn srgb_to_linear_arr(rgb: &Array) -> Array {
     ))
 }
 
-// texture_from_rgba builds a texture from raw sRGB RGBA floats (0..1).
 pub fn texture_from_rgba(rgba: &[Vec<Vec<f64>>]) -> Texture {
     let h = rgba.len();
     if h < 1 {
@@ -58,7 +51,6 @@ pub fn texture_from_rgba(rgba: &[Vec<Vec<f64>>]) -> Texture {
     }
 }
 
-// texture_from_u8_rgba builds a Texture from raw sRGB RGBA bytes (row-major).
 pub fn texture_from_u8_rgba(rgba: &[u8], w: i32, h: i32) -> Texture {
     texture_from_raw(rgba, w, h, false)
 }
@@ -76,20 +68,16 @@ fn texture_from_raw(rgba: &[u8], w: i32, h: i32, is_linear: bool) -> Texture {
     }
 }
 
-// texture_load loads a PNG file and decodes it to linear RGBA.
 pub fn texture_load(path: &str) -> Result<Texture, String> {
     let (rgba, w, h) = load_png_rgba(path)?;
     Ok(texture_from_u8_rgba(&rgba, w, h))
 }
 
-// texture_from_png_bytes decodes a PNG (raw bytes) to a linear RGBA texture.
 pub fn texture_from_png_bytes(data: &[u8]) -> Result<Texture, String> {
     let (rgba, w, h) = decode_png_rgba(data)?;
     Ok(texture_from_u8_rgba(&rgba, w, h))
 }
 
-// texture_from_bytes decodes image bytes (PNG / JPEG / ...) to a linear RGBA
-// texture (used for glTF-embedded textures, which are often JPEG).
 pub fn texture_from_bytes(data: &[u8]) -> Result<Texture, String> {
     let img = image::load_from_memory(data).map_err(|e| format!("image decode failed: {e}"))?;
     let rgba = img.to_rgba8();
@@ -105,7 +93,6 @@ fn wrap_value(value: &Array, mode: WrapMode) -> Array {
 }
 
 impl Texture {
-    // sample returns bilinearly interpolated RGBA texels for an (N,2) UV array.
     pub fn sample(&self, uv: &Array, wrap_s: WrapMode, wrap_t: WrapMode) -> Array {
         let t = self;
         let sh = uv.shape();
@@ -155,7 +142,7 @@ impl Texture {
         let omfy = ck(fs(1.0).subtract(&fy));
         let top = ck(ck(c00.multiply(&omfx)).add(ck(c10.multiply(&fx))));
         let bot = ck(ck(c01.multiply(&omfx)).add(ck(c11.multiply(&fx))));
-        let res = ck(ck(top.multiply(&omfy)).add(ck(bot.multiply(&fy)))); // (count,4) raw interpolated
+        let res = ck(ck(top.multiply(&omfy)).add(ck(bot.multiply(&fy))));
         let rgb = ck(res.take_axis(Array::from_slice(&[0i32, 1, 2], &[3]), 1));
         let lin = if t.is_linear {
             rgb
@@ -193,7 +180,7 @@ mod tests {
         s.eval().unwrap();
         let data = s.as_slice::<f32>();
         assert_eq!(data.len(), 4);
-        assert!(data[3] == 1.0); // opaque alpha
+        assert!(data[3] == 1.0);
     }
 
     #[test]
@@ -240,7 +227,7 @@ mod tests {
         save_frame_png(&format!("{dir}/textured_box.png"), &img);
         img.eval().unwrap();
         let data = img.as_slice::<f32>();
-        // centre should be brick-ish (red channel notably above the sky-blue 135)
+
         let idx = 40 * 80 * 4 + 40 * 4;
         assert!(data[idx] > data[idx + 2]);
     }

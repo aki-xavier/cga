@@ -1,32 +1,18 @@
-// CGA primitives (point / point-pair / line / plane / sphere / circle /
-// cylinder) and their distance / incidence helpers.
-//
-// Representation convention (same as the Python reference):
-//   - Point / PointPair / Line are direct (join) form; incidence is p.op(X) = 0.
-//   - Plane / Sphere / Circle are dual form; incidence is p.ip(X) = 0.
-//
-// The primitives are plain `Multivector` values (a motor is also just a
-// multivector), so all algebra (gp/ip/op/dual/meet) composes freely.
-
 use crate::{einf, mv_vector, Multivector};
 
-/// point returns the conformal point p = e0 + x e1 + y e2 + z e3 + 0.5 r^2 einf.
 pub fn point(x: f64, y: f64, z: f64) -> Multivector {
     let r2 = x * x + y * y + z * z;
     mv_vector(x, y, z, 1.0, 0.5 * r2)
 }
 
-/// point_pair returns the point pair Pp = p1 ^ p2 (grade-2 direct form).
 pub fn point_pair(p1: &Multivector, p2: &Multivector) -> Multivector {
     p1.op(p2)
 }
 
-/// line returns the line L = p1 ^ p2 ^ einf (grade-3 direct form).
 pub fn line(p1: &Multivector, p2: &Multivector) -> Multivector {
     p1.op(p2).op(&einf())
 }
 
-/// plane returns the dual plane pi = n + d einf (n unit normal).
 pub fn plane(normal: [f64; 3], distance: f64) -> Multivector {
     let mut nx = normal[0];
     let mut ny = normal[1];
@@ -41,13 +27,11 @@ pub fn plane(normal: [f64; 3], distance: f64) -> Multivector {
     mv_vector(nx, ny, nz, 0.0, distance)
 }
 
-/// sphere returns the dual sphere s = up(c) - 0.5 rho^2 einf.
 pub fn sphere(center: [f64; 3], radius: f64) -> Multivector {
     let half = 0.5 * radius * radius;
     point(center[0], center[1], center[2]).sub(&mv_vector(0.0, 0.0, 0.0, 0.0, half))
 }
 
-/// sphere_from_dual extracts (center, radius) from a dual sphere blade.
 pub fn sphere_from_dual(s: &Multivector) -> ([f64; 3], f64) {
     let w = s.e0_coeff();
     if w.abs() < 1e-12 {
@@ -65,7 +49,6 @@ pub fn sphere_from_dual(s: &Multivector) -> ([f64; 3], f64) {
     ([cx, cy, cz], rho_sq.sqrt())
 }
 
-/// circle returns the dual circle = sphere ^ plane.
 pub fn circle(center: [f64; 3], radius: f64, normal: [f64; 3]) -> Multivector {
     let s = sphere(center, radius);
     let nl = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
@@ -77,8 +60,7 @@ pub fn circle(center: [f64; 3], radius: f64, normal: [f64; 3]) -> Multivector {
     s.op(&p)
 }
 
-/// Cylinder carries an axis Line blade plus radius/axis metadata (a rebuilt
-/// primitive, not a single blade algebraic object).
+// 为什么: 圆柱没有单一 blade 代数形式——它由 axis Line blade 与 radius/axis_dir/axis_point 元数据组合而成，是一个 rebuilt primitive 而非纯 blade。
 #[derive(Clone, Copy, Debug)]
 pub struct Cylinder {
     pub blade: Multivector,
@@ -87,8 +69,6 @@ pub struct Cylinder {
     pub axis_point: [f64; 3],
 }
 
-/// cylinder builds a cylinder from an axis point, axis direction (unitised) and
-/// radius.
 pub fn cylinder(axis_point: [f64; 3], axis_dir: [f64; 3], radius: f64) -> Cylinder {
     let ax = axis_dir[0];
     let ay = axis_dir[1];
@@ -110,9 +90,6 @@ pub fn cylinder(axis_point: [f64; 3], axis_dir: [f64; 3], radius: f64) -> Cylind
     }
 }
 
-// --- distances --------------------------------------------------------------
-
-/// point_dist returns the euclidean distance between two conformal points.
 pub fn point_dist(a: &Multivector, b: &Multivector) -> f64 {
     let c1 = a.coords();
     let c2 = b.coords();
@@ -122,8 +99,6 @@ pub fn point_dist(a: &Multivector, b: &Multivector) -> f64 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-/// plane_dist returns the signed distance from point p to plane pi
-/// ((n . x - d) / |n|).
 pub fn plane_dist(pi: &Multivector, p: &Multivector) -> f64 {
     let c = p.coords();
     let v = pi.euclidean_vector();
@@ -135,8 +110,6 @@ pub fn plane_dist(pi: &Multivector, p: &Multivector) -> f64 {
     (v[0] * c[0] + v[1] * c[1] + v[2] * c[2] - d) / nl
 }
 
-/// sphere_dist returns the signed distance from point p to sphere s
-/// (positive outside, negative inside).
 pub fn sphere_dist(s: &Multivector, p: &Multivector) -> f64 {
     let (c, r) = sphere_from_dual(s);
     let pc = p.coords();
@@ -146,8 +119,6 @@ pub fn sphere_dist(s: &Multivector, p: &Multivector) -> f64 {
     (dx * dx + dy * dy + dz * dz).sqrt() - r
 }
 
-/// cylinder_dist returns the signed distance from point p to the cylinder
-/// surface (positive outside, negative inside).
 pub fn cylinder_dist(cy: &Cylinder, p: &Multivector) -> f64 {
     let c = p.coords();
     let dx = c[0] - cy.axis_point[0];
