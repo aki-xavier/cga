@@ -3,12 +3,41 @@ use crate::geometry_ops::{geom_bounds, geom_intersect, geom_shadow, geom_uv};
 use crate::mesh_raster::rasterize_meshes;
 use crate::mlxops::*;
 use crate::scene::{Mesh, PerspectiveCamera, Scene};
+use crate::scene_graph::{vec3_dot, vec3_unit};
 use crate::shading::{
     light_direction_at, light_far, light_to_camera, shade_batched, Light, LightKind,
 };
 use crate::texture::WrapMode;
-use cga_core::{Geometry, GeometryParams};
+use cga_core::{vec3_cross, Geometry, GeometryParams};
 use mlx_rs::{ops, Array};
+
+fn view_frame(camera: &PerspectiveCamera) -> ([[f64; 3]; 3], [f64; 3]) {
+    let forward = vec3_unit([
+        camera.target[0] - camera.position[0],
+        camera.target[1] - camera.position[1],
+        camera.target[2] - camera.position[2],
+    ]);
+    let right = vec3_unit(vec3_cross(forward, camera.up));
+    let up = vec3_cross(right, forward);
+    let basis = [right, [-up[0], -up[1], -up[2]], forward];
+    let offset = [
+        vec3_dot(basis[0], camera.position),
+        vec3_dot(basis[1], camera.position),
+        vec3_dot(basis[2], camera.position),
+    ];
+    (basis, offset)
+}
+
+fn outward(points: &Array, basis: &[[f64; 3]; 3], offset: &[f64; 3]) -> Array {
+    let q = ck(points.add(&arr3v(*offset)));
+    let mut out = ck(ops::zeros::<f32>(&[1, 3]));
+    for axis in 0..3usize {
+        let at = ck(ck(q.take_axis(Array::from_int(axis as i32), 1)).expand_dims(1));
+        let term = ck(at.multiply(&arr3v(basis[axis])));
+        out = if axis == 0 { term } else { ck(out.add(&term)) };
+    }
+    out
+}
 
 #[derive(Clone, Debug)]
 pub struct Truth {
@@ -301,6 +330,7 @@ impl Renderer {
         let mut best_idx = ck(ops::zeros::<i32>(&[n_rays]));
         let objs = &scene.objects;
         let cam = self.cam.unwrap_or_else(|| panic!("no camera"));
+        let frame = view_frame(&cam);
         let mut params_list: Vec<GeometryParams> = Vec::new();
         for (i, obj) in objs.iter().enumerate() {
             let wm = cam.motor.compose(&obj.motor());
@@ -314,10 +344,12 @@ impl Renderer {
                 }
             }
             let (t, n_i, mask) = geom_intersect(&params, o, d);
+            let hit_point = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
+            let stated = geom_to_camera(&obj.geometry, &obj.motor());
             let uv_i = geom_uv(
-                &params,
-                &ck(o.add(ck(ck(t.expand_dims(1)).multiply(d)))),
-                &n_i,
+                &stated,
+                &outward(&hit_point, &frame.0, &frame.1),
+                &outward(&n_i, &frame.0, &[0.0, 0.0, 0.0]),
             );
             let nearer = ck(mask.logical_and(ck(t.lt(&best_t))));
             best_t = ck(ops::select(&nearer, &t, &best_t));
