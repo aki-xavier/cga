@@ -221,3 +221,5 @@ __marimo__/
 /render_smoke.png
 # Rust
 target/
+# CodeGraph index
+.codegraph/
