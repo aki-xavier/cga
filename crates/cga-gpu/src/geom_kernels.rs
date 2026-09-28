@@ -267,6 +267,7 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
                 a_fwd: af,
                 major: g.major,
                 minor: g.minor,
+                arc: g.arc,
             })
         }
         Geometry::EllipsoidGeometry(g) => {
@@ -672,6 +673,35 @@ mod tests {
         assert_eq!(
             em_contains(&g, &[[1.0, 0.0, 0.1], [0.0, 0.0, 0.0]]),
             [true, false]
+        );
+    }
+
+    #[test]
+    fn test_tube_rays() {
+        let g = Geometry::TorusGeometry(cga_core::tube_geometry(
+            1.0,
+            0.3,
+            std::f64::consts::PI,
+        ));
+        for (x, y) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
+            let (t, _, m) = em_hit(&g, [x, y, 5.0], [0.0, 0.0, -1.0]);
+            assert!(m);
+            assert!((f64::from(t) - 4.7).abs() < 1e-3);
+        }
+        let (_, _, m) = em_hit(&g, [0.0, -1.0, 5.0], [0.0, 0.0, -1.0]);
+        assert!(!m);
+    }
+
+    #[test]
+    fn test_tube_contains() {
+        let g = Geometry::TorusGeometry(cga_core::tube_geometry(
+            1.0,
+            0.3,
+            std::f64::consts::PI,
+        ));
+        assert_eq!(
+            em_contains(&g, &[[0.0, 1.0, 0.1], [0.0, -1.0, 0.1], [1.0, 0.0, 0.1]]),
+            [true, false, true]
         );
     }
 

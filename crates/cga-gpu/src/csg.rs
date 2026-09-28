@@ -309,14 +309,14 @@ fn ellipsoid_contains(p: EllipsoidParams, pos: &Array) -> Array {
 
 pub fn torus_crossings(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, mut ns, valid) = torus_local_crossings(p.major, p.minor, &o_l, &d_u);
+    let (ts, mut ns, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     ns = affine_normal(&ns, p.a_inv3);
     (ck(ts.divide(ck(col(&lam, 0).expand_dims(1)))), ns, valid)
 }
 
 fn torus_contains(p: TorusParams, pos: &Array) -> Array {
     let p_l = affine_point_to_local(p.a_inv3, p.t_inv, pos);
-    torus_local_contains(p.major, p.minor, &p_l)
+    torus_local_contains(p.major, p.minor, p.arc, &p_l)
 }
 
 pub fn cyclide_crossings(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array, Array) {

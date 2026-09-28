@@ -302,6 +302,7 @@ pub fn ellipsoid_uv(p: EllipsoidParams, pos: &Array, _n: &Array) -> Array {
 pub(crate) fn torus_local_crossings(
     major: f64,
     minor: f64,
+    arc: f64,
     o: &Array,
     d: &Array,
 ) -> (Array, Array, Array) {
@@ -337,6 +338,13 @@ pub(crate) fn torus_local_crossings(
     let p0 = ck(p.take_axis(Array::from_slice(&[0], &[]), 2));
     let p1 = ck(p.take_axis(Array::from_slice(&[1], &[]), 2));
     let p2 = ck(p.take_axis(Array::from_slice(&[2], &[]), 2));
+    let theta = ck(ops::atan2(&p1, &p0));
+    let turned = ck(ops::select(
+        &s_lt(&theta, 0.0),
+        &s_add(&theta, std::f64::consts::TAU),
+        &theta,
+    ));
+    let valid = ck(valid.logical_and(&s_le(&turned, arc)));
     let fac = s_sub(&s1, 2.0 * r2);
     let grad = ck(ops::stack(
         &[
@@ -360,7 +368,7 @@ pub(crate) fn torus_local_crossings(
     (ts, ns, valid)
 }
 
-pub(crate) fn torus_local_contains(major: f64, minor: f64, p: &Array) -> Array {
+pub(crate) fn torus_local_contains(major: f64, minor: f64, arc: f64, p: &Array) -> Array {
     let r2 = major * major;
     let f = ck(ck(s_add(
         &ck(ck(p.multiply(p)).sum_axes(&[-1], false)),
@@ -371,12 +379,18 @@ pub(crate) fn torus_local_contains(major: f64, minor: f64, p: &Array) -> Array {
         &ck(ck(col(p, 0).multiply(col(p, 0))).add(ck(col(p, 1).multiply(col(p, 1))))),
         4.0 * r2,
     )));
-    s_lt(&f, 0.0)
+    let theta = ck(ops::atan2(col(p, 1), col(p, 0)));
+    let turned = ck(ops::select(
+        &s_lt(&theta, 0.0),
+        &s_add(&theta, std::f64::consts::TAU),
+        &theta,
+    ));
+    ck(s_lt(&f, 0.0).logical_and(&s_le(&turned, arc)))
 }
 
 pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, ns, valid) = torus_local_crossings(p.major, p.minor, &o_l, &d_u);
+    let (ts, ns, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
@@ -390,7 +404,7 @@ pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, A
         1,
     ))
     .take_axis(Array::from_slice(&[0], &[]), 1));
-    let inside = ck(mask.logical_and(torus_local_contains(p.major, p.minor, &o_l)));
+    let inside = ck(mask.logical_and(torus_local_contains(p.major, p.minor, p.arc, &o_l)));
     n_l = ck(ops::select(
         ck(inside.expand_dims(1)),
         ck(n_l.negative()),
@@ -408,7 +422,7 @@ pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, A
 
 pub fn torus_shadow(p: TorusParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, _, valid) = torus_local_crossings(p.major, p.minor, &o_l, &d_u);
+    let (ts, _, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
