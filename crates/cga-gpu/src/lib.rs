@@ -43,5 +43,11 @@ pub use mesh_io_gltf::*;
 pub mod scene_lang;
 pub use scene_lang::*;
 
+pub mod cgs_gen;
+pub use cgs_gen::*;
+
+pub mod headless;
+pub use headless::*;
+
 #[cfg(test)]
 mod degenerate;

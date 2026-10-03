@@ -34,5 +34,8 @@ pub use modeling::*;
 pub mod mesh_io;
 pub use mesh_io::*;
 
+pub mod bake;
+pub use bake::*;
+
 pub mod gif;
 pub use gif::*;

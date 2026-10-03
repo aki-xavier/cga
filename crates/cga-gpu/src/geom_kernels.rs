@@ -678,11 +678,7 @@ mod tests {
 
     #[test]
     fn test_tube_rays() {
-        let g = Geometry::TorusGeometry(cga_core::tube_geometry(
-            1.0,
-            0.3,
-            std::f64::consts::PI,
-        ));
+        let g = Geometry::TorusGeometry(cga_core::tube_geometry(1.0, 0.3, std::f64::consts::PI));
         for (x, y) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
             let (t, _, m) = em_hit(&g, [x, y, 5.0], [0.0, 0.0, -1.0]);
             assert!(m);
@@ -694,11 +690,7 @@ mod tests {
 
     #[test]
     fn test_tube_contains() {
-        let g = Geometry::TorusGeometry(cga_core::tube_geometry(
-            1.0,
-            0.3,
-            std::f64::consts::PI,
-        ));
+        let g = Geometry::TorusGeometry(cga_core::tube_geometry(1.0, 0.3, std::f64::consts::PI));
         assert_eq!(
             em_contains(&g, &[[0.0, 1.0, 0.1], [0.0, -1.0, 0.1], [1.0, 0.0, 0.1]]),
             [true, false, true]
