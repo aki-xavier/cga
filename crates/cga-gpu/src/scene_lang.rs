@@ -1,3 +1,33 @@
+//! CGS scene language: lexer, single-pass statement dispatcher, evaluator
+//! (v2 additions specified in `docs/cgs-v2.md`).
+//!
+//! # Statement forms (dispatch order in `SceneLoader::statement`)
+//! 1. `{ … }` block
+//! 2. assignment `name = expr;` — checked FIRST, so any keyword can be
+//!    shadowed by a variable (`echo = 5;`, `for = 6;`). `background = 0x…;`
+//!    doubles as the property form of the background statement (equivalent to
+//!    `background(color=0x…);`); `name[…]` is rejected with the indexing error.
+//! 3. `module` / `for` / `if` / `echo` / `show` / `tag` / `drill` / `var` /
+//!    `constrain(…) { … } solve;`
+//! 4. `union` / `difference` / `intersection` (block or expression form)
+//! 5. modifiers `translate|rotate|scale|mirror|material` (missing target →
+//!    `modifier missing target statement`), property statements
+//!    `background|camera|*_light`, then primitive statements
+//!    (sphere/box/cylinder/… /mesh via `build_geometry`).
+//!
+//! # Statement/expression boundary error contract
+//! Canonical per-group texts (README "语句/表达式边界与错误契约"); each is
+//! deterministic so an LLM verifier can assert on it:
+//! - statement keyword / modifier / property called in an expression →
+//!   `CGS line N: {name} is a statement and cannot be used in an expression`
+//! - assignment appearing inside an expression →
+//!   `CGS line N: assignment is a statement and cannot be used in an expression`
+//! - expression function (math/query/at|rot|scaled) used as a statement →
+//!   `CGS line N: {name} is an expression function and cannot be used as a statement`
+//! - list indexing `a[…]` in either position →
+//!   `CGS line N: indexing is not supported — use comp(vector, index)`
+//! - unknown statement name → `CGS line N: unknown primitive {name}`
+
 use std::collections::HashMap;
 use std::fmt;
 
@@ -5,7 +35,8 @@ use cga_core::{
     affine_geometry, box_geometry, circle_geometry, clamp01, cone_geometry, csg_geometry,
     cyclide_geometry, cylinder_geometry, decompose_rigid, ellipsoid_geometry, extrude, load_obj,
     loft, mat4_identity, mat4_mul, motor_identity, motor_rotor, plane_geometry, sphere_geometry,
-    torus_geometry, transformed_geometry, trimesh_geometry, validate_profile, CsgOp, Geometry,
+    torus_geometry, transform_point, transformed_geometry, trimesh_geometry, validate_profile,
+    CsgOp, Geometry,
 };
 
 use crate::mesh_io_gltf::{gltf_to_geometry, load_gltf};
@@ -232,6 +263,16 @@ pub struct CgsVec3 {
     pub z: f64,
 }
 
+/// A geometry value in expression position: a shape plus its own local
+/// frame (identity unless [`at`/`rot`/`scaled`] set one). Bindings are
+/// frameless by design — placement comes from where the value is `show`n.
+/// See `docs/cgs-v2.md` §4.2 for the frame rules.
+#[derive(Clone, Debug)]
+pub struct GeomVal {
+    pub geo: Geometry,
+    pub m4: [f64; 16],
+}
+
 #[derive(Clone, Debug)]
 pub enum CgsValue {
     Num(f64),
@@ -239,6 +280,7 @@ pub enum CgsValue {
     Str(String),
     List(Vec<CgsValue>),
     Vec3(CgsVec3),
+    Geom(GeomVal),
 }
 
 impl PartialEq for CgsValue {
@@ -275,6 +317,7 @@ impl fmt::Display for CgsValue {
             CgsValue::Vec3(v) => {
                 write!(f, "[{}, {}, {}]", fmt_f64(v.x), fmt_f64(v.y), fmt_f64(v.z))
             }
+            CgsValue::Geom(_) => f.write_str("<geom>"),
         }
     }
 }
@@ -356,10 +399,382 @@ fn mirror4(ax: [f64; 3]) -> Result<[f64; 16], String> {
     ])
 }
 
+/// 4x4 inverse (Gauss-Jordan). Row-major row-vector convention: p' = p·M,
+/// `mat4_mul(a, b)` applies `a` first, then `b`. Singular input falls back to
+/// identity (only reachable from degenerate scale/mirror contexts).
+fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
+    let mut a = [[0.0f64; 8]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            a[i][j] = m[i * 4 + j];
+            a[i][j + 4] = if i == j { 1.0 } else { 0.0 };
+        }
+    }
+    for c in 0..4 {
+        let mut p = c;
+        for r in c + 1..4 {
+            if a[r][c].abs() > a[p][c].abs() {
+                p = r;
+            }
+        }
+        if a[p][c].abs() < 1e-14 {
+            return mat4_identity();
+        }
+        a.swap(c, p);
+        let d = a[c][c];
+        for j in 0..8 {
+            a[c][j] /= d;
+        }
+        for r in 0..4 {
+            if r == c {
+                continue;
+            }
+            let f = a[r][c];
+            if f != 0.0 {
+                for j in 0..8 {
+                    a[r][j] -= f * a[c][j];
+                }
+            }
+        }
+    }
+    let mut out = [0.0; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            out[i * 4 + j] = a[i][j + 4];
+        }
+    }
+    out
+}
+
+/// World AABB of a local AABB under `m` (8 corners transformed).
+fn transform_bbox(b: [[f64; 3]; 2], m: [f64; 16]) -> [[f64; 3]; 2] {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for i in 0..8 {
+        let p = [
+            if i & 1 == 0 { b[0][0] } else { b[1][0] },
+            if i & 2 == 0 { b[0][1] } else { b[1][1] },
+            if i & 4 == 0 { b[0][2] } else { b[1][2] },
+        ];
+        let q = transform_point(m, p);
+        for k in 0..3 {
+            lo[k] = lo[k].min(q[k]);
+            hi[k] = hi[k].max(q[k]);
+        }
+    }
+    [lo, hi]
+}
+
+/// Face key `"+x"`/`"-y"`/… → `(axis, sign)`. Shared by the `face`/`fnrm`
+/// queries and drill's `"name:key"` extent references (docs/cgs-v2.md §7).
+fn parse_face_key(key: &str, line: i32, what: &str) -> Result<(usize, f64), String> {
+    let ok =
+        key.len() == 2 && matches!(&key[..1], "+" | "-") && matches!(&key[1..], "x" | "y" | "z");
+    if !ok {
+        return Err(format!(
+            "CGS line {line}: {what}: unknown face key \"{key}\" (expected \"+x\"/\"-x\"/\"+y\"/\"-y\"/\"+z\"/\"-z\")"
+        ));
+    }
+    let axis = match &key[1..] {
+        "x" => 0,
+        "y" => 1,
+        _ => 2,
+    };
+    let sign = if &key[..1] == "+" { 1.0 } else { -1.0 };
+    Ok((axis, sign))
+}
+
+fn face_key_str(axis: usize, sign: f64) -> String {
+    format!(
+        "{}{}",
+        if sign > 0.0 { '+' } else { '-' },
+        ["x", "y", "z"][axis]
+    )
+}
+
+/// Local face point and outward normal for a face key (docs/cgs-v2.md §7):
+/// box/cylinder/cone/sphere/ellipsoid exact per the primitive's parameters
+/// (cylinder & cone caps exact, sides on the surface at the axial midpoint);
+/// everything else (csg/mesh/torus/…) falls back to the AABB face center.
+/// `None` = no finite bounds (plane).
+fn face_local(geo: &Geometry, axis: usize, sign: f64) -> Option<([f64; 3], [f64; 3])> {
+    let mut k = [0.0, 0.0, 0.0];
+    k[axis] = sign;
+    match geo {
+        Geometry::BoxGeometry(b) => {
+            let mut p = [0.0; 3];
+            p[axis] = sign * b.half[axis];
+            Some((p, k))
+        }
+        Geometry::CylinderGeometry(c) => {
+            if axis == 2 {
+                // cap: center of the end disc (exact)
+                let mut p = [0.0; 3];
+                p[2] = sign * c.half;
+                Some((p, k))
+            } else {
+                // side: tangent point at the axial midpoint (on the surface)
+                let mut p = [0.0; 3];
+                p[axis] = sign * c.radius;
+                Some((p, k))
+            }
+        }
+        Geometry::ConeGeometry(c) => {
+            // canonical cone: apex at z=+h/2, base disc (radius r) at z=-h/2
+            if axis == 2 {
+                let mut p = [0.0; 3];
+                p[2] = if sign > 0.0 {
+                    c.height / 2.0
+                } else {
+                    -c.height / 2.0
+                };
+                Some((p, k))
+            } else {
+                // side: on the surface at the axial midpoint (radius r/2);
+                // normal ⟂ generator, outward and tilted toward the apex
+                let mut p = [0.0; 3];
+                p[axis] = sign * c.radius / 2.0;
+                let mut n = [0.0; 3];
+                n[axis] = sign * 2.0 * c.height;
+                n[2] = c.radius;
+                let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                Some((p, [n[0] / l, n[1] / l, n[2] / l]))
+            }
+        }
+        Geometry::SphereGeometry(s) => {
+            let mut p = [0.0; 3];
+            p[axis] = sign * s.radius;
+            Some((p, k))
+        }
+        Geometry::EllipsoidGeometry(e) => {
+            let mut p = [0.0; 3];
+            p[axis] = sign * e.radii[axis];
+            Some((p, k))
+        }
+        _ => {
+            // AABB fallback for csg / mesh / torus / cyclide / circle / …
+            let b = crate::geometry_ops::geom_bounds(&cga_core::bake::identity_params(geo))?;
+            let mut p = [0.0; 3];
+            for i in 0..3 {
+                p[i] = (b[0][i] + b[1][i]) / 2.0;
+            }
+            p[axis] = if sign > 0.0 { b[1][axis] } else { b[0][axis] };
+            Some((p, k))
+        }
+    }
+}
+
+/// Transform a normal by the inverse-transpose 3×3 (correct under non-uniform
+/// scale / shear, same as a plain rotation otherwise), then normalize.
+fn transform_normal(m: [f64; 16], n: [f64; 3]) -> [f64; 3] {
+    let inv = mat4_inv(m);
+    let mut w = [0.0; 3];
+    for r in 0..3 {
+        w[r] = inv[r] * n[0] + inv[4 + r] * n[1] + inv[8 + r] * n[2];
+    }
+    let l = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+    if l < 1e-12 {
+        return n;
+    }
+    [w[0] / l, w[1] / l, w[2] / l]
+}
+
+/// A drill axial endpoint: a coordinate in the cutter frame, or a face
+/// reference `"instance:key"` resolved at statement execution time.
+enum DrillEnd {
+    Num(f64),
+    Face {
+        name: String,
+        axis: usize,
+        sign: f64,
+    },
+}
+
+fn drill_end_ref(v: Option<&CgsValue>, line: i32, which: &str) -> Result<Option<DrillEnd>, String> {
+    match v {
+        None => Ok(None),
+        Some(CgsValue::Num(n)) => Ok(Some(DrillEnd::Num(*n))),
+        Some(CgsValue::Str(s)) => {
+            let (name, key) = s.split_once(':').ok_or_else(|| {
+                format!(
+                    "CGS line {line}: drill.{which} face reference must be \"name:key\", got \"{s}\""
+                )
+            })?;
+            if name.is_empty() {
+                return Err(format!(
+                    "CGS line {line}: drill.{which} face reference needs an instance name, got \"{s}\""
+                ));
+            }
+            let (axis, sign) = parse_face_key(key, line, &format!("drill.{which}"))?;
+            Ok(Some(DrillEnd::Face {
+                name: name.to_string(),
+                axis,
+                sign,
+            }))
+        }
+        Some(other) => Err(format!(
+            "CGS line {line}: drill.{which} needs a number or \"name:key\" face reference, got {other}"
+        )),
+    }
+}
+
+/// Flatten a constraint value into residuals: Num → 1, Vec3 → 3, List → parts.
+fn flatten_val(v: &CgsValue, line: i32) -> Result<Vec<f64>, String> {
+    match v {
+        CgsValue::Num(n) => Ok(vec![*n]),
+        CgsValue::Vec3(v3) => Ok(vec![v3.x, v3.y, v3.z]),
+        CgsValue::List(items) => {
+            let mut out = Vec::new();
+            for i in items {
+                out.extend(flatten_val(i, line)?);
+            }
+            Ok(out)
+        }
+        _ => Err(format!(
+            "CGS line {line}: constraint values must be numeric or vectors, got {v}"
+        )),
+    }
+}
+
+fn maxabs(v: &[f64]) -> f64 {
+    v.iter().fold(0.0f64, |m, x| m.max(x.abs()))
+}
+
+/// Solve `a · x = b` by Gaussian elimination with partial pivoting.
+/// Returns None on a (near-)singular pivot; the caller raises λ and retries.
+fn gauss_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    let n = b.len();
+    for c in 0..n {
+        let mut p = c;
+        for r in c + 1..n {
+            if a[r][c].abs() > a[p][c].abs() {
+                p = r;
+            }
+        }
+        if a[p][c].abs() < 1e-14 {
+            return None;
+        }
+        a.swap(c, p);
+        b.swap(c, p);
+        for r in c + 1..n {
+            let f = a[r][c] / a[c][c];
+            if f != 0.0 {
+                for k in c..n {
+                    a[r][k] -= f * a[c][k];
+                }
+                b[r] -= f * b[c];
+            }
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        for k in i + 1..n {
+            s -= a[i][k] * x[k];
+        }
+        let d = a[i][i];
+        if d.abs() < 1e-300 {
+            return None;
+        }
+        x[i] = s / d;
+    }
+    Some(x)
+}
+
+fn geom_val(v: &CgsValue, line: i32, what: &str) -> Result<GeomVal, String> {
+    match v {
+        CgsValue::Geom(g) => Ok(g.clone()),
+        _ => Err(format!(
+            "CGS line {line}: {what} needs a geometry value, got {v}"
+        )),
+    }
+}
+
+/// Geometry constructors usable in expression position (frameless values).
+const GEOM_EXPR_NAMES: &[&str] = &[
+    "sphere",
+    "plane",
+    "cylinder",
+    "box",
+    "circle",
+    "cone",
+    "torus",
+    "cyclide",
+    "ellipsoid",
+    "extrude",
+    "loft",
+    "mesh",
+];
+
+/// Reference-query functions (Str name / Geom value dispatch).
+const QUERY_FNS: &[&str] = &[
+    "center", "lo", "hi", "size", "xdir", "ydir", "zdir", "dist", "face", "fnrm",
+];
+
+/// Statement forms with no meaning inside an expression. Calling one with `(`
+/// in expression position yields the canonical boundary error instead of a
+/// confusing arity/type complaint (README "语句/表达式边界与错误契约").
+fn is_statement_only_fn(name: &str) -> bool {
+    matches!(
+        name,
+        "show"
+            | "tag"
+            | "drill"
+            | "var"
+            | "constrain"
+            | "module"
+            | "for"
+            | "if"
+            | "echo"
+            | "translate"
+            | "rotate"
+            | "scale"
+            | "mirror"
+            | "material"
+            | "background"
+            | "camera"
+    ) || name.ends_with("_light")
+}
+
+/// Pure expression constructs (math functions of `cgs_call_fn`, reference
+/// queries, expression geometry helpers). Using one as a statement yields the
+/// canonical boundary error instead of `unknown primitive`.
+fn is_expr_only_fn(name: &str) -> bool {
+    matches!(
+        name,
+        "polar"
+            | "comp"
+            | "len"
+            | "norm"
+            | "cross"
+            | "abs"
+            | "sign"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "sqrt"
+            | "exp"
+            | "ln"
+            | "log"
+            | "floor"
+            | "ceil"
+            | "round"
+            | "atan2"
+            | "pow"
+            | "min"
+            | "max"
+    ) || QUERY_FNS.contains(&name)
+        || matches!(name, "at" | "rot" | "scaled")
+}
+
 fn cgs_truthy(v: &CgsValue) -> bool {
     match v {
         CgsValue::List(items) => !items.is_empty(),
         CgsValue::Vec3(_) => true,
+        CgsValue::Geom(_) => true,
         CgsValue::Bool(b) => *b,
         CgsValue::Num(x) => *x != 0.0,
         CgsValue::Str(s) => !s.is_empty(),
@@ -455,6 +870,11 @@ fn cgs_scalar_arith(op: BinOp, a: f64, b: f64) -> f64 {
 }
 
 fn cgs_binop(op: BinOp, a: CgsValue, b: CgsValue) -> Result<CgsValue, String> {
+    if op == BinOp::Eq || op == BinOp::Ne {
+        if matches!(a, CgsValue::Geom(_)) || matches!(b, CgsValue::Geom(_)) {
+            return Err("CGS: geometry values are not comparable".to_string());
+        }
+    }
     if op == BinOp::Eq {
         return Ok(CgsValue::Bool(a == b));
     }
@@ -522,6 +942,29 @@ fn cgs_binop(op: BinOp, a: CgsValue, b: CgsValue) -> Result<CgsValue, String> {
 }
 
 fn cgs_call_fn(name: &str, args: &[CgsValue], line: i32) -> Result<CgsValue, String> {
+    if name == "polar" {
+        if args.len() != 2 {
+            return Err(format!("CGS line {line}: polar needs (r, angle)"));
+        }
+        let r = cgs_num(&args[0], line, "polar.r")?;
+        let a = cgs_num(&args[1], line, "polar.a")?;
+        return Ok(CgsValue::Vec3(CgsVec3 {
+            x: r * a.cos(),
+            y: r * a.sin(),
+            z: 0.0,
+        }));
+    }
+    if name == "comp" {
+        if args.len() != 2 {
+            return Err(format!("CGS line {line}: comp needs (vector, index)"));
+        }
+        let v = cgs_vec3(&args[0], line, "comp.v")?;
+        let i = cgs_num(&args[1], line, "comp.i")?;
+        if i != 0.0 && i != 1.0 && i != 2.0 {
+            return Err(format!("CGS line {line}: comp index must be 0, 1 or 2"));
+        }
+        return Ok(CgsValue::Num(v[i as usize]));
+    }
     if name == "len" {
         let a0 = &args[0];
         return match a0 {
@@ -611,6 +1054,19 @@ pub struct SceneLoader {
     param_order: Vec<String>,
     collect: Vec<CollectedGeom>,
     collecting: bool,
+    /// Instances registered by active `tag` statements: world frame for
+    /// reference queries, rel frame (relative to the tag statement's entry
+    /// context) for `drill` reuse in another context.
+    named: HashMap<String, Vec<Inst>>,
+    /// Stack of active (tag name, entry context) frames.
+    pending: Vec<(String, [f64; 16])>,
+}
+
+#[derive(Clone, Debug)]
+struct Inst {
+    geo: Geometry,
+    world: [f64; 16],
+    rel: [f64; 16],
 }
 
 struct CollectedGeom {
@@ -638,6 +1094,8 @@ pub fn cgs_load_result(text: &str, asset_root: &str) -> Result<(Scene, Perspecti
         param_order: Vec::new(),
         collect: Vec::new(),
         collecting: false,
+        named: HashMap::new(),
+        pending: Vec::new(),
     };
     let mut root_scope: HashMap<String, CgsValue> = HashMap::new();
     root_scope.insert("pi".to_string(), CgsValue::Num(std::f64::consts::PI));
@@ -779,21 +1237,49 @@ impl SceneLoader {
             return Ok(CgsValue::Str(t.text));
         }
         if t.kind == TokenKind::Ident {
+            // Canonical statement/expression boundary errors (README
+            // "语句/表达式边界与错误契约"): assignment and indexing have no
+            // meaning inside an expression.
+            if self.peek().kind == TokenKind::Assign {
+                return Err(format!(
+                    "CGS line {}: assignment is a statement and cannot be used in an expression",
+                    t.line
+                ));
+            }
+            if self.peek().kind == TokenKind::Lbracket {
+                return Err(format!(
+                    "CGS line {}: indexing is not supported — use comp(vector, index)",
+                    t.line
+                ));
+            }
             if self.peek().kind == TokenKind::Lparen {
+                if is_statement_only_fn(&t.text) {
+                    return Err(format!(
+                        "CGS line {}: {} is a statement and cannot be used in an expression",
+                        t.line, t.text
+                    ));
+                }
                 self.take();
-                let mut args: Vec<CgsValue> = Vec::new();
-                if self.peek().kind != TokenKind::Rparen {
-                    loop {
-                        args.push(self.expr(scope, 1)?);
-                        if self.peek().kind == TokenKind::Comma {
-                            self.take();
-                        } else {
-                            break;
-                        }
+                let (pos, kw) = self.paren_args(scope)?;
+                let n = t.text.as_str();
+                let is_geom = GEOM_EXPR_NAMES.contains(&n)
+                    || QUERY_FNS.contains(&n)
+                    || matches!(
+                        n,
+                        "at" | "rot" | "scaled" | "difference" | "intersection" | "union"
+                    );
+                if is_geom {
+                    if let Some(v) = self.geom_expr_call(n, pos.clone(), kw.clone(), t.line)? {
+                        return Ok(v);
                     }
                 }
-                self.expect(TokenKind::Rparen)?;
-                return cgs_call_fn(&t.text, &args, t.line);
+                if !kw.is_empty() {
+                    return Err(format!(
+                        "CGS line {}: function {} takes no named arguments",
+                        t.line, t.text
+                    ));
+                }
+                return cgs_call_fn(&t.text, &pos, t.line);
             }
             if t.text == "true" {
                 return Ok(CgsValue::Bool(true));
@@ -874,6 +1360,898 @@ impl SceneLoader {
         Ok(CgsValue::List(items))
     }
 
+    /// Expression-position call dispatch: frame helpers (`at`/`rot`/`scaled`),
+    /// CSG composition, reference queries and geometry constructors. Returns
+    /// `Ok(None)` when `name` is an ordinary numeric function (the caller then
+    /// falls through to `cgs_call_fn`).
+    fn geom_expr_call(
+        &mut self,
+        name: &str,
+        pos: Vec<CgsValue>,
+        kw: HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<Option<CgsValue>, String> {
+        match name {
+            "at" | "rot" | "scaled" => {
+                if !kw.is_empty() {
+                    return Err(format!(
+                        "CGS line {line}: {name} takes positional arguments only"
+                    ));
+                }
+                let base = geom_val(pos.first().unwrap_or(&CgsValue::Num(0.0)), line, name)?;
+                // Column-vector chain: the new transform wraps (is outer to)
+                // the value's own frame, exactly like a statement modifier
+                // would (`translate(v) g` ≡ `at(g, v)`).
+                let m = match name {
+                    "at" => {
+                        if pos.len() != 2 {
+                            return Err(format!("CGS line {line}: at needs (geometry, offset)"));
+                        }
+                        let off = cgs_vec3(&pos[1], line, "at.off")?;
+                        mat4_mul(translate4(off), base.m4)
+                    }
+                    "rot" => {
+                        if pos.len() != 3 {
+                            return Err(format!(
+                                "CGS line {line}: rot needs (geometry, axis, angle)"
+                            ));
+                        }
+                        let ax = cgs_vec3(&pos[1], line, "rot.axis")?;
+                        let ang = cgs_num(&pos[2], line, "rot.angle")?;
+                        mat4_mul(motor_rotor(ax, ang).to_matrix(), base.m4)
+                    }
+                    _ => {
+                        if pos.len() != 2 {
+                            return Err(format!(
+                                "CGS line {line}: scaled needs (geometry, factor)"
+                            ));
+                        }
+                        let s4 = match &pos[1] {
+                            CgsValue::Vec3(v3) => scale4([v3.x, v3.y, v3.z]),
+                            CgsValue::List(_) => scale4(cgs_vec3(&pos[1], line, "scaled.s")?),
+                            _ => {
+                                let x = cgs_num(&pos[1], line, "scaled.s")?;
+                                scale4([x, x, x])
+                            }
+                        };
+                        mat4_mul(s4, base.m4)
+                    }
+                };
+                Ok(Some(CgsValue::Geom(GeomVal {
+                    geo: base.geo,
+                    m4: m,
+                })))
+            }
+            "difference" | "intersection" | "union" => {
+                if !kw.is_empty() {
+                    return Err(format!("CGS line {line}: {name} takes no named arguments"));
+                }
+                if pos.len() < 2 {
+                    return Err(format!(
+                        "CGS line {line}: {name} needs >= 2 geometry arguments"
+                    ));
+                }
+                let op = match name {
+                    "difference" => CsgOp::Difference,
+                    "intersection" => CsgOp::Intersection,
+                    _ => CsgOp::Union,
+                };
+                let mut kids: Vec<Geometry> = Vec::new();
+                for v in &pos {
+                    let g = geom_val(v, line, name)?;
+                    if matches!(g.geo, Geometry::CircleGeometry(_)) {
+                        return Err(format!(
+                            "CGS line {line}: {name} children must be solids (circle is not)"
+                        ));
+                    }
+                    let (cm, cl) = decompose_rigid(g.m4);
+                    kids.push(Geometry::AffineGeometry(transformed_geometry(
+                        g.geo, cm, cl,
+                    )));
+                }
+                Ok(Some(CgsValue::Geom(GeomVal {
+                    geo: Geometry::CsgGeometry(csg_geometry(op, kids)),
+                    m4: mat4_identity(),
+                })))
+            }
+            _ if QUERY_FNS.contains(&name) => Ok(Some(self.eval_query(name, pos, kw, line)?)),
+            _ if GEOM_EXPR_NAMES.contains(&name) => {
+                let args = self.resolve(name, pos, kw, line)?;
+                let geo = self.build_geometry(name, &args, line)?;
+                Ok(Some(CgsValue::Geom(GeomVal {
+                    geo,
+                    m4: mat4_identity(),
+                })))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Reference query: `Str` = tagged instance (world frame), `Geom` = value
+    /// (own frame). Returns the frame plus the world AABB (None = unbounded).
+    /// `(frame, geometry)` for `face`/`fnrm` and drill face references.
+    /// Instances resolve to their FIRST instance (a face of a multi-instance
+    /// tag is ambiguous; bbox queries keep unioning instead).
+    fn face_target<'a>(
+        &'a self,
+        v: &'a CgsValue,
+        line: i32,
+        what: &str,
+    ) -> Result<([f64; 16], &'a Geometry), String> {
+        match v {
+            CgsValue::Str(s) => {
+                let insts = match self.named.get(s) {
+                    Some(list) if !list.is_empty() => list,
+                    _ => {
+                        return Err(format!("CGS line {line}: unknown reference \"{s}\""));
+                    }
+                };
+                Ok((insts[0].world, &insts[0].geo))
+            }
+            CgsValue::Geom(g) => Ok((g.m4, &g.geo)),
+            _ => Err(format!(
+                "CGS line {line}: {what} needs a reference name or geometry, got {v}"
+            )),
+        }
+    }
+
+    /// Axial coordinate of a drill endpoint in the cutter frame `f`.
+    fn drill_end_coord(
+        &self,
+        e: &DrillEnd,
+        f: [f64; 16],
+        ax: usize,
+        line: i32,
+    ) -> Result<f64, String> {
+        match e {
+            DrillEnd::Num(n) => Ok(*n),
+            DrillEnd::Face { name, axis, sign } => {
+                let insts = match self.named.get(name) {
+                    Some(list) if !list.is_empty() => list,
+                    _ => {
+                        return Err(format!("CGS line {line}: unknown reference \"{name}\""));
+                    }
+                };
+                let inst = &insts[0];
+                let (p_local, _) = face_local(&inst.geo, *axis, *sign).ok_or_else(|| {
+                    format!("CGS line {line}: drill face reference has no finite bounds")
+                })?;
+                let p_world = transform_point(inst.world, p_local);
+                Ok(transform_point(mat4_inv(f), p_world)[ax])
+            }
+        }
+    }
+
+    fn query_target(
+        &self,
+        v: &CgsValue,
+        line: i32,
+        what: &str,
+    ) -> Result<([f64; 16], Option<[[f64; 3]; 2]>), String> {
+        match v {
+            CgsValue::Str(s) => {
+                let insts = match self.named.get(s) {
+                    Some(list) if !list.is_empty() => list,
+                    _ => {
+                        return Err(format!("CGS line {line}: unknown reference \"{s}\""));
+                    }
+                };
+                let mut acc: Option<[[f64; 3]; 2]> = None;
+                for i in insts {
+                    if let Some(b) = self
+                        .local_bounds(&i.geo)
+                        .map(|b| transform_bbox(b, i.world))
+                    {
+                        acc = Some(match acc {
+                            None => b,
+                            Some(a) => [
+                                [
+                                    a[0][0].min(b[0][0]),
+                                    a[0][1].min(b[0][1]),
+                                    a[0][2].min(b[0][2]),
+                                ],
+                                [
+                                    a[1][0].max(b[1][0]),
+                                    a[1][1].max(b[1][1]),
+                                    a[1][2].max(b[1][2]),
+                                ],
+                            ],
+                        });
+                    }
+                }
+                Ok((insts[0].world, acc))
+            }
+            CgsValue::Geom(g) => Ok((
+                g.m4,
+                self.local_bounds(&g.geo).map(|b| transform_bbox(b, g.m4)),
+            )),
+            _ => Err(format!(
+                "CGS line {line}: {what} needs a reference name or geometry, got {v}"
+            )),
+        }
+    }
+
+    fn local_bounds(&self, geo: &Geometry) -> Option<[[f64; 3]; 2]> {
+        crate::geometry_ops::geom_bounds(&cga_core::bake::identity_params(geo))
+    }
+
+    fn eval_query(
+        &self,
+        name: &str,
+        pos: Vec<CgsValue>,
+        kw: HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<CgsValue, String> {
+        if !kw.is_empty() {
+            return Err(format!("CGS line {line}: {name} takes no named arguments"));
+        }
+        let need = if matches!(name, "dist" | "face" | "fnrm") {
+            2
+        } else {
+            1
+        };
+        if pos.len() != need {
+            return Err(format!("CGS line {line}: {name} needs {need} argument(s)"));
+        }
+        if matches!(name, "face" | "fnrm") {
+            // key first: a malformed key is reported even when the target
+            // reference itself does not exist
+            let key = match &pos[1] {
+                CgsValue::Str(s) => s.clone(),
+                v => {
+                    return Err(format!(
+                        "CGS line {line}: {name} key must be a string like \"+x\", got {v}"
+                    ));
+                }
+            };
+            let (axis, sign) = parse_face_key(&key, line, name)?;
+            let (m, geo) = self.face_target(&pos[0], line, name)?;
+            let (p, n) = face_local(geo, axis, sign).ok_or_else(|| {
+                format!("CGS line {line}: {name}: reference has no finite bounds")
+            })?;
+            let w = if name == "face" {
+                transform_point(m, p)
+            } else {
+                transform_normal(m, n)
+            };
+            return Ok(CgsValue::Vec3(CgsVec3 {
+                x: w[0],
+                y: w[1],
+                z: w[2],
+            }));
+        }
+        if name == "dist" {
+            let a = self.query_point(&pos[0], line, name)?;
+            let b = self.query_point(&pos[1], line, name)?;
+            let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+            return Ok(CgsValue::Num(
+                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
+            ));
+        }
+        if matches!(name, "xdir" | "ydir" | "zdir") {
+            let (m, _) = self.query_target(&pos[0], line, name)?;
+            // Column-vector convention: local axes map to matrix columns.
+            let col = match name {
+                "xdir" => [m[0], m[4], m[8]],
+                "ydir" => [m[1], m[5], m[9]],
+                _ => [m[2], m[6], m[10]],
+            };
+            let n = (col[0] * col[0] + col[1] * col[1] + col[2] * col[2]).sqrt();
+            if n < 1e-12 {
+                return Err(format!("CGS line {line}: {name} is degenerate"));
+            }
+            return Ok(CgsValue::Vec3(CgsVec3 {
+                x: col[0] / n,
+                y: col[1] / n,
+                z: col[2] / n,
+            }));
+        }
+        let (_, b) = self.query_target(&pos[0], line, name)?;
+        let b = match b {
+            Some(b) => b,
+            None => {
+                return Err(format!(
+                    "CGS line {line}: {name}: reference has no finite bounds"
+                ));
+            }
+        };
+        let v = match name {
+            "center" => [
+                (b[0][0] + b[1][0]) / 2.0,
+                (b[0][1] + b[1][1]) / 2.0,
+                (b[0][2] + b[1][2]) / 2.0,
+            ],
+            "lo" => b[0],
+            "hi" => b[1],
+            _ => [b[1][0] - b[0][0], b[1][1] - b[0][1], b[1][2] - b[0][2]],
+        };
+        Ok(CgsValue::Vec3(CgsVec3 {
+            x: v[0],
+            y: v[1],
+            z: v[2],
+        }))
+    }
+
+    /// Center point for `dist`: Vec3 passes through, references resolve to
+    /// their AABB center.
+    fn query_point(&self, v: &CgsValue, line: i32, what: &str) -> Result<[f64; 3], String> {
+        if let CgsValue::Vec3(v3) = v {
+            return Ok([v3.x, v3.y, v3.z]);
+        }
+        let (_, b) = self.query_target(v, line, what)?;
+        let b = match b {
+            Some(b) => b,
+            None => {
+                return Err(format!(
+                    "CGS line {line}: {what}: reference has no finite bounds"
+                ));
+            }
+        };
+        Ok([
+            (b[0][0] + b[1][0]) / 2.0,
+            (b[0][1] + b[1][1]) / 2.0,
+            (b[0][2] + b[1][2]) / 2.0,
+        ])
+    }
+
+    /// Register a rendered instance under every active `tag`.
+    fn register(&mut self, geo: &Geometry, world: [f64; 16], emit: [f64; 16]) {
+        if self.pending.is_empty() {
+            return;
+        }
+        for i in 0..self.pending.len() {
+            let (name, entry) = self.pending[i].clone();
+            let rel = mat4_mul(mat4_inv(entry), emit);
+            self.named.entry(name).or_default().push(Inst {
+                geo: geo.clone(),
+                world,
+                rel,
+            });
+        }
+    }
+
+    /// `show(g);` — render a geometry value at `ctx ∘ g.m4`.
+    fn show_stmt(
+        &mut self,
+        ctx: [f64; 16],
+        mat: &HashMap<String, CgsValue>,
+        scope: &mut HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<(), String> {
+        self.take();
+        let (pos, kw) = self.call_args(scope)?;
+        if !kw.is_empty() || pos.len() != 1 {
+            return Err(format!("CGS line {line}: show takes one geometry argument"));
+        }
+        let g = geom_val(&pos[0], line, "show")?;
+        self.expect(TokenKind::Semi)?;
+        self.add_geometry(g.geo, mat4_mul(ctx, g.m4), mat)
+    }
+
+    /// `tag("name") <statement>` — register the statement's emitted
+    /// instances under `name` for reference queries.
+    fn tag_stmt(
+        &mut self,
+        ctx: [f64; 16],
+        mat: &HashMap<String, CgsValue>,
+        scope: &mut HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<(), String> {
+        self.take();
+        self.expect(TokenKind::Lparen)?;
+        let nt = self.take();
+        if nt.kind != TokenKind::Str {
+            return Err(format!("CGS line {}: tag needs a name string", nt.line));
+        }
+        self.expect(TokenKind::Rparen)?;
+        self.pending.push((nt.text, ctx));
+        let r = self.body(ctx, mat, scope, line);
+        self.pending.pop();
+        r
+    }
+
+    /// `drill(r=…, through=…, axis=…[, from=…, to=…]);` — a through-cutter
+    /// whose axial extent tracks the target's bounding box (derived-feature
+    /// following, docs/cgs-v2.md §5.1). The cutter's frame is `ctx ∘ rel`,
+    /// so it replays the target's placement inside the current context
+    /// instead of double-applying the emit context.
+    fn drill_stmt(
+        &mut self,
+        ctx: [f64; 16],
+        mat: &HashMap<String, CgsValue>,
+        scope: &mut HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<(), String> {
+        self.take();
+        let (pos, kw) = self.call_args(scope)?;
+        if !pos.is_empty() {
+            return Err(format!(
+                "CGS line {line}: drill takes named arguments: r, through, axis[, from, to]"
+            ));
+        }
+        let r = match kw.get("r") {
+            Some(v) => cgs_num(v, line, "drill.r")?,
+            None => return Err(format!("CGS line {line}: drill needs r=")),
+        };
+        if !(r > 0.0) {
+            return Err(format!("CGS line {line}: drill.r must be > 0"));
+        }
+        // from/to endpoints: number = coordinate in the cutter frame,
+        // "name:key" = face reference (world face point → frame coords).
+        let from_ref = drill_end_ref(kw.get("from"), line, "from")?;
+        let to_ref = drill_end_ref(kw.get("to"), line, "to")?;
+        let face_axes: Vec<(usize, f64)> = [&from_ref, &to_ref]
+            .iter()
+            .filter_map(|e| match e {
+                Some(DrillEnd::Face { axis, sign, .. }) => Some((*axis, *sign)),
+                _ => None,
+            })
+            .collect();
+
+        // axis: explicit, else inferred from the face-reference keys — the
+        // "name:key" form replaces axis + bounding box (docs/cgs-v2.md §7).
+        let ax = match kw.get("axis") {
+            Some(v) => {
+                let a = cgs_num(v, line, "drill.axis")?;
+                if a != 0.0 && a != 1.0 && a != 2.0 {
+                    return Err(format!(
+                        "CGS line {line}: drill.axis must be 0, 1 or 2 (X/Y/Z)"
+                    ));
+                }
+                let ax = a as usize;
+                if let Some(&(ka, ks)) = face_axes.first() {
+                    if ka != ax {
+                        return Err(format!(
+                            "CGS line {line}: drill face key \"{}\" does not match axis={ax}",
+                            face_key_str(ka, ks)
+                        ));
+                    }
+                }
+                ax
+            }
+            None => match face_axes.first() {
+                None => {
+                    return Err(format!("CGS line {line}: drill needs axis= (0/1/2)"));
+                }
+                Some(&(ka, ks)) => {
+                    for &(kb, kb_sign) in &face_axes {
+                        if kb != ka {
+                            return Err(format!(
+                                "CGS line {line}: from/to face references use different axes (\"{}\" vs \"{}\")",
+                                face_key_str(ka, ks),
+                                face_key_str(kb, kb_sign)
+                            ));
+                        }
+                    }
+                    ka
+                }
+            },
+        };
+
+        // Cutter frame F = ctx ∘ rel; target box (default extent) in F coords.
+        // through is optional when from/to fully specify the extent.
+        let (rel, fbox): ([f64; 16], Option<[[f64; 3]; 2]>) = match kw.get("through") {
+            Some(CgsValue::Str(s)) => {
+                let insts = match self.named.get(s) {
+                    Some(list) if !list.is_empty() => list,
+                    _ => return Err(format!("CGS line {line}: unknown reference \"{s}\"")),
+                };
+                let rel0 = insts[0].rel;
+                let f = mat4_mul(ctx, rel0);
+                let finv = mat4_inv(f);
+                let mut acc: Option<[[f64; 3]; 2]> = None;
+                for i in insts {
+                    // World box of each instance (Csg instances carry an
+                    // identity slot with the frame baked into the geometry).
+                    if let Some(b) = self
+                        .local_bounds(&i.geo)
+                        .map(|b| transform_bbox(b, i.world))
+                    {
+                        acc = Some(match acc {
+                            None => b,
+                            Some(a) => [
+                                [
+                                    a[0][0].min(b[0][0]),
+                                    a[0][1].min(b[0][1]),
+                                    a[0][2].min(b[0][2]),
+                                ],
+                                [
+                                    a[1][0].max(b[1][0]),
+                                    a[1][1].max(b[1][1]),
+                                    a[1][2].max(b[1][2]),
+                                ],
+                            ],
+                        });
+                    }
+                }
+                let b = acc
+                    .ok_or_else(|| format!("CGS line {line}: drill target has no finite bounds"))?;
+                (rel0, Some(transform_bbox(b, finv)))
+            }
+            Some(CgsValue::Geom(g)) => {
+                // F contains g.m4, so the box is the geometry's local one.
+                let b = self
+                    .local_bounds(&g.geo)
+                    .ok_or_else(|| format!("CGS line {line}: drill target has no finite bounds"))?;
+                (g.m4, Some(b))
+            }
+            Some(other) => {
+                return Err(format!(
+                    "CGS line {line}: drill.through needs a reference name or geometry, got {other}"
+                ));
+            }
+            None => (mat4_identity(), None),
+        };
+        // A missing endpoint falls back to the target bounding box (through=).
+        if (from_ref.is_none() || to_ref.is_none()) && fbox.is_none() {
+            return Err(format!(
+                "CGS line {line}: drill needs through=<name or geometry>"
+            ));
+        }
+
+        let f = mat4_mul(ctx, rel);
+        let a0 = if let Some(e) = &from_ref {
+            self.drill_end_coord(e, f, ax, line)?
+        } else {
+            fbox.as_ref()
+                .map(|b| b[0][ax])
+                .ok_or_else(|| format!("CGS line {line}: drill needs through=<name or geometry>"))?
+        };
+        let a1 = if let Some(e) = &to_ref {
+            self.drill_end_coord(e, f, ax, line)?
+        } else {
+            fbox.as_ref()
+                .map(|b| b[1][ax])
+                .ok_or_else(|| format!("CGS line {line}: drill needs through=<name or geometry>"))?
+        };
+        if !(a1 > a0) {
+            return Err(format!(
+                "CGS line {line}: drill extent must be non-empty ({a0} .. {a1})"
+            ));
+        }
+        let center = (a0 + a1) / 2.0;
+        // Chain (innermost first): orient the +Z cylinder onto `axis`,
+        // offset along the axis, then apply the cutter frame.
+        let rmat = match ax {
+            0 => motor_rotor([0.0, 1.0, 0.0], std::f64::consts::FRAC_PI_2).to_matrix(),
+            1 => motor_rotor([1.0, 0.0, 0.0], -std::f64::consts::FRAC_PI_2).to_matrix(),
+            _ => mat4_identity(),
+        };
+        let mut off = [0.0, 0.0, 0.0];
+        off[ax] = center;
+        let w = mat4_mul(mat4_mul(f, translate4(off)), rmat);
+        self.add_geometry(
+            Geometry::CylinderGeometry(cylinder_geometry(r, a1 - a0)),
+            w,
+            mat,
+        )?;
+        self.expect(TokenKind::Semi)?;
+        Ok(())
+    }
+
+    /// `var name = expr;` — declares a numeric solve unknown (docs/cgs-v2.md
+    /// §6.1). Executes as a plain assignment; the `var` form documents that
+    /// the value is meant to appear in a later `constrain(…) solve;`.
+    fn var_stmt(&mut self, scope: &mut HashMap<String, CgsValue>, line: i32) -> Result<(), String> {
+        self.take();
+        let nt = self.take();
+        if nt.kind != TokenKind::Ident {
+            return Err(format!("CGS line {line}: var needs a name"));
+        }
+        if self.peek().kind != TokenKind::Assign {
+            return Err(format!(
+                "CGS line {}: var {} needs = <number>",
+                nt.line, nt.text
+            ));
+        }
+        self.take();
+        let v = self.expr(scope, 1)?;
+        let n = match v {
+            CgsValue::Num(n) => n,
+            _ => {
+                return Err(format!(
+                    "CGS line {}: var {} must be a number (solve unknowns are numeric)",
+                    line, nt.text
+                ));
+            }
+        };
+        self.expect(TokenKind::Semi)?;
+        scope.insert(nt.text, CgsValue::Num(n));
+        Ok(())
+    }
+
+    /// `constrain(v1, …) { lhs == rhs; … } solve;` — compile-time
+    /// Levenberg-damped Gauss-Newton solve (docs/cgs-v2.md §6.2). The block
+    /// is captured as tokens and re-evaluated with trial values overlaid on
+    /// the scope; on success the solution is written back, so every
+    /// statement after `solve` reads baked constants (text stays truth).
+    fn constrain_stmt(
+        &mut self,
+        scope: &mut HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<(), String> {
+        self.take();
+        self.expect(TokenKind::Lparen)?;
+        let mut unknowns: Vec<String> = Vec::new();
+        if self.peek().kind == TokenKind::Rparen {
+            return Err(format!(
+                "CGS line {line}: constrain needs at least one unknown"
+            ));
+        }
+        loop {
+            let t = self.take();
+            if t.kind != TokenKind::Ident {
+                return Err(format!(
+                    "CGS line {}: constrain unknown must be a name",
+                    t.line
+                ));
+            }
+            unknowns.push(t.text);
+            if self.peek().kind == TokenKind::Comma {
+                self.take();
+            } else {
+                break;
+            }
+        }
+        self.expect(TokenKind::Rparen)?;
+        self.expect(TokenKind::Lbrace)?;
+        // capture the constraint body up to its matching '}'
+        let start = self.pos;
+        let mut depth = 1i32;
+        while depth > 0 {
+            if self.pos >= self.toks.len() {
+                return Err(format!("CGS line {line}: unterminated constrain block"));
+            }
+            let k = self.take().kind;
+            if k == TokenKind::Lbrace {
+                depth += 1;
+            } else if k == TokenKind::Rbrace {
+                depth -= 1;
+            }
+        }
+        let body = self.toks[start..self.pos - 1].to_vec();
+        let st = self.take();
+        if !(st.kind == TokenKind::Ident && st.text == "solve") {
+            return Err(format!(
+                "CGS line {}: constrain block must be closed with `solve;`",
+                st.line
+            ));
+        }
+        self.expect(TokenKind::Semi)?;
+
+        // split the body into `lhs == rhs;` equations
+        let mut segs: Vec<Vec<CgsToken>> = Vec::new();
+        let mut cur: Vec<CgsToken> = Vec::new();
+        for t in body {
+            if t.kind == TokenKind::Semi {
+                if !cur.is_empty() {
+                    segs.push(std::mem::take(&mut cur));
+                }
+            } else {
+                cur.push(t);
+            }
+        }
+        if !cur.is_empty() {
+            segs.push(cur);
+        }
+        if segs.is_empty() {
+            return Err(format!("CGS line {line}: constrain block is empty"));
+        }
+        let mut eqs: Vec<(Vec<CgsToken>, Vec<CgsToken>, i32)> = Vec::new();
+        for seg in segs {
+            let eline = seg[0].line;
+            let mut depth = 0i32;
+            let mut eq_at: Option<usize> = None;
+            let mut ineq_at: Option<usize> = None;
+            for (i, t) in seg.iter().enumerate() {
+                if matches!(t.kind, TokenKind::Lparen | TokenKind::Lbracket) {
+                    depth += 1;
+                } else if matches!(t.kind, TokenKind::Rparen | TokenKind::Rbracket) {
+                    depth -= 1;
+                } else if depth == 0 && t.kind == TokenKind::Op {
+                    if t.text == "==" {
+                        if eq_at.is_some() {
+                            return Err(format!(
+                                "CGS line {}: one == per constrain equation",
+                                t.line
+                            ));
+                        }
+                        eq_at = Some(i);
+                    } else if matches!(t.text.as_str(), "<" | ">" | "<=" | ">=" | "!=") {
+                        ineq_at = Some(i);
+                    }
+                }
+            }
+            if let Some(i) = eq_at {
+                eqs.push((seg[..i].to_vec(), seg[i + 1..].to_vec(), eline));
+            } else if ineq_at.is_some() {
+                return Err(format!(
+                    "CGS line {eline}: constrain supports == equations only (inequality solving is planned)"
+                ));
+            } else {
+                return Err(format!(
+                    "CGS line {eline}: constrain equations must be `lhs == rhs;`"
+                ));
+            }
+        }
+
+        // validate unknowns against the current scope
+        let mut x: Vec<f64> = Vec::new();
+        for u in &unknowns {
+            match scope.get(u) {
+                Some(CgsValue::Num(n)) => x.push(*n),
+                Some(_) => {
+                    return Err(format!(
+                        "CGS line {line}: constrain unknown {u} must be a number"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "CGS line {line}: constrain unknown {u} is not defined"
+                    ));
+                }
+            }
+        }
+
+        let base = scope.clone();
+        let solved = self.constrain_solve(line, &unknowns, x, &eqs, &base)?;
+        for (u, v) in unknowns.iter().zip(solved) {
+            scope.insert(u.clone(), CgsValue::Num(v));
+        }
+        Ok(())
+    }
+
+    /// Evaluate one constraint-side token slice as an expression against an
+    /// overlay scope (parser position/tokens saved and restored).
+    fn eval_token_expr(
+        &mut self,
+        toks: &[CgsToken],
+        scope: &HashMap<String, CgsValue>,
+    ) -> Result<CgsValue, String> {
+        let saved_toks = std::mem::replace(&mut self.toks, toks.to_vec());
+        let saved_pos = self.pos;
+        self.pos = 0;
+        let res = self.expr(scope, 1);
+        let consumed = self.pos >= self.toks.len();
+        self.toks = saved_toks;
+        self.pos = saved_pos;
+        let v = res?;
+        if !consumed {
+            return Err(format!(
+                "CGS line {}: trailing tokens in constraint expression",
+                toks[0].line
+            ));
+        }
+        Ok(v)
+    }
+
+    fn constrain_residual(
+        &mut self,
+        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32)],
+        base_scope: &HashMap<String, CgsValue>,
+        unknowns: &[String],
+        x: &[f64],
+    ) -> Result<Vec<f64>, String> {
+        let mut scope = base_scope.clone();
+        for (u, v) in unknowns.iter().zip(x.iter()) {
+            scope.insert(u.clone(), CgsValue::Num(*v));
+        }
+        let mut out: Vec<f64> = Vec::new();
+        for (lhs, rhs, line) in eqs {
+            let a = self.eval_token_expr(lhs, &scope)?;
+            let b = self.eval_token_expr(rhs, &scope)?;
+            let fa = flatten_val(&a, *line)?;
+            let fb = flatten_val(&b, *line)?;
+            if fa.len() != fb.len() {
+                return Err(format!(
+                    "CGS line {line}: constraint sides must have matching shapes ({} vs {})",
+                    fa.len(),
+                    fb.len()
+                ));
+            }
+            for (u, v) in fa.iter().zip(fb.iter()) {
+                out.push(u - v);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Levenberg-damped Gauss-Newton over the constraint residuals.
+    fn constrain_solve(
+        &mut self,
+        line: i32,
+        unknowns: &[String],
+        x0: Vec<f64>,
+        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32)],
+        base_scope: &HashMap<String, CgsValue>,
+    ) -> Result<Vec<f64>, String> {
+        let n = unknowns.len();
+        let mut x = x0;
+        let mut lambda = 1e-3f64;
+        let mut r = self.constrain_residual(eqs, base_scope, unknowns, &x)?;
+        let mut converged = maxabs(&r) < 1e-10;
+        let mut iter = 0;
+        let mut stalled = false;
+        while !converged && iter < 50 && !stalled {
+            iter += 1;
+            let m = r.len();
+            // forward-difference Jacobian
+            let mut jac = vec![vec![0.0f64; n]; m];
+            for k in 0..n {
+                let h = 1e-6 * x[k].abs().max(1.0);
+                let mut xp = x.clone();
+                xp[k] += h;
+                let rp = self.constrain_residual(eqs, base_scope, unknowns, &xp)?;
+                if rp.len() != m {
+                    return Err(format!(
+                        "CGS line {line}: constraint shape changed during solve"
+                    ));
+                }
+                for i in 0..m {
+                    jac[i][k] = (rp[i] - r[i]) / h;
+                }
+            }
+            // damped normal-equation step until |r|∞ decreases
+            let mut stepped = false;
+            while !stepped {
+                let mut a = vec![vec![0.0f64; n]; n];
+                let mut b = vec![0.0f64; n];
+                for p in 0..n {
+                    for q in 0..n {
+                        let mut s = 0.0;
+                        for i in 0..m {
+                            s += jac[i][p] * jac[i][q];
+                        }
+                        a[p][q] = s;
+                    }
+                    a[p][p] += lambda;
+                    let mut s = 0.0;
+                    for i in 0..m {
+                        s += jac[i][p] * r[i];
+                    }
+                    b[p] = -s;
+                }
+                match gauss_solve(a, b) {
+                    Some(dx) => {
+                        let mut xn = x.clone();
+                        for k in 0..n {
+                            xn[k] += dx[k];
+                        }
+                        let rn = self.constrain_residual(eqs, base_scope, unknowns, &xn)?;
+                        if maxabs(&rn) < maxabs(&r) {
+                            x = xn;
+                            r = rn;
+                            lambda = (lambda / 10.0).max(1e-12);
+                            converged = maxabs(&r) < 1e-10;
+                            stepped = true;
+                        } else {
+                            lambda *= 10.0;
+                            if lambda > 1e14 {
+                                stalled = true;
+                                stepped = true;
+                            }
+                        }
+                    }
+                    None => {
+                        lambda *= 10.0;
+                        if lambda > 1e14 {
+                            stalled = true;
+                            stepped = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !converged {
+            return Err(format!(
+                "CGS line {line}: constrain did not converge (|r|={:.3e}, iter={iter}, var={})",
+                maxabs(&r),
+                unknowns.join(",")
+            ));
+        }
+        Ok(x)
+    }
+
     fn statement(
         &mut self,
         ctx: [f64; 16],
@@ -891,6 +2269,28 @@ impl SceneLoader {
         }
         if t.kind == TokenKind::Ident {
             let name = t.text.as_str();
+            // Assignment is its own statement form, checked before the
+            // keyword dispatch so any keyword can be shadowed by a variable
+            // (`echo = 5;`, `for = …`). `background = 0x…;` doubles as the
+            // property form of the background statement.
+            if self.peek1().kind == TokenKind::Assign {
+                self.take();
+                self.take();
+                let v = self.expr(scope, 1)?;
+                self.expect(TokenKind::Semi)?;
+                if name == "background" {
+                    let c = cgs_num(&v, t.line, "background")?;
+                    self.scene.background = color_hex(c as i32);
+                }
+                scope.insert(name.to_string(), v);
+                return Ok(());
+            }
+            if self.peek1().kind == TokenKind::Lbracket {
+                return Err(format!(
+                    "CGS line {}: indexing is not supported — use comp(vector, index)",
+                    t.line
+                ));
+            }
             if name == "module" {
                 self.module_def()?;
                 return Ok(());
@@ -907,32 +2307,52 @@ impl SceneLoader {
                 self.echo_stmt(scope)?;
                 return Ok(());
             }
-            if name == "union" {
-                self.take();
-                self.expect(TokenKind::Lparen)?;
-                self.expect(TokenKind::Rparen)?;
-                self.body(ctx, mat, scope, t.line)?;
+            if name == "show" {
+                self.show_stmt(ctx, mat, scope, t.line)?;
                 return Ok(());
             }
-            if name == "difference" || name == "intersection" {
-                self.take();
-                self.expect(TokenKind::Lparen)?;
-                self.expect(TokenKind::Rparen)?;
-                let op = if name == "difference" {
-                    CsgOp::Difference
-                } else {
-                    CsgOp::Intersection
-                };
-                self.csg_block(op, ctx, mat, scope, t.line)?;
+            if name == "tag" {
+                self.tag_stmt(ctx, mat, scope, t.line)?;
                 return Ok(());
             }
-            if self.peek1().kind == TokenKind::Assign {
+            if name == "drill" {
+                self.drill_stmt(ctx, mat, scope, t.line)?;
+                return Ok(());
+            }
+            if name == "var" {
+                self.var_stmt(scope, t.line)?;
+                return Ok(());
+            }
+            if name == "constrain" {
+                self.constrain_stmt(scope, t.line)?;
+                return Ok(());
+            }
+            if name == "union" || name == "difference" || name == "intersection" {
                 self.take();
-                self.take();
-                let v = self.expr(scope, 1)?;
-                scope.insert(name.to_string(), v);
+                self.expect(TokenKind::Lparen)?;
+                if self.peek().kind == TokenKind::Rparen {
+                    // block form: difference() { ... }
+                    self.take();
+                    if name == "union" {
+                        self.body(ctx, mat, scope, t.line)?;
+                        return Ok(());
+                    }
+                    let op = if name == "difference" {
+                        CsgOp::Difference
+                    } else {
+                        CsgOp::Intersection
+                    };
+                    self.csg_block(op, ctx, mat, scope, t.line)?;
+                    return Ok(());
+                }
+                // expression form: difference(a, b); — build a value, render it
+                let (pos, kw) = self.paren_args(scope)?;
+                let v = self
+                    .geom_expr_call(name, pos, kw, t.line)?
+                    .ok_or_else(|| format!("CGS line {}: {name} is not callable here", t.line))?;
+                let g = geom_val(&v, t.line, name)?;
                 self.expect(TokenKind::Semi)?;
-                return Ok(());
+                return self.add_geometry(g.geo, mat4_mul(ctx, g.m4), mat);
             }
         }
         let t = self.take();
@@ -947,6 +2367,12 @@ impl SceneLoader {
         if self.modules.contains_key(&name) {
             self.module_call(&name, pos, kw, ctx, mat, t.line)?;
             return Ok(());
+        }
+        if is_expr_only_fn(&name) {
+            return Err(format!(
+                "CGS line {}: {} is an expression function and cannot be used as a statement",
+                t.line, name
+            ));
         }
         let args = self.resolve(&name, pos, kw, t.line)?;
         if name == "translate" {
@@ -1416,6 +2842,14 @@ impl SceneLoader {
         scope: &HashMap<String, CgsValue>,
     ) -> Result<(Vec<CgsValue>, HashMap<String, CgsValue>), String> {
         self.expect(TokenKind::Lparen)?;
+        self.paren_args(scope)
+    }
+
+    /// Parse `(pos, kw)` args; the opening `(` must already be consumed.
+    fn paren_args(
+        &mut self,
+        scope: &HashMap<String, CgsValue>,
+    ) -> Result<(Vec<CgsValue>, HashMap<String, CgsValue>), String> {
         let mut pos: Vec<CgsValue> = Vec::new();
         let mut kw: HashMap<String, CgsValue> = HashMap::new();
         if self.peek().kind != TokenKind::Rparen {
@@ -1483,6 +2917,7 @@ impl SceneLoader {
         ctx: [f64; 16],
         mat: &HashMap<String, CgsValue>,
     ) -> Result<(), String> {
+        self.register(&geo, ctx, ctx);
         if self.collecting {
             self.collect.push(CollectedGeom { geo, m4: ctx });
             return Ok(());
@@ -1537,8 +2972,21 @@ impl SceneLoader {
                 c.geo, cm, cl,
             )));
         }
+        // The result absorbs every child frame: its geometry is world-space
+        // (the emit context is baked in), so the instance slot is identity.
+        let result = Geometry::CsgGeometry(csg_geometry(op, kids));
+        self.register(&result, mat4_identity(), ctx);
+        if was_collecting {
+            // Nested CSG: flow the result back into the enclosing collect so
+            // the parent difference/intersection sees it as a child.
+            self.collect.push(CollectedGeom {
+                geo: result,
+                m4: mat4_identity(),
+            });
+            return Ok(());
+        }
         self.scene.add_mesh(mesh(MeshParams {
-            geometry: Geometry::CsgGeometry(csg_geometry(op, kids)),
+            geometry: result,
             material: self.build_material(mat)?,
             position: [0.0, 0.0, 0.0],
             rotation_axis: [0.0, 0.0, 1.0],
@@ -2311,5 +3759,704 @@ mod tests {
 
         let (sc, _) = cgs_load_result("sphere(r=1);", "").expect("unexpected error");
         assert_eq!(sc.objects.len(), 1);
+    }
+
+    fn v2_err(src: &str) -> String {
+        match cgs_load_result(src, "") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error for {src:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cgs_geom_value_bind_show() {
+        // A binding alone renders nothing; show renders it. (docs/cgs-v2.md P0)
+        let (sc, _) = cgs_load("g = cylinder(r=1, h=2);", "");
+        assert_eq!(sc.objects.len(), 0);
+        let (sc, _) = cgs_load("g = cylinder(r=1, h=2);\nshow(g);", "");
+        assert_eq!(sc.objects.len(), 1);
+        match &sc.objects[0].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.radius - 1.0).abs() < 1e-12);
+                assert!((c.half - 1.0).abs() < 1e-9);
+            }
+            _ => panic!("expected cylinder geometry"),
+        }
+    }
+
+    #[test]
+    fn test_cgs_frameless_binding() {
+        // Bindings do not capture the statement context: translate applies
+        // once at show time, not squared (docs/cgs-v2.md §4.2 rule 1/2).
+        let (sc, _) = cgs_load(
+            "translate([3, 0, 0]) { g = box(s=[1, 1, 1]); show(g); }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!((sc.objects[0].position[0] - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cgs_frame_helpers() {
+        let (sc, _) = cgs_load("g = sphere(r=1);\nshow(at(g, [1, 0, 0]));", "");
+        assert_eq!(sc.objects.len(), 1);
+        assert!((sc.objects[0].position[0] - 1.0).abs() < 1e-9);
+        // at() offset stays in the enclosing frame even under translation
+        let (sc, _) = cgs_load(
+            "g = sphere(r=1);\ntranslate([10, 0, 0]) show(at(g, [1, 0, 0]));",
+            "",
+        );
+        assert!((sc.objects[0].position[0] - 11.0).abs() < 1e-9);
+        // scaled() folds into an affine instance
+        let (sc, _) = cgs_load("g = sphere(r=1);\nshow(scaled(g, 2));", "");
+        assert_eq!(sc.objects.len(), 1);
+        assert!(matches!(
+            sc.objects[0].geometry,
+            Geometry::AffineGeometry(_)
+        ));
+        // rot() composes a rotation frame
+        let (sc, _) = cgs_load(
+            "g = box(s=[1, 1, 1]);\nshow(rot(g, [0, 0, 1], pi / 2));",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+    }
+
+    #[test]
+    fn test_cgs_expr_csg_forms() {
+        // expression form renders (docs/cgs-v2.md §4.3)
+        let (sc, _) = cgs_load("difference(sphere(r=1), box(s=[1, 1, 1]));", "");
+        assert_eq!(sc.objects.len(), 1);
+        assert!(matches!(sc.objects[0].geometry, Geometry::CsgGeometry(_)));
+        // bound and shown later
+        let (sc, _) = cgs_load(
+            "x = difference(sphere(r=1), box(s=[1, 1, 1]));\nshow(x);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!(matches!(sc.objects[0].geometry, Geometry::CsgGeometry(_)));
+        // statement nesting — previously "difference needs >= 2 geometry children"
+        let (sc, _) = cgs_load(
+            "difference() { box(s=[2, 2, 2]); difference() { sphere(r=3); box(s=[4, 4, 4]); } }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!(matches!(sc.objects[0].geometry, Geometry::CsgGeometry(_)));
+        // three levels
+        let (sc, _) = cgs_load(
+            "intersection() { difference() { sphere(r=2); box(s=[1, 1, 1]); } difference() { box(s=[3, 3, 3]); sphere(r=0.5); } }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        // nested inside a collecting parent, expression form too
+        let (sc, _) = cgs_load(
+            "difference() { box(s=[6, 6, 6]); difference(sphere(r=4), box(s=[8, 8, 8])); }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+    }
+
+    #[test]
+    fn test_cgs_tag_reference_queries() {
+        // golden pattern: a query result drives a placement
+        let (sc, _) = cgs_load(
+            "tag(\"p\") translate([5, 0, 0]) sphere(r=1);\ntranslate(center(\"p\")) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        assert!((sc.objects[1].position[0] - 5.0).abs() < 1e-9);
+
+        let (sc, _) = cgs_load(
+            "tag(\"a\") box(s=[2, 4, 6]);\ntranslate(size(\"a\")) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        let p = sc.objects[1].position;
+        assert!(
+            (p[0] - 2.0).abs() < 1e-9 && (p[1] - 4.0).abs() < 1e-9 && (p[2] - 6.0).abs() < 1e-9
+        );
+
+        let (sc, _) = cgs_load(
+            "tag(\"a\") box(s=[2, 4, 6]);\ntranslate(hi(\"a\")) sphere(r=1);",
+            "",
+        );
+        let p = sc.objects[1].position;
+        assert!(
+            (p[0] - 1.0).abs() < 1e-9 && (p[1] - 2.0).abs() < 1e-9 && (p[2] - 3.0).abs() < 1e-9
+        );
+
+        // tag around a block registers a group; union bbox center = origin
+        let (sc, _) = cgs_load(
+            "tag(\"pair\") { translate([2, 0, 0]) sphere(r=1); translate([-2, 0, 0]) sphere(r=1); }\ntranslate(center(\"pair\")) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        assert!(sc.objects[2].position[0].abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cgs_axis_and_dist_queries() {
+        let (sc, _) = cgs_load(
+            "tag(\"r\") rotate(axis=[0, 0, 1], angle=pi / 2) box(s=[2, 2, 2]);\ntranslate(xdir(\"r\")) sphere(r=1);",
+            "",
+        );
+        let p = sc.objects[1].position;
+        assert!(p[1].abs() > 0.99, "xdir must map onto ±y: {p:?}");
+        assert!(p[0].abs() < 1e-9 && p[2].abs() < 1e-9);
+
+        let (sc, _) = cgs_load(
+            "tag(\"a\") translate([3, 0, 0]) sphere(r=1);\nd = dist(\"a\", [0, 0, 0]);\ntranslate([d, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!((sc.objects[1].position[0] - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cgs_show_in_csg_and_tag_group() {
+        // show() inside a difference collect path
+        let (sc, _) = cgs_load(
+            "g = sphere(r=1);\ndifference() { show(g); box(s=[1, 1, 1]); }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!(matches!(sc.objects[0].geometry, Geometry::CsgGeometry(_)));
+    }
+
+    #[test]
+    fn test_cgs_v2_query_errors() {
+        let e = v2_err("translate(center(\"missing\")) sphere(r=1);");
+        assert!(e.contains("unknown reference"), "{e}");
+        let e = v2_err("translate(center(plane(n=[0, 1, 0]))) sphere(r=1);");
+        assert!(e.contains("no finite bounds"), "{e}");
+        let e = v2_err("show(5);");
+        assert!(e.contains("geometry value"), "{e}");
+        let e = v2_err("x = sphere(r=1);\ny = (x == x);");
+        assert!(e.contains("not comparable"), "{e}");
+        let e = v2_err("y = sqrt(x=4);");
+        assert!(e.contains("no named arguments"), "{e}");
+        let e = v2_err("g = sphere(r=1);\nshow(at(g));");
+        assert!(e.contains("at needs (geometry, offset)"), "{e}");
+    }
+
+    #[test]
+    fn test_mat4_inv_roundtrip() {
+        let m = mat4_mul(
+            translate4([1.0, 2.0, 3.0]),
+            motor_rotor([0.0, 0.0, 1.0], 0.7).to_matrix(),
+        );
+        let p = mat4_mul(m, mat4_inv(m));
+        let eye = mat4_identity();
+        for i in 0..16 {
+            assert!(
+                (p[i] - eye[i]).abs() < 1e-9,
+                "idx {i}: {} vs {}",
+                p[i],
+                eye[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_cgs_drill_tracks_target() {
+        // The drill spans exactly the plate's thickness (G3: derived extent
+        // follows the target — change the plate, the hole follows).
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.3, 4]);\ntag(\"plate\") show(p);\ndrill(r=0.2, through=\"plate\", axis=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.radius - 0.2).abs() < 1e-12);
+                assert!((c.half - 0.15).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+
+        // thicken the plate → the cutter follows automatically
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.5, 4]);\ntag(\"plate\") show(p);\ndrill(r=0.2, through=\"plate\", axis=1);",
+            "",
+        );
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 0.25).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+
+        // displaced target: extent center follows the instance's rel frame
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.3, 4]);\ntag(\"plate\") translate([0, 2, 0]) show(p);\ndrill(r=0.2, through=\"plate\", axis=1);",
+            "",
+        );
+        assert!(
+            (sc.objects[1].position[1] - 2.0).abs() < 1e-9,
+            "pos = {:?}",
+            sc.objects[1].position
+        );
+
+        // through = geometry value (frameless binding)
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.5, 4]);\ndrill(r=0.2, through=p, axis=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        match &sc.objects[0].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 0.25).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+    }
+
+    #[test]
+    fn test_cgs_drill_from_to_and_csg() {
+        // from/to override the axial extent
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.3, 4]);\ntag(\"plate\") show(p);\ndrill(r=0.2, through=\"plate\", axis=1, from=-1, to=1);",
+            "",
+        );
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 1.0).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+
+        // drill as a difference child → exactly one CSG mesh
+        let (sc, _) = cgs_load(
+            "p = box(s=[4, 0.3, 4]);\ntag(\"plate\") show(p);\ndifference() { show(p); drill(r=0.2, through=\"plate\", axis=1); }",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        assert!(matches!(sc.objects[1].geometry, Geometry::CsgGeometry(_)));
+    }
+
+    #[test]
+    fn test_cgs_polar_and_comp() {
+        let (sc, _) = cgs_load(
+            "tag(\"c\") translate([1, 0, 0]) box(s=[2, 2, 2]);\n\
+             for (i = [0:1]) {\n  a = i * pi;\n  translate(center(\"c\") + polar(1.0, a)) sphere(r=0.1);\n}",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        assert!(
+            (sc.objects[1].position[0] - 2.0).abs() < 1e-9,
+            "{:?}",
+            sc.objects[1].position
+        );
+        assert!(
+            sc.objects[2].position[0].abs() < 1e-9,
+            "{:?}",
+            sc.objects[2].position
+        );
+
+        let (sc, _) = cgs_load(
+            "tag(\"c\") box(s=[2, 4, 6]);\ntranslate([comp(size(\"c\"), 0), 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!((sc.objects[1].position[0] - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cgs_drill_errors() {
+        let e = v2_err("drill(r=0.2, axis=1);");
+        assert!(e.contains("through"), "{e}");
+        let e = v2_err("drill(r=0.2, through=\"a\", axis=1);");
+        assert!(e.contains("unknown reference"), "{e}");
+        let e = v2_err("p = box(s=[1, 1, 1]);\ndrill(r=0.2, through=p, axis=5);");
+        assert!(e.contains("axis must be 0, 1 or 2"), "{e}");
+        let e = v2_err("p = box(s=[1, 1, 1]);\ndrill(through=p, axis=1);");
+        assert!(e.contains("needs r="), "{e}");
+        let e = v2_err(
+            "p = box(s=[1, 1, 1]);\ntag(\"t\") show(p);\ndrill(r=0.2, through=\"t\", axis=1, from=1, to=0);",
+        );
+        assert!(e.contains("non-empty"), "{e}");
+        let e = v2_err("p = plane(n=[0, 1, 0]);\ndrill(r=0.2, through=p, axis=1);");
+        assert!(e.contains("no finite bounds"), "{e}");
+        let e = v2_err("v = comp([1, 2, 3], 5);");
+        assert!(e.contains("index must be 0, 1 or 2"), "{e}");
+    }
+
+    #[test]
+    fn test_cgs_constrain_single_equation() {
+        // Solve in place: the instance rendered BEFORE solve keeps the
+        // initial value; statements AFTER solve read the baked solution.
+        // (Equations must reference the unknown directly: bound values and
+        // tagged instances are baked at bind/render time.)
+        let (sc, _) = cgs_load(
+            "var d = 1.0;\n\
+             tag(\"a\") translate([-1, 0, 0]) sphere(r=1);\n\
+             b = at(sphere(r=1), [d + 3, 0, 0]);\n\
+             show(b);\n\
+             constrain(d) { dist(center(\"a\"), [d + 3, 0, 0]) == 4; } solve;\n\
+             translate([d + 3, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        // b snapshot at d=1 → |d+4| = 5 ≠ 4, renders at x=4
+        assert!(
+            (sc.objects[1].position[0] - 4.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[1].position
+        );
+        // statement after solve: d = 0 → x = 3
+        assert!(
+            (sc.objects[2].position[0] - 3.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[2].position
+        );
+    }
+
+    #[test]
+    fn test_cgs_constrain_vector_equation() {
+        // Vec3/list residual: three components constrain one unknown.
+        let (sc, _) = cgs_load(
+            "var t = 0.0;\n\
+             constrain(t) { [t, t + 1, 0] == [4, 5, 0]; } solve;\n\
+             translate([t, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!(
+            (sc.objects[0].position[0] - 4.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[0].position
+        );
+    }
+
+    #[test]
+    fn test_cgs_constrain_init_independent() {
+        for init in ["0.0", "3.5"] {
+            let text = format!(
+                "var t = {init};\nconstrain(t) {{ t == 4; }} solve;\ntranslate([t, 0, 0]) sphere(r=1);"
+            );
+            let (sc, _) = cgs_load(&text, "");
+            assert!(
+                (sc.objects[0].position[0] - 4.0).abs() < 1e-9,
+                "init {init} → {:?}",
+                sc.objects[0].position
+            );
+        }
+        // nonlinear: Newton from 3.5 converges to +3
+        let (sc, _) = cgs_load(
+            "var t = 3.5;\nconstrain(t) { t * t == 9; } solve;\ntranslate([t, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!(
+            (sc.objects[0].position[0] - 3.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[0].position
+        );
+    }
+
+    #[test]
+    fn test_cgs_constrain_contradiction() {
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x == 3; x == 5; } solve;");
+        assert!(e.contains("did not converge"), "{e}");
+        assert!(e.contains("var=x"), "{e}");
+    }
+
+    #[test]
+    fn test_cgs_constrain_underdetermined() {
+        // 2 unknowns, 1 equation: any solution on p + q = 5 is accepted.
+        let (sc, _) = cgs_load(
+            "var p = 1.0;\nvar q = 2.0;\n\
+             constrain(p, q) { p + q == 5; } solve;\n\
+             translate([p, q, 0]) sphere(r=1);",
+            "",
+        );
+        let pos = sc.objects[0].position;
+        assert!((pos[0] + pos[1] - 5.0).abs() < 1e-6, "{pos:?}");
+    }
+
+    #[test]
+    fn test_cgs_constrain_in_for_loop() {
+        // `var` re-declares each iteration, so the solve restarts from 0.
+        let (sc, _) = cgs_load(
+            "for (i = [0:2]) {\n  var x = 0.0;\n  constrain(x) { x == i; } solve;\n  translate([x, i, 0]) sphere(r=0.1);\n}",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        for (k, i) in [0.0f64, 1.0, 2.0].iter().enumerate() {
+            assert!((sc.objects[k].position[0] - i).abs() < 1e-9, "k={k}");
+            assert!((sc.objects[k].position[1] - i).abs() < 1e-9, "k={k}");
+        }
+    }
+
+    #[test]
+    fn test_cgs_constrain_errors() {
+        let e = v2_err("constrain(nope) { nope == 1; } solve;");
+        assert!(e.contains("not defined"), "{e}");
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x < 1; } solve;");
+        assert!(e.contains("inequality solving is planned"), "{e}");
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x; } solve;");
+        assert!(e.contains("must be `lhs == rhs;`"), "{e}");
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x == 1 }");
+        assert!(e.contains("`solve;`"), "{e}");
+        let e = v2_err("var x = 0.0;\nconstrain(x) { } solve;");
+        assert!(e.contains("block is empty"), "{e}");
+        let e = v2_err("s = \"a\";\nconstrain(s) { s == \"a\"; } solve;");
+        assert!(e.contains("must be a number"), "{e}");
+        let e = v2_err("var x = \"a\";");
+        assert!(e.contains("var x must be a number"), "{e}");
+    }
+
+    #[test]
+    fn test_cgs_statement_expression_boundary() {
+        // background: property assignment and statement call are equivalent.
+        let (sc, _) = cgs_load("background = 0x2B3138;", "");
+        assert!((sc.background.r - 0x2Bu32 as f64 / 255.0).abs() < 1e-12);
+        assert!((sc.background.g - 0x31u32 as f64 / 255.0).abs() < 1e-12);
+        assert!((sc.background.b - 0x38u32 as f64 / 255.0).abs() < 1e-12);
+        let (sc, _) = cgs_load("background(color=0x87CEEB);", "");
+        assert!((sc.background.r - 0x87u32 as f64 / 255.0).abs() < 1e-12);
+
+        // assignment dispatches first → keywords are shadowable as variables
+        let (sc, _) = cgs_load("echo = 5;\nfor = 6;\necho(echo + for);", "");
+        assert_eq!(sc.objects.len(), 0);
+
+        // nested assignment in expression position
+        let e = v2_err("x = 1; y = x = 2;");
+        assert!(
+            e.contains("assignment is a statement and cannot be used in an expression"),
+            "{e}"
+        );
+
+        // statement keywords / modifiers / property statements in expressions
+        for src in [
+            "g = show(box(s=[1, 1, 1]));",
+            "g = tag(\"t\");",
+            "g = drill(r=1);",
+            "g = var(x);",
+            "g = constrain(x);",
+            "g = for (i = [0:1]) sphere(r=1);",
+            "g = if (true) sphere(r=1);",
+            "g = echo(\"x\");",
+            "g = translate([1, 0, 0]);",
+            "g = rotate(axis=[0, 0, 1], angle=1);",
+            "g = scale(s=2);",
+            "g = mirror(axis=[1, 0, 0]);",
+            "g = material(color=1);",
+            "g = camera(fov=60, aspect=1.5);",
+            "g = background(color=1);",
+            "g = point_light(position=[0, 0, 0], intensity=1);",
+        ] {
+            let e = v2_err(src);
+            assert!(
+                e.contains("is a statement and cannot be used in an expression"),
+                "[{src}] -> {e}"
+            );
+        }
+
+        // expression functions used as statements
+        for src in [
+            "len([1, 2]);",
+            "dist([1, 0, 0], [0, 0, 0]);",
+            "center(\"x\");",
+            "at(sphere(r=1), [1, 0, 0]);",
+            "polar(1, 2);",
+        ] {
+            let e = v2_err(src);
+            assert!(
+                e.contains("is an expression function and cannot be used as a statement"),
+                "[{src}] -> {e}"
+            );
+        }
+
+        // indexing rejected in both positions
+        for src in ["a = [1, 2, 3]; b = a[0];", "a = [1, 2, 3]; a[0];"] {
+            let e = v2_err(src);
+            assert!(e.contains("indexing is not supported"), "[{src}] -> {e}");
+        }
+
+        // unchanged fallbacks and still-working forms
+        let e = v2_err("blah();");
+        assert!(e.contains("unknown primitive"), "{e}");
+        let (sc, _) = cgs_load("x = 1; x = x + 1; echo(x);", "");
+        assert_eq!(sc.objects.len(), 0);
+        let (sc, _) = cgs_load(
+            "g = difference(sphere(r=1), box(s=[1, 1, 1])); show(g);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        let (sc, _) = cgs_load("size = 4; box(s=[size, size, size]);", "");
+        assert_eq!(sc.objects.len(), 1);
+    }
+
+    #[test]
+    fn test_cgs_face_fnrm_queries() {
+        // box: face center and outward normal through a rotate+translate
+        // instance (world frame; normal via inverse-transpose).
+        let (sc, _) = cgs_load(
+            "tag(\"p\") rotate(axis=[0, 0, 1], angle=pi / 2) translate([5, 0, 0]) box(s=[2, 4, 6]);\n\
+             translate(face(\"p\", \"+x\")) sphere(r=0.1);\n\
+             translate(fnrm(\"p\", \"+x\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        let fp = sc.objects[1].position;
+        assert!(
+            (fp[0] - 0.0).abs() < 1e-9 && (fp[1] - 6.0).abs() < 1e-9 && fp[2].abs() < 1e-9,
+            "face +x = {fp:?}"
+        );
+        let np = sc.objects[2].position;
+        assert!(
+            np[0].abs() < 1e-9 && (np[1] - 1.0).abs() < 1e-9 && np[2].abs() < 1e-9,
+            "fnrm +x = {np:?}"
+        );
+
+        // cylinder: caps exact, side tangent point at the axial midpoint
+        let (sc, _) = cgs_load(
+            "c = cylinder(r=2, h=4);\n\
+             translate(face(c, \"+z\")) sphere(r=0.1);\n\
+             translate(face(c, \"-z\")) sphere(r=0.1);\n\
+             translate(face(c, \"+x\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        assert!((sc.objects[0].position[2] - 2.0).abs() < 1e-9);
+        assert!((sc.objects[1].position[2] + 2.0).abs() < 1e-9);
+        assert!((sc.objects[2].position[0] - 2.0).abs() < 1e-9);
+
+        // sphere / ellipsoid: exact axis intersections
+        let (sc, _) = cgs_load(
+            "s = sphere(r=3);\n\
+             e = ellipsoid(radii=[4, 5, 6]);\n\
+             translate(face(s, \"-y\")) sphere(r=0.1);\n\
+             translate(face(e, \"+x\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        assert!((sc.objects[0].position[1] + 3.0).abs() < 1e-9);
+        assert!((sc.objects[1].position[0] - 4.0).abs() < 1e-9);
+
+        // cone (apex at +h/2): tip, base center, side point on the surface,
+        // side normal ⟂ generator tilted toward the apex
+        let (sc, _) = cgs_load(
+            "k = cone(r=3, h=6);\n\
+             translate(face(k, \"+z\")) sphere(r=0.1);\n\
+             translate(face(k, \"-z\")) sphere(r=0.1);\n\
+             translate(face(k, \"+x\")) sphere(r=0.1);\n\
+             translate(fnrm(k, \"+x\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 4);
+        assert!((sc.objects[0].position[2] - 3.0).abs() < 1e-9);
+        assert!((sc.objects[1].position[2] + 3.0).abs() < 1e-9);
+        assert!((sc.objects[2].position[0] - 1.5).abs() < 1e-9);
+        let n = (153.0f64).sqrt();
+        let np = sc.objects[3].position;
+        assert!((np[0] - 12.0 / n).abs() < 1e-9, "cone side normal = {np:?}");
+        assert!((np[2] - 3.0 / n).abs() < 1e-9, "cone side normal = {np:?}");
+
+        // AABB fallback (torus: bounds = major + minor)
+        let (sc, _) = cgs_load(
+            "tm = torus(R=3, r=1);\ntranslate(face(tm, \"+x\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!((sc.objects[0].position[0] - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cgs_face_query_errors() {
+        let e = v2_err("p = box(s=[1, 1, 1]);\nx = face(\"p\", \"q\");");
+        assert!(e.contains("unknown face key"), "{e}");
+        let e = v2_err("p = box(s=[1, 1, 1]);\nx = face(\"p\", 1);");
+        assert!(e.contains("key must be a string"), "{e}");
+        let e = v2_err("x = face(\"missing\", \"+x\");");
+        assert!(e.contains("unknown reference"), "{e}");
+        let e = v2_err("pl = plane(n=[0, 1, 0]);\nx = face(pl, \"+y\");");
+        assert!(e.contains("no finite bounds"), "{e}");
+        let e = v2_err("p = box(s=[1, 1, 1]);\nx = fnrm(\"p\");");
+        assert!(e.contains("needs 2 argument"), "{e}");
+    }
+
+    #[test]
+    fn test_cgs_drill_face_refs() {
+        // same target end faces: axis inferred from the keys, bbox replaced
+        let (sc, _) = cgs_load(
+            "tag(\"plate\") box(s=[4, 4, 0.3]);\n\
+             drill(r=0.2, through=\"plate\", from=\"plate:-z\", to=\"plate:+z\");",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.radius - 0.2).abs() < 1e-12);
+                assert!((c.half - 0.15).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+
+        // through omitted: F = ctx, the two faces fully specify the extent
+        let (sc, _) = cgs_load(
+            "tag(\"plate\") box(s=[4, 4, 0.3]);\n\
+             drill(r=0.2, from=\"plate:-z\", to=\"plate:+z\");",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 2);
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 0.15).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+
+        // end-to-end BETWEEN two instances: base top face → top bottom face
+        let (sc, _) = cgs_load(
+            "tag(\"base\") box(s=[4, 4, 1]);\n\
+             tag(\"top\") translate([0, 0, 2.5]) box(s=[4, 4, 1]);\n\
+             drill(r=0.2, from=\"base:+z\", to=\"top:-z\");",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+        match &sc.objects[2].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 0.75).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+        assert!(
+            (sc.objects[2].position[2] - 1.25).abs() < 1e-9,
+            "pos = {:?}",
+            sc.objects[2].position
+        );
+
+        // axis kw accepted when it matches the face keys
+        let (sc, _) = cgs_load(
+            "tag(\"plate\") box(s=[4, 4, 0.3]);\n\
+             drill(r=0.2, through=\"plate\", axis=2, from=\"plate:-z\", to=\"plate:+z\");",
+            "",
+        );
+        match &sc.objects[1].geometry {
+            Geometry::CylinderGeometry(c) => {
+                assert!((c.half - 0.15).abs() < 1e-9, "half = {}", c.half);
+            }
+            _ => panic!("expected cylinder cutter"),
+        }
+    }
+
+    #[test]
+    fn test_cgs_drill_face_ref_errors() {
+        let e = v2_err(
+            "tag(\"p\") box(s=[1, 1, 1]);\ndrill(r=0.2, axis=1, from=\"p:-z\", to=\"p:+z\");",
+        );
+        assert!(e.contains("does not match axis"), "{e}");
+        let e = v2_err("tag(\"p\") box(s=[1, 1, 1]);\ndrill(r=0.2, from=\"p:-z\", to=\"p:+x\");");
+        assert!(e.contains("different axes"), "{e}");
+        let e = v2_err("tag(\"p\") box(s=[1, 1, 1]);\ndrill(r=0.2, from=\"p\");");
+        assert!(e.contains("name:key"), "{e}");
+        let e = v2_err("tag(\"p\") box(s=[1, 1, 1]);\ndrill(r=0.2, from=\"p:q\", to=\"p:+z\");");
+        assert!(e.contains("unknown face key"), "{e}");
+        let e = v2_err("drill(r=0.2, from=\"missing:+z\", to=\"other:-z\");");
+        assert!(e.contains("unknown reference"), "{e}");
+        let e = v2_err("tag(\"p\") box(s=[1, 1, 1]);\ndrill(r=0.2, axis=2, from=\"p:-z\");");
+        assert!(e.contains("needs through"), "{e}");
+        let e = v2_err(
+            "pl = plane(n=[0, 1, 0]);\ntag(\"pl\") show(pl);\ndrill(r=0.2, from=\"pl:+y\", to=\"pl:-y\");",
+        );
+        assert!(e.contains("no finite bounds"), "{e}");
     }
 }
