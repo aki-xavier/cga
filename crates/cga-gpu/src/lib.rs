@@ -42,3 +42,6 @@ pub use mesh_io_gltf::*;
 
 pub mod scene_lang;
 pub use scene_lang::*;
+
+#[cfg(test)]
+mod degenerate;
