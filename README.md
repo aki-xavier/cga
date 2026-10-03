@@ -36,9 +36,8 @@ cargo run --release -p cga-examples --bin demo_engine -- 90
 MLX C++ 核心（一次性，约几分钟），之后全部走缓存：
 
 ```bash
-make test     # cargo test --workspace（128 个测试全过）
+make test     # cargo test --workspace（166 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
-make editor   # 启动 CGS 网页编辑器 → http://127.0.0.1:8123
 make fmt      # cargo fmt --all
 ```
 
@@ -69,21 +68,43 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 `examples/cgs/building.cgs`（CSG 开窗建筑）、`examples/cgs/mechanical.cgs`
 （CSG 钻孔装配）。
 
-### 实时预览编辑器 (web)
+**语句/表达式边界与错误契约** — 语句分发是单遍的，顺序：赋值
+（`name = expr;`，**最先**检查 ⇒ 任何关键字都可被变量遮蔽，如 `echo = 5;`、
+`for = 6;`）→ `module/for/if/echo/show/tag/drill/var/constrain` → CSG →
+语句修饰语（`translate/rotate/scale/mirror/material`，缺目标 → `modifier
+missing target statement`）→ 属性语句（`background/camera/*_light`）→
+图元语句。`background` 两种写法等价：`background = 0x2B3138;`（属性赋值，
+之后可用 `bg = background;` 读回）与 `background(color=0x2B3138);`。
 
-`crates/cga-editor` 是网页版实时预览编辑器（`tiny_http` 服务）：
-左侧代码编辑，右侧实时预览（编辑防抖 → `POST /render` → PNG），解析错误返回
-HTTP 400 并以红色浮层覆盖预览区提示（Result 式解析，不会崩掉服务）。
+语句与表达式错位时按组给出确定错误文本（LLM Verifier 可直接断言）：
 
-- **CGS 语法高亮**：手写词法分析器（`crates/cga-editor/src/highlight.rs`：关键字 / 图元 /
-  修饰符 / 函数 / 数字与色值 / 注释 / 运算符）。
-- 路由：`GET /`（编辑器页面）、`POST /render?w=&h=&aa=`（CGS→PNG）、
-  `GET /health`。
+| 错位情形 | 规范错误文本 |
+| --- | --- |
+| 语句关键字/修饰语/属性语句出现在表达式中（`g = show(…)`、`g = translate(…)`、`g = camera(…)`） | `CGS line N: {name} is a statement and cannot be used in an expression` |
+| 表达式中出现赋值（`y = x = 2`） | `CGS line N: assignment is a statement and cannot be used in an expression` |
+| 数学/查询函数用作语句（`len([1,2]);`、`center("x");`） | `CGS line N: {name} is an expression function and cannot be used as a statement` |
+| 索引记号 `a[…]`（语句或表达式位置） | `CGS line N: indexing is not supported — use comp(vector, index)` |
+| 未知语句名（`blah();`） | `CGS line N: unknown primitive {name}` |
 
-```bash
-make editor     # 或：cargo run --release -p cga-editor
-# open http://127.0.0.1:8123
-```
+列表取分量用 `comp(list, i)`（不支持 `a[i]` 索引）。
+
+**CGS v2 关联/求解能力**（`docs/cgs-v2.md`；加法改造，既有 `.cgs` 与既有测试
+逐位不动）：
+
+- **几何值与稳定引用** — `g = box(…); show(g);` 表达式几何值（帧无关绑定，
+  `show` 时套用语句帧）；`tag("name") stmt` 注册具名实例；`center/lo/hi/
+  size/dist/xdir/ydir/zdir` 查询（Str 实例 / Geom 值分派）。
+- **派生跟随（G3）** — `drill(r=…, through=…, axis=…)` 贯穿切割器，轴向范围
+  取目标包围盒（改厚度孔自动跟随）；`from/to` 可为数字或 `"名:key"` 面引用
+  （`drill(r=0.2, from="base:+z", to="top:-z");` 端面到端面贯穿、可跨实例，
+  `axis` 由面键推断）。
+- **关系式定位** — 表达式 `at/rot/scaled(g, …)`、`polar(r, a)`、`comp(v, i)`。
+- **编译期约束求解（P2）** — `var x = …; constrain(x) { lhs == rhs; … } solve;`
+  Levenberg 阻尼 Gauss–Newton，语句执行时刻解出、烘焙回 scope（不收敛 = 编译
+  错误）；方程须直接引用未知量表达式。
+- **面引用（P3）** — `face(x, "+z")` 面心 / `fnrm(x, "+z")` 法向：box/圆柱/
+  圆锥/球/椭球精确，其余 AABB 面心退化；供装配/URDF 挂点——标签绑在构造节点
+  上，布尔重算不产生欧氏 CAD 的拓扑命名漂移。
 
 ## 复杂建模能力
 
@@ -125,6 +146,42 @@ ellipsoid（= 仿射缩放球）/ **cyclide**（Dupin cyclide，四次曲面，D
 无矩阵分解/四元数换算层，直接合成 `examples/kinematics/kinematics.gif`（不落 PNG）：
 
 ![运动学 demo](examples/kinematics/kinematics.gif)
+
+## 生成 / 无头渲染 / 网格烘焙
+
+给程序化调用方（LLM codegen、ForgeCAD 等外部 GUI）的三个库级入口：
+
+**CGS 生成**（`crates/cga-gpu/src/cgs_gen.rs`）— 结构化参数 → CGS 源码，
+输出逐行平铺无 `for`（确定性、可 diff、必然可解析，生成即回环测试）：
+
+```rust
+let text = cga_gpu::gen_flange_assembly(
+    &FlangeSpec::default(), &BoltCircleSpec::default(),
+    &GearSpec::default(), &BasePlateSpec::default(),
+); // -> background+camera+lights, 底板 4 沉头孔, 法兰 8 孔, 齿轮, 垫圈...
+```
+
+**无头渲染**（`crates/cga-gpu/src/headless.rs`）— CGS 文本 → PNG 字节，
+无窗口无 CLI，供 Verifier / 外部 GUI 预览：
+
+```rust
+let out = cga_gpu::render_cgs_png(&text, ".", 640, 480, 2)?;
+std::fs::write("preview.png", out.png)?;
+```
+
+**网格烘焙**（`crates/cga-core/src/bake.rs`）— 任意 CSG 隐式体 → 三角网格，
+**纯 CPU f64 无 GPU 依赖**（Linux/CI 可用）：有符号场（与 GPU `*_contains`
+同号约定）→ marching tetrahedra（Kuhn 六四面体拆分）→ 数值梯度定向法向。
+
+```rust
+let m = cga_core::bake(&world_params, 0.1)?;   // vertices + faces
+let v = cga_core::mesh_volume(&m.vertices, &m.faces); // 体积自检
+```
+
+CLI：`cargo run --release -p cga-examples --bin bake_cgs -- examples/cgs/mechanical.cgs out.obj 0.1`
+（step 可调；地面等无界平面自动跳过）。OBJ/GLB 复用 `mesh_io` / `save_glb`。
+限制：分辨率换质量（细于 step 的特征丢失）；相切/共面退化继承 CSG 采样语义；
+trimesh 场 O(F)/点。烘焙 mesh 适合仿真碰撞与预览，STEP 精确导出不在其列。
 
 ## 场景代码
 
@@ -246,6 +303,7 @@ crates/
                            仿射扩展（scale/mirror 射线逆变换 + Newton 极分解）
     src/csg_node.rs        CSG 树节点（union/difference/intersection）
     src/modeling.rs        耳切三角化 + extrude + loft
+    src/bake.rs            有符号隐式场 + marching tetrahedra 网格烘焙 (纯 CPU)
     src/mesh_io.rs         OBJ 读写 + 4x4 矩阵助手
     src/gif.rs             动画 GIF89a 编码（中位切分配色 + LZW，纯 stdlib）
   cga-gpu/                 # mlx-rs/Metal GPU 内核
@@ -263,7 +321,8 @@ crates/
     src/mesh_raster.rs     CPU 网格光栅化（与光线追踪层深度合成）
     src/mesh_io_gltf.rs    glTF/GLB 读写（save_glb / load_gltf）
     src/scene_lang.rs      CGS 场景语言（lexer + 单遍 parser/evaluator）
-  cga-editor/              CGS 网页编辑器（tiny_http server + web/ 资源内嵌）
+    src/cgs_gen.rs         CGS 文本生成 (参数 → 源码, LLM codegen 靶)
+    src/headless.rs        无头渲染 (CGS 文本 → PNG 字节)
   cga-examples/            演示 CLI（src/bin/*.rs，见下）
 examples/                  .cgs 示例 (cgs/orbit/grid/building/mechanical) + cgs/assets/ 纹理
                            + 各 demo 输出金样图（README 插图）
@@ -280,6 +339,7 @@ docs/                      架构图 / 机器人应用图 (svg)
 - `demo_gltf` —— extrude L 形 → 存 `.glb` → 重载 → 渲染 → `demo_gltf.{glb,png}`
 - `demo_helmet` —— DamagedHelmet.glb 加载渲染 → `examples/helmet/demo_helmet.png`
 - `render_cgs <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
+- `bake_cgs <file.cgs> [out.obj|out.glb] [step]` —— CGS→三角网格烘焙（无界面自动跳过）
 - `stereo_pair [seed] [out_dir] [w h] [baseline]` —— 随机三维场景的**双目渲染**：两个朝向完全相同、
   只沿 x 差一个基线的相机，产出一对严格校正的左右图（`left.png` / `right.png`）与几何真值
   （`truth.txt`：焦距、基线、每物件的深度与视差）。供 r3d 的 `stereo` / `depth` 直接读取；
@@ -287,10 +347,12 @@ docs/                      架构图 / 机器人应用图 (svg)
 
 ## 质量
 
-- `make test`（`cargo test --workspace`）：128 个测试全过 —— 代数恒等式 /
+- `make test`（`cargo test --workspace`）：166 个测试全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
-  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / 位移曲面烘焙 /
-  编辑器 highlight（cga-core 39 + cga-gpu 82 + cga-editor 7）。
+  CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / CGS v2（关联查询、
+  drill 面引用、constrain 求解、语句边界错误契约）/ 自由曲面布尔退化用例库 /
+  位移曲面烘焙 / CGS 生成回环 / 无头渲染 / 网格烘焙（体积金样）
+  （cga-core 46 + cga-gpu 120；另有 8 条退化用例 `#[ignore]`，P1 落地后清空）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/
