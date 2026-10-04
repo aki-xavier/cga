@@ -1,6 +1,6 @@
 # CGS v3 提案：吸收 jQuery 链式与 SQL 集合语义（P4→P6）
 
-状态：提案定稿，按 P4→P5→P6 分阶段实施（未实施）。
+状态：P4 已实施（2026-10-04，183 测试全绿：46 + 137）；P5–P6 待实施。
 适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator，4462 行）。
 前序：`docs/cgs-v2.md`（P0–P3 已实施，166 测试全绿）。本提案只加糖与缺件，不改 v2 语义。
 诊断行号为 2026-10-04 快照，随代码漂移，以符号名为准。
@@ -155,9 +155,14 @@ Ok(v)
 
 ### 3.6 验收（P4 新增 6 测试）
 
-1. 链式/函数式**等价金样**：同一场景两种写法，`scene.objects` 逐位相同。
+1. 链式/函数式**等价金样**：同一场景两种写法，`scene.objects` 逐位相同
+   （实施：以 `scene_report` 确定性文本逐位断言，连帧、参数、包围盒一起覆盖）。
 2. 错误继承分组断言：`g.show()`/`g.frobnicate()`/`g.at()`/`g.5`/`g.center` 五条
    文本各命中一行（风格沿 `test_cgs_constrain_errors` 的 `v2_err` 断言）。
+   实施注记：`cgs_call_fn` 的 1 元路径先过 `cgs_num` 类型分派——`g.frobnicate()`
+   实得 `frobnicate needs a number, got <geom>`，测试以 `assert_eq` 与函数式
+   拼法 `frobnicate(g)` **逐字对照**（继承不变式即验收本体）；
+   `unknown function frobnicate` 由 Number 接收者 `(1).frobnicate()` 命中。
 3. 语句位链渲染：`box(s=[1,1,1]).at([1,0,0]);` 落位正确；`s = sphere(r=1); s.size();`
    报 `expression statement needs a geometry value, got …`（链先求值，查询 `size(s)`
    返 Vec3 再撞 `geom_val`）。
@@ -167,6 +172,9 @@ Ok(v)
    `bad expression start dot`。
 
 既有 166 测试逐位不动；`cargo fmt --all` + `make test` 全绿。
+**实施结果（2026-10-04）**：6 条新测试落地为 `test_cgs_p4_chain_{equivalence,
+errors_inherited,statement_render,var_head,str_head}` + `test_cgs_p4_lex_dot`，
+`make test` 183 全绿（cga-core 46 + cga-gpu 137）。
 
 ## 4. P5：集合选择 `instances()`（SQL 之义，无 SELECT 语法）
 
@@ -345,7 +353,7 @@ face("plate:+z")     ≡  face("plate", "+z")
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P4 | `TokenKind::Dot` 词法 + `primary` 后缀链 + 语句位判链 | 新增 6 测试（§3.6）；既有 166 逐位不动 |
+| P4 | `TokenKind::Dot` 词法 + `primary` 后缀链 + 语句位判链 | 已实施 ✓（2026-10-04）：新增 6 测试（§3.6）；既有测试逐位不动，183 全绿 |
 | P5 | `instances()` 入 `QUERY_FNS` + SQL 映射文档化 +（可选）face 单串 | 新增 5 测试（§4.5）；既有不动 |
 | P6 | 关系分类 + hinge 残差 + `!=` 拒绝 | 新增 6 测试 + 替换 1 断言（§5.3）；其余 165 不动 |
 | 文档 | README（测试数、错误契约表 +2 行、CGS v3 特性段）、`cgs-v2.md` §6.3 占位行改指针、`scene_lang.rs` 文件头 `//!` 注释同步语法 | 与实现同一提交 |

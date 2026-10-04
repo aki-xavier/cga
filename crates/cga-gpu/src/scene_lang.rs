@@ -1,5 +1,6 @@
 //! CGS scene language: lexer, single-pass statement dispatcher, evaluator
-//! (v2 additions specified in `docs/cgs-v2.md`).
+//! (v2 additions specified in `docs/cgs-v2.md`; v3 P4 suffix chain in
+//! `docs/cgs-v3.md`).
 //!
 //! # Statement forms (dispatch order in `SceneLoader::statement`)
 //! 1. `{ … }` block
@@ -7,10 +8,14 @@
 //!    shadowed by a variable (`echo = 5;`, `for = 6;`). `background = 0x…;`
 //!    doubles as the property form of the background statement (equivalent to
 //!    `background(color=0x…);`); `name[…]` is rejected with the indexing error.
-//! 3. `module` / `for` / `if` / `echo` / `show` / `tag` / `drill` / `var` /
+//! 3. P4 method chain `name.…` or `name(…).…` (balanced parens, next token
+//!    `.`) → expression statement `expr → geom_val → ; → add_geometry` —
+//!    pure desugaring `e.f(a)` ≡ `f(e, a)`, sharing the plain call's
+//!    dispatch and error texts (`docs/cgs-v3.md` §3).
+//! 4. `module` / `for` / `if` / `echo` / `show` / `tag` / `drill` / `var` /
 //!    `constrain(…) { … } solve;`
-//! 4. `union` / `difference` / `intersection` (block or expression form)
-//! 5. modifiers `translate|rotate|scale|mirror|material` (missing target →
+//! 5. `union` / `difference` / `intersection` (block or expression form)
+//! 6. modifiers `translate|rotate|scale|mirror|material` (missing target →
 //!    `modifier missing target statement`), property statements
 //!    `background|camera|*_light`, then primitive statements
 //!    (sphere/box/cylinder/… /mesh via `build_geometry`).
@@ -20,6 +25,7 @@
 //! deterministic so an LLM verifier can assert on it:
 //! - statement keyword / modifier / property called in an expression →
 //!   `CGS line N: {name} is a statement and cannot be used in an expression`
+//!   (the same text a chain method spelling like `g.show()` produces)
 //! - assignment appearing inside an expression →
 //!   `CGS line N: assignment is a statement and cannot be used in an expression`
 //! - expression function (math/query/at|rot|scaled) used as a statement →
@@ -64,6 +70,7 @@ pub enum TokenKind {
     Comma,
     Semi,
     Assign,
+    Dot,
 }
 
 impl fmt::Display for TokenKind {
@@ -83,6 +90,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Comma => "comma",
             TokenKind::Semi => "semi",
             TokenKind::Assign => "assign",
+            TokenKind::Dot => "dot",
         };
         f.write_str(s)
     }
@@ -99,6 +107,7 @@ fn punct_kind(ch: u8) -> TokenKind {
         b',' => TokenKind::Comma,
         b';' => TokenKind::Semi,
         b'=' => TokenKind::Assign,
+        b'.' => TokenKind::Dot,
         _ => TokenKind::Eof,
     }
 }
@@ -162,7 +171,7 @@ pub fn cgs_lex(text: &str) -> Result<Vec<CgsToken>, String> {
             i += 1;
         } else if matches!(
             ch,
-            b'[' | b']' | b'{' | b'}' | b',' | b';' | b'=' | b'(' | b')'
+            b'[' | b']' | b'{' | b'}' | b',' | b';' | b'=' | b'(' | b')' | b'.'
         ) {
             toks.push(CgsToken {
                 kind: punct_kind(ch),
@@ -1280,6 +1289,16 @@ impl SceneLoader {
     }
 
     fn primary(&mut self, scope: &HashMap<String, CgsValue>) -> Result<CgsValue, String> {
+        let v = self.atom(scope)?;
+        self.suffix_chain(v, scope)
+    }
+
+    /// Atom: one primary token — literal, group, list, call or variable —
+    /// the `primary` body before P4 layered the postfix chain on top
+    /// (`docs/cgs-v3.md` §3). Recursion through groups re-enters `primary`,
+    /// so `(…).f()` chains too, and unary binds looser than the chain:
+    /// `-x.abs()` ≡ `-(abs(x))`.
+    fn atom(&mut self, scope: &HashMap<String, CgsValue>) -> Result<CgsValue, String> {
         let t = self.take();
         if t.kind == TokenKind::Number {
             return Ok(CgsValue::Num(t.num));
@@ -1312,6 +1331,9 @@ impl SceneLoader {
                 ));
             }
             if self.peek().kind == TokenKind::Lparen {
+                // Boundary check before the args are parsed, as always;
+                // `call_dispatch` re-runs it for the chain path, which only
+                // reaches the method name after them.
                 if is_statement_only_fn(&t.text) {
                     return Err(format!(
                         "CGS line {}: {} is a statement and cannot be used in an expression",
@@ -1320,25 +1342,7 @@ impl SceneLoader {
                 }
                 self.take();
                 let (pos, kw) = self.paren_args(scope)?;
-                let n = t.text.as_str();
-                let is_geom = GEOM_EXPR_NAMES.contains(&n)
-                    || QUERY_FNS.contains(&n)
-                    || matches!(
-                        n,
-                        "at" | "rot" | "scaled" | "difference" | "intersection" | "union"
-                    );
-                if is_geom {
-                    if let Some(v) = self.geom_expr_call(n, pos.clone(), kw.clone(), t.line)? {
-                        return Ok(v);
-                    }
-                }
-                if !kw.is_empty() {
-                    return Err(format!(
-                        "CGS line {}: function {} takes no named arguments",
-                        t.line, t.text
-                    ));
-                }
-                return cgs_call_fn(&t.text, &pos, t.line);
+                return self.call_dispatch(&t.text, t.line, pos, kw);
             }
             if t.text == "true" {
                 return Ok(CgsValue::Bool(true));
@@ -1358,6 +1362,74 @@ impl SceneLoader {
             "CGS line {}: bad expression start {}",
             t.line, t.kind
         ))
+    }
+
+    /// Expression-position call dispatch — one code path shared verbatim by
+    /// plain calls `f(a, b)` and P4's suffix chain `e.f(a, b)` (receiver
+    /// spliced in as the first positional argument): statement/expression
+    /// boundary → frame helpers / CSG / reference queries / geometry
+    /// constructors → named-argument check → plain function table. The chain
+    /// therefore inherits every canonical error text unchanged
+    /// (`docs/cgs-v3.md` §3.2: 糖不是新语义).
+    fn call_dispatch(
+        &mut self,
+        n: &str,
+        line: i32,
+        pos: Vec<CgsValue>,
+        kw: HashMap<String, CgsValue>,
+    ) -> Result<CgsValue, String> {
+        if is_statement_only_fn(n) {
+            return Err(format!(
+                "CGS line {line}: {n} is a statement and cannot be used in an expression"
+            ));
+        }
+        let is_geom = GEOM_EXPR_NAMES.contains(&n)
+            || QUERY_FNS.contains(&n)
+            || matches!(
+                n,
+                "at" | "rot" | "scaled" | "difference" | "intersection" | "union"
+            );
+        if is_geom {
+            if let Some(v) = self.geom_expr_call(n, pos.clone(), kw.clone(), line)? {
+                return Ok(v);
+            }
+        }
+        if !kw.is_empty() {
+            return Err(format!(
+                "CGS line {line}: function {n} takes no named arguments"
+            ));
+        }
+        cgs_call_fn(n, &pos, line)
+    }
+
+    /// P4 suffix chain: `e.f(a, b)` ≡ `f(e, a, b)` — the tightest-binding
+    /// postfix operator, applied to any atom before binary operators run.
+    /// After the method name the syntax *is* a plain call — `expect(lparen)`
+    /// → args → [`Self::call_dispatch`] — so arity, type, boundary and
+    /// unknown-function errors are the existing texts, byte for byte
+    /// (`docs/cgs-v3.md` §3.3).
+    fn suffix_chain(
+        &mut self,
+        mut v: CgsValue,
+        scope: &HashMap<String, CgsValue>,
+    ) -> Result<CgsValue, String> {
+        while self.peek().kind == TokenKind::Dot {
+            self.take(); // `.`
+            let m = self.take();
+            if m.kind != TokenKind::Ident {
+                return Err(format!(
+                    "CGS line {}: expected {}, got {}",
+                    m.line,
+                    TokenKind::Ident,
+                    m.kind
+                ));
+            }
+            self.expect(TokenKind::Lparen)?;
+            let (mut pos, kw) = self.paren_args(scope)?;
+            pos.insert(0, v);
+            v = self.call_dispatch(&m.text, m.line, pos, kw)?;
+        }
+        Ok(v)
     }
 
     fn list_literal(
@@ -2311,6 +2383,41 @@ impl SceneLoader {
         Ok(x)
     }
 
+    /// P4 statement-position chain lookahead (`docs/cgs-v3.md` §3.4):
+    /// `ident.…` or `ident(…).…`. The head call's parens are balanced across
+    /// the token stream, so keyword statements — `for (…)`, `echo(…);`,
+    /// `difference(a, b);`, `translate(…) box(…);`, `module m(…)` — never
+    /// match: only a head directly followed by `.`, or by a call whose
+    /// closing paren is, does. Assignment and index checks run first, so
+    /// `g = …;` and `g[…];` keep their existing forms.
+    fn peek_chain(&self) -> bool {
+        if self.toks.get(self.pos).map(|t| t.kind) != Some(TokenKind::Ident) {
+            return false;
+        }
+        let mut i = self.pos + 1;
+        match self.toks.get(i).map(|t| t.kind) {
+            Some(TokenKind::Dot) => return true,
+            Some(TokenKind::Lparen) => {}
+            _ => return false,
+        }
+        let mut depth = 0i32;
+        while let Some(t) = self.toks.get(i) {
+            match t.kind {
+                TokenKind::Lparen => depth += 1,
+                TokenKind::Rparen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.toks.get(i + 1).map(|t| t.kind) == Some(TokenKind::Dot);
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn statement(
         &mut self,
         ctx: [f64; 16],
@@ -2349,6 +2456,17 @@ impl SceneLoader {
                     "CGS line {}: indexing is not supported — use comp(vector, index)",
                     t.line
                 ));
+            }
+            // P4 statement-position chain (`docs/cgs-v3.md` §3.4): a head
+            // ident followed by `.`, or by its own balanced call ending in
+            // `.`, makes the statement an expression statement — evaluated
+            // with `expr`, then rendered through the exact path the CSG
+            // expression form uses below (`geom_val` → `;` → `add_geometry`).
+            if self.peek_chain() {
+                let v = self.expr(scope, 1)?;
+                let g = geom_val(&v, t.line, "expression statement")?;
+                self.expect(TokenKind::Semi)?;
+                return self.add_geometry(g.geo, mat4_mul(ctx, g.m4), mat);
             }
             if name == "module" {
                 self.module_def()?;
@@ -3590,6 +3708,7 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene_report::scene_report;
 
     #[test]
     fn test_cgs_orbit() {
@@ -3825,6 +3944,113 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected error for {src:?}"),
         }
+    }
+
+    // ── P4 后缀方法链（docs/cgs-v3.md §3）───────────────────────────────────
+
+    /// 等价金样：语句位链式与去糖函数式（`show` 包裹）渲染同一场景，
+    /// 确定性报告逐位相同（链只是糖，不产生新语义）。
+    #[test]
+    fn test_cgs_p4_chain_equivalence() {
+        let (sa, ca) = cgs_load("box(s=[2,2,2]).at([1,0,0]).rot([0,1,0], 45);", "");
+        let (sb, cb) = cgs_load("show(rot(at(box(s=[2,2,2]), [1,0,0]), [0,1,0], 45));", "");
+        assert_eq!(sa.objects.len(), 1);
+        assert_eq!(sb.objects.len(), 1);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+    }
+
+    /// 错误继承组：链式拼法逐字复用既有错误文本——边界、未知函数、
+    /// 变元数、方法名、左括号，全是既有格式串（§3.2 错误文本几乎零新增）。
+    #[test]
+    fn test_cgs_p4_chain_errors_inherited() {
+        let e = v2_err("g = box(s=[1,1,1]);\ng.show();");
+        assert!(
+            e.contains("show is a statement and cannot be used in an expression"),
+            "{e}"
+        );
+        // 链式与函数式的报错逐字相同（同一分发、同一行号）。
+        let e_chain = v2_err("g = box(s=[1,1,1]);\ng.frobnicate();");
+        let e_plain = v2_err("g = box(s=[1,1,1]);\nx = frobnicate(g);");
+        assert_eq!(e_chain, e_plain);
+        assert!(
+            e_chain.contains("frobnicate needs a number, got <geom>"),
+            "{e_chain}"
+        );
+        // Number 目标越过 1 元类型分派后，落回既有 unknown-function 文案。
+        let e = v2_err("x = (1).frobnicate();");
+        assert!(e.contains("unknown function frobnicate"), "{e}");
+        let e = v2_err("g = box(s=[1,1,1]);\ng.at();");
+        assert!(e.contains("at needs (geometry, offset)"), "{e}");
+        let e = v2_err("g = box(s=[1,1,1]);\ng.5;");
+        assert!(e.contains("expected ident, got number"), "{e}");
+        let e = v2_err("g = box(s=[1,1,1]);\ng.center;");
+        assert!(e.contains("expected lparen, got semi"), "{e}");
+    }
+
+    /// 语句位链直接渲染；链先按表达式求值，查询结果（Vec3）再撞语句位
+    /// geom_val 的规范文案（§3.4）。
+    #[test]
+    fn test_cgs_p4_chain_statement_render() {
+        let (sc, _) = cgs_load("box(s=[1,1,1]).at([1,0,0]);", "");
+        assert_eq!(sc.objects.len(), 1);
+        let e = v2_err("s = sphere(r=1);\ns.size();");
+        assert!(
+            e.contains("expression statement needs a geometry value, got"),
+            "{e}"
+        );
+    }
+
+    /// 变量头链：两条链语句与等价的 `show(f(…))` 两条语句渲染同一场景。
+    #[test]
+    fn test_cgs_p4_chain_var_head() {
+        let (sa, ca) = cgs_load(
+            "g = box(s=[1,1,1]);\ng.at([1,0,0]);\ng.rot([0,1,0], 45);",
+            "",
+        );
+        let (sb, cb) = cgs_load(
+            "g = box(s=[1,1,1]);\nshow(at(g, [1,0,0]));\nshow(rot(g, [0,1,0], 45));",
+            "",
+        );
+        assert_eq!(sa.objects.len(), 2);
+        assert_eq!(sb.objects.len(), 2);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+    }
+
+    /// Str 头链：`"plate".face("+z")` 去糖为 `face("plate", "+z")`，
+    /// 同一场景（引用查询接受 Str 目标，链不分新语义）。
+    #[test]
+    fn test_cgs_p4_chain_str_head() {
+        let (sa, ca) = cgs_load(
+            "tag(\"plate\") box(s=[1,1,2]);\ntranslate(\"plate\".face(\"+z\")) sphere(r=0.1);",
+            "",
+        );
+        let (sb, cb) = cgs_load(
+            "tag(\"plate\") box(s=[1,1,2]);\ntranslate(face(\"plate\", \"+z\")) sphere(r=0.1);",
+            "",
+        );
+        assert_eq!(sa.objects.len(), 2);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+    }
+
+    /// 词法：数字内的点不断词（`1.5` 完整、链在 `.abs()` 上接续）；
+    /// 数字紧贴标识符并置成两个 token；表达式以点开头是确定的非法起始。
+    #[test]
+    fn test_cgs_p4_lex_dot() {
+        let (sc, _) = cgs_load("x = 1.5.abs();", "");
+        assert_eq!(sc.objects.len(), 0);
+        let e = v2_err("x = 1.abs();");
+        assert!(e.contains("expected semi, got ident"), "{e}");
+        let e = v2_err("x = .5;");
+        assert!(e.contains("bad expression start dot"), "{e}");
     }
 
     #[test]

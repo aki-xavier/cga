@@ -36,7 +36,7 @@ cargo run --release -p cga-examples --bin demo_engine -- 90
 MLX C++ 核心（一次性，约几分钟），之后全部走缓存：
 
 ```bash
-make test     # cargo test --workspace（177 个测试全过）
+make test     # cargo test --workspace（183 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -86,6 +86,10 @@ missing target statement`）→ 属性语句（`background/camera/*_light`）→
 | 索引记号 `a[…]`（语句或表达式位置） | `CGS line N: indexing is not supported — use comp(vector, index)` |
 | 未知语句名（`blah();`） | `CGS line N: unknown primitive {name}` |
 
+P4 方法链（`docs/cgs-v3.md`）**+0 行**：`g.show()`、`g.at()`、`g.5` 等链式拼法
+经同一分发落回本表与 `expect`/`geom_val` 的既有文本（等价金样与
+`assert_eq(链式, 函数式)` 逐字对照断言继承）。
+
 Scene Report（`docs/scene-report.md`）是全函数，本表 **+0 行**：报告生成不产生
 任何诊断文本；`report_cgs` CLI 的 `eprintln`+`exit(1)` 属 CLI 层，不进语言契约。
 
@@ -108,6 +112,14 @@ Scene Report（`docs/scene-report.md`）是全函数，本表 **+0 行**：报�
 - **面引用（P3）** — `face(x, "+z")` 面心 / `fnrm(x, "+z")` 法向：box/圆柱/
   圆锥/球/椭球精确，其余 AABB 面心退化；供装配/URDF 挂点——标签绑在构造节点
   上，布尔重算不产生欧氏 CAD 的拓扑命名漂移。
+
+**CGS v3 P4 后缀方法链**（`docs/cgs-v3.md`；纯语法糖，去糖后走既有分发）—
+`g.at([1,0,0]).rot([0,1,0], 45)` ≡ `rot(at(g, [1,0,0]), [0,1,0], 45)`：接收者
+插为第一实参，方法名后就是普通调用（`expect(lparen)` → 实参 → 同一三路分发），
+边界/未知函数/变元数/类型错误逐字继承既有文本；语句位识别为表达式语句
+（`box(…).at(…);`、`g.at(…);` → `expr → geom_val → ; → add_geometry`，与 CSG
+表达式形式同一条渲染路），关键字语句（`for (…)`、`difference(a, b);` 等）不受
+影响；`1.5` 等浮点词法不变。
 
 **Scene Report 执行结果文本报告**（`docs/scene-report.md`；语言的**输出轴**，
 与 v2/v3 输入轴正交）— `cgs_report(text, asset_root)` / `report_cgs` CLI 把执行后
@@ -367,13 +379,14 @@ docs/                      架构图 / 机器人应用图 (svg)
 
 ## 质量
 
-- `make test`（`cargo test --workspace`）：177 个测试全过 —— 代数恒等式 /
+- `make test`（`cargo test --workspace`）：183 个测试全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / CGS v2（关联查询、
-  drill 面引用、constrain 求解、语句边界错误契约）/ Scene Report（报告格式化、
+  drill 面引用、constrain 求解、语句边界错误契约）/ CGS v3 P4 后缀方法链（等价
+  金样、错误继承、语句位链）/ Scene Report（报告格式化、
   确定性、帧规范化）/ 自由曲面布尔退化用例库 + 交点区间分类 /
   位移曲面烘焙 / CGS 生成回环 / 无头渲染 / 网格烘焙（体积金样）
-  （cga-core 46 + cga-gpu 131；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
+  （cga-core 46 + cga-gpu 137；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/
