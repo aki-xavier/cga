@@ -1,6 +1,6 @@
 # CGS v3 提案：吸收 jQuery 链式与 SQL 集合语义（P4→P6）
 
-状态：P4 已实施（2026-10-04，183 测试全绿：46 + 137）；P5–P6 待实施。
+状态：P4、P5 已实施（2026-10-04，188 测试全绿：46 + 142）；P6 待实施。
 适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator，4462 行）。
 前序：`docs/cgs-v2.md`（P0–P3 已实施，166 测试全绿）。本提案只加糖与缺件，不改 v2 语义。
 诊断行号为 2026-10-04 快照，随代码漂移，以符号名为准。
@@ -208,8 +208,14 @@ n  = len(hs);                  // COUNT(*)             → len
 for (h = hs) show(h);          // 遍历（发射顺序）
 if (n > 2) echo("many holes"); // WHERE                → if
 c  = center("hole");           // 聚合（并集包围盒 lo/hi/center，v2 已有）
-drill(r=0.2, through=comp(hs, 0), axis=2);  // 集合元素（Geom）可作既有 through= 实参
+for (h = hs) drill(r=0.2, through=h, axis=2);  // 集合元素（Geom）可作既有 through= 实参
 ```
+
+> **实施注记（2026-10-04）**：示例原写 `through=comp(hs, 0)`——实测 `comp` 是
+> 向量取分量（3 元数字列表，`cgs_vec3` 语义），泛化到任意列表需要一个新的越界
+> 错误文本，超出 §6 对 P5「仅 1 条新增」的盘点，故元素抽取以 `for (h = hs)`
+> 遍历为规范写法（§4.5 test 4 即按此验收）；`drill through=` 本就接受 Geom，
+> 零改动。
 
 ### 4.2 SQL → CGS 映射表（写进 LLM 提示词的对照）
 
@@ -257,6 +263,11 @@ face("plate:+z")     ≡  face("plate", "+z")
 4. 聚合与元素互通：`center("hole")` 并集与 `for` 逐元素 `center(h)` 的几何一致；
    集合元素作 `drill through=` 实参。
 5. （若实施 4.4）单串与两参形式等价金样。
+
+**实施结果（2026-10-04）**：§4.4 一并实施；5 条新测试落地为
+`test_cgs_p5_instances_{order,count_if,errors,aggregate_element}` +
+`test_cgs_p5_face_single_string`，`make test` 188 全绿（cga-core 46 +
+cga-gpu 142）；P5 实际新增错误文本恰 1 条（§6 盘点兑现）。
 
 ## 5. P6：不等式约束（解算器侧，语法零新面）
 
@@ -354,7 +365,7 @@ face("plate:+z")     ≡  face("plate", "+z")
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | P4 | `TokenKind::Dot` 词法 + `primary` 后缀链 + 语句位判链 | 已实施 ✓（2026-10-04）：新增 6 测试（§3.6）；既有测试逐位不动，183 全绿 |
-| P5 | `instances()` 入 `QUERY_FNS` + SQL 映射文档化 +（可选）face 单串 | 新增 5 测试（§4.5）；既有不动 |
+| P5 | `instances()` 入 `QUERY_FNS` + SQL 映射文档化 +（可选）face 单串 | 已实施 ✓（2026-10-04）：新增 5 测试（§4.5，含 §4.4）；既有测试不动，188 全绿 |
 | P6 | 关系分类 + hinge 残差 + `!=` 拒绝 | 新增 6 测试 + 替换 1 断言（§5.3）；其余 165 不动 |
 | 文档 | README（测试数、错误契约表 +2 行、CGS v3 特性段）、`cgs-v2.md` §6.3 占位行改指针、`scene_lang.rs` 文件头 `//!` 注释同步语法 | 与实现同一提交 |
 

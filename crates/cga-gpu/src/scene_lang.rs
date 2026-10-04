@@ -717,7 +717,17 @@ const GEOM_EXPR_NAMES: &[&str] = &[
 
 /// Reference-query functions (Str name / Geom value dispatch).
 const QUERY_FNS: &[&str] = &[
-    "center", "lo", "hi", "size", "xdir", "ydir", "zdir", "dist", "face", "fnrm",
+    "center",
+    "lo",
+    "hi",
+    "size",
+    "xdir",
+    "ydir",
+    "zdir",
+    "dist",
+    "face",
+    "fnrm",
+    "instances",
 ];
 
 /// Statement forms with no meaning inside an expression. Calling one with `(`
@@ -1716,6 +1726,22 @@ impl SceneLoader {
         if !kw.is_empty() {
             return Err(format!("CGS line {line}: {name} takes no named arguments"));
         }
+        let mut pos = pos;
+        // P5 optional sub-item (docs/cgs-v3.md §4.4): `face/fnrm` accept the
+        // drill-style single string "name:key" — split it into the two-
+        // parameter form and fall through the existing path unchanged (bad
+        // key → `parse_face_key`, unknown name → `unknown reference`, a
+        // string without ':' → the normal arity error). Zero new error texts.
+        if matches!(name, "face" | "fnrm") && pos.len() == 1 {
+            if let CgsValue::Str(s) = &pos[0] {
+                if let Some((nm, key)) = s.split_once(':') {
+                    pos = vec![
+                        CgsValue::Str(nm.to_string()),
+                        CgsValue::Str(key.to_string()),
+                    ];
+                }
+            }
+        }
         let need = if matches!(name, "dist" | "face" | "fnrm") {
             2
         } else {
@@ -1723,6 +1749,38 @@ impl SceneLoader {
         };
         if pos.len() != need {
             return Err(format!("CGS line {line}: {name} needs {need} argument(s)"));
+        }
+        if name == "instances" {
+            // P5 (docs/cgs-v3.md §4.1): the tag's instance set as a
+            // first-class value — element frames are the stored world
+            // matrices (same frame `center("name")` unions over) and order is
+            // the registry's push order = emission order, so `for` walks the
+            // set exactly as it was built. The one new error text of P5.
+            let s = match &pos[0] {
+                CgsValue::Str(s) => s,
+                v => {
+                    return Err(format!(
+                        "CGS line {line}: instances needs a reference name, got {v}"
+                    ));
+                }
+            };
+            let insts = match self.named.get(s) {
+                Some(list) if !list.is_empty() => list,
+                _ => {
+                    return Err(format!("CGS line {line}: unknown reference \"{s}\""));
+                }
+            };
+            return Ok(CgsValue::List(
+                insts
+                    .iter()
+                    .map(|i| {
+                        CgsValue::Geom(GeomVal {
+                            geo: i.geo.clone(),
+                            m4: i.world,
+                        })
+                    })
+                    .collect(),
+            ));
         }
         if matches!(name, "face" | "fnrm") {
             // key first: a malformed key is reported even when the target
@@ -4051,6 +4109,123 @@ mod tests {
         assert!(e.contains("expected semi, got ident"), "{e}");
         let e = v2_err("x = .5;");
         assert!(e.contains("bad expression start dot"), "{e}");
+    }
+
+    // ── P5 集合选择 instances()（docs/cgs-v3.md §4）─────────────────────────
+
+    /// 顺序金样：注册序 = 发射序 = `for` 遍历序；元素倒序会立刻被报告
+    /// 差异抓住（对照侧把三次 show 按 x=0,1,2 显式写出，tag 段两边相同）。
+    #[test]
+    fn test_cgs_p5_instances_order() {
+        let reg = "for (i = [0:2]) tag(\"hole\") translate([i, 0, 0]) cylinder(r=0.3, h=5);\n";
+        let (sa, ca) = cgs_load(&format!("{reg}for (h = instances(\"hole\")) show(h);"), "");
+        let (sb, cb) = cgs_load(
+            &format!(
+                "{reg}show(at(cylinder(r=0.3, h=5), [0, 0, 0]));\n\
+                 show(at(cylinder(r=0.3, h=5), [1, 0, 0]));\n\
+                 show(at(cylinder(r=0.3, h=5), [2, 0, 0]));"
+            ),
+            "",
+        );
+        assert_eq!(sa.objects.len(), 6);
+        assert_eq!(sb.objects.len(), 6);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+    }
+
+    /// 计数与条件：`len(instances(...))` + `if` = SQL 的 COUNT/WHERE 直觉。
+    #[test]
+    fn test_cgs_p5_instances_count_if() {
+        let reg = "for (i = [0:2]) tag(\"hole\") translate([i, 0, 0]) cylinder(r=0.3, h=5);\n";
+        let (sc, _) = cgs_load(
+            &format!(
+                "{reg}n = len(instances(\"hole\"));\nif (n > 2) translate([0, 0, 5]) sphere(r=0.5);"
+            ),
+            "",
+        );
+        assert_eq!(sc.objects.len(), 4);
+        let (sc, _) = cgs_load(
+            &format!(
+                "{reg}n = len(instances(\"hole\"));\nif (n > 5) translate([0, 0, 5]) sphere(r=0.5);"
+            ),
+            "",
+        );
+        assert_eq!(sc.objects.len(), 3);
+    }
+
+    /// 错误组：未知名复用 `unknown reference`；非 Str 实参是 P5 唯一新增
+    /// 文本；语句位命中 expression-only 契约；缺参走既有 arity 检查。
+    #[test]
+    fn test_cgs_p5_instances_errors() {
+        let e = v2_err("v = instances(\"nope\");");
+        assert!(e.contains("unknown reference \"nope\""), "{e}");
+        let e = v2_err("v = instances(5);");
+        assert!(e.contains("instances needs a reference name, got 5"), "{e}");
+        let e = v2_err("instances(\"x\");");
+        assert!(
+            e.contains("instances is an expression function and cannot be used as a statement"),
+            "{e}"
+        );
+        let e = v2_err("v = instances();");
+        assert!(e.contains("instances needs 1 argument(s)"), "{e}");
+    }
+
+    /// 聚合与元素互通：并集 `center("hole")` 与 `for` 逐元素取中心实例
+    /// 几何一致（对称布局 = 中间实例，两份报告逐位相同）；集合元素直接作
+    /// `drill through=` 实参（difference 块内逐元素贯穿切割）。
+    #[test]
+    fn test_cgs_p5_instances_aggregate_element() {
+        let reg = "for (i = [0:2]) tag(\"hole\") translate([i, 0, 0]) cylinder(r=0.3, h=5);\n";
+        let (sa, ca) = cgs_load(
+            &format!("{reg}translate(center(\"hole\")) sphere(r=0.05);"),
+            "",
+        );
+        let (sb, cb) = cgs_load(
+            &format!(
+                "{reg}k = 0;\nm = [0, 0, 0];\n\
+                 for (h = instances(\"hole\")) {{ if (k == 1) {{ m = center(h); }} k = k + 1; }}\n\
+                 translate(m) sphere(r=0.05);"
+            ),
+            "",
+        );
+        assert_eq!(sa.objects.len(), 4);
+        assert_eq!(sb.objects.len(), 4);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+        let (sc, _) = cgs_load(
+            &format!(
+                "{reg}hs = instances(\"hole\");\n\
+                 difference() {{ box(s=[6, 6, 1]); for (h = hs) drill(r=0.2, through=h, axis=2); }}"
+            ),
+            "",
+        );
+        assert_eq!(sc.objects.len(), 4);
+    }
+
+    /// §4.4 可选子项：`face("plate:+z")` 单串面字面量 ≡ `face("plate", "+z")`
+    /// （零新增错误文本；不含 `:` 落回既有 arity 检查）。
+    #[test]
+    fn test_cgs_p5_face_single_string() {
+        let reg = "tag(\"plate\") box(s=[1, 1, 2]);\n";
+        let (sa, ca) = cgs_load(
+            &format!("{reg}translate(face(\"plate:+z\")) sphere(r=0.1);"),
+            "",
+        );
+        let (sb, cb) = cgs_load(
+            &format!("{reg}translate(face(\"plate\", \"+z\")) sphere(r=0.1);"),
+            "",
+        );
+        assert_eq!(sa.objects.len(), 2);
+        assert_eq!(
+            scene_report(&sa, &ca, &TagRegistry::new()),
+            scene_report(&sb, &cb, &TagRegistry::new())
+        );
+        let e = v2_err("tag(\"plate\") box(s=[1,1,2]);\nv = face(\"plate\");");
+        assert!(e.contains("face needs 2 argument(s)"), "{e}");
     }
 
     #[test]
