@@ -1,8 +1,8 @@
 # CGS v2 语法提案：从"构造语义"到"构造 + 关联语义"
 
-状态：提案定稿，按 P0→P3 分阶段实施。
-适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator，约 2300 行）。
-后续演进：P4–P6（jQuery 式后缀方法链、`instances()` 集合选择、不等式约束）见 `docs/cgs-v3.md`。
+状态：P0–P3 已实施（2026-10-04）。
+适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator）。
+后续演进：P4–P6（jQuery 式后缀方法链、`instances()` 集合选择、不等式约束）已按 `docs/cgs-v3.md` 实施完毕。
 
 ## 1. 动机：CGS 相对欧氏建模的三个语义缺口
 

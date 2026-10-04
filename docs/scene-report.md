@@ -1,7 +1,7 @@
 # Scene Report 提案：CGS 执行结果的可断言文本格式
 
 状态：已实施（2026-10-04；验收 T1–T8 八项，测试基线 166 → 174，错误契约 +0 行）。
-适用：`crates/cga-gpu/src/scene.rs`、`scene_lang.rs`（4462 行快照）、新模块 `scene_report.rs`。
+适用：`crates/cga-gpu/src/scene.rs`、`scene_lang.rs`（执行求值侧）、新模块 `scene_report.rs`。
 前序：`docs/cgs-v2.md`（P0–P3 已实施）、`docs/cgs-v3.md`（P4–P6 提案）。本提案与两者正交——
 v2/v3 改语言的输入轴，本提案定义执行结果的输出轴，不改任何加载语义。
 诊断行号为 2026-10-04 快照（测试基线 166），随代码漂移，以符号名为准。

@@ -1,7 +1,7 @@
 # CGS v3 提案：吸收 jQuery 链式与 SQL 集合语义（P4→P6）
 
 状态：P4–P6 全部实施（2026-10-04，194 测试全绿：46 + 148）。
-适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator，4462 行）。
+适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator）。
 前序：`docs/cgs-v2.md`（P0–P3 已实施，166 测试全绿）。本提案只加糖与缺件，不改 v2 语义。
 诊断行号为 2026-10-04 快照，随代码漂移，以符号名为准。
 
