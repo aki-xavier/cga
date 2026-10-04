@@ -1,6 +1,6 @@
 # CGS v3 提案：吸收 jQuery 链式与 SQL 集合语义（P4→P6）
 
-状态：P4、P5 已实施（2026-10-04，188 测试全绿：46 + 142）；P6 待实施。
+状态：P4–P6 全部实施（2026-10-04，194 测试全绿：46 + 148）。
 适用：`crates/cga-gpu/src/scene_lang.rs`（lexer + 单遍 parser/evaluator，4462 行）。
 前序：`docs/cgs-v2.md`（P0–P3 已实施，166 测试全绿）。本提案只加糖与缺件，不改 v2 语义。
 诊断行号为 2026-10-04 快照，随代码漂移，以符号名为准。
@@ -325,6 +325,14 @@ cga-gpu 142）；P5 实际新增错误文本恰 1 条（§6 盘点兑现）。
 5. `x != 1` → 新文本；`a <= b == c` 多关系符 → `one relation per constrain equation`。
 6. `<` 视同 `<=` + 向量逐分量不等式金样。
 
+**实施结果（2026-10-04）**：6 条新测试落地为 `test_cgs_p6_inequality_{
+satisfied_no_pull,violated_to_boundary}`、`test_cgs_p6_mixed_eq_inequality`、
+`test_cgs_p6_infeasible_explicit`、`test_cgs_p6_relation_errors`、
+`test_cgs_p6_lt_closed_vector_components`；§5.3 的唯一触点断言已替换
+（`x < 1` 占位错误 → 初值可行、x 不动的成功断言），`must be \`lhs == rhs;\``
+等其余断言逐位不动。`make test` 194 全绿（cga-core 46 + cga-gpu 148）；
+P6 实际新增错误文本恰 1 条、安全泛化 1 条（§6 盘点兑现）。
+
 ## 6. 错误契约继承总表（P4–P6 新增/复用盘点）
 
 | 阶段 | 新增规范文本 | 复用既有 |
@@ -366,8 +374,8 @@ cga-gpu 142）；P5 实际新增错误文本恰 1 条（§6 盘点兑现）。
 |---|---|---|
 | P4 | `TokenKind::Dot` 词法 + `primary` 后缀链 + 语句位判链 | 已实施 ✓（2026-10-04）：新增 6 测试（§3.6）；既有测试逐位不动，183 全绿 |
 | P5 | `instances()` 入 `QUERY_FNS` + SQL 映射文档化 +（可选）face 单串 | 已实施 ✓（2026-10-04）：新增 5 测试（§4.5，含 §4.4）；既有测试不动，188 全绿 |
-| P6 | 关系分类 + hinge 残差 + `!=` 拒绝 | 新增 6 测试 + 替换 1 断言（§5.3）；其余 165 不动 |
-| 文档 | README（测试数、错误契约表 +2 行、CGS v3 特性段）、`cgs-v2.md` §6.3 占位行改指针、`scene_lang.rs` 文件头 `//!` 注释同步语法 | 与实现同一提交 |
+| P6 | 关系分类 + hinge 残差 + `!=` 拒绝 | 已实施 ✓（2026-10-04）：新增 6 测试 + 替换 1 断言（§5.4）；既有其余测试逐位不动，194 全绿 |
+| 文档 | README（测试数、错误契约表 +2 行、CGS v3 特性段）、`cgs-v2.md` §6.3 占位行改指针、`scene_lang.rs` 文件头 `//!` 注释同步语法 | 已完成 ✓（P4–P6 三提交各自携带；`//!` 语法同步随 P4，`cgs-v2.md` 前向指针随提案提交） |
 
 每阶段独立提交点：`cargo fmt --all` + `make test` 全绿后进入下一阶段
 （沿 `cgs-v2.md` §10 惯例）。

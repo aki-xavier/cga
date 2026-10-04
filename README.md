@@ -36,7 +36,7 @@ cargo run --release -p cga-examples --bin demo_engine -- 90
 MLX C++ 核心（一次性，约几分钟），之后全部走缓存：
 
 ```bash
-make test     # cargo test --workspace（188 个测试全过）
+make test     # cargo test --workspace（194 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -85,6 +85,7 @@ missing target statement`）→ 属性语句（`background/camera/*_light`）→
 | 数学/查询函数用作语句（`len([1,2]);`、`center("x");`） | `CGS line N: {name} is an expression function and cannot be used as a statement` |
 | 索引记号 `a[…]`（语句或表达式位置） | `CGS line N: indexing is not supported — use comp(vector, index)` |
 | 集合选择拿到非引用名实参（`instances(5)`） | `CGS line N: instances needs a reference name, got {v}` |
+| constrain 方程体关系符错位（`x != 1`；`a <= b == c` 多顶层关系） | `CGS line N: constrain does not support != — use ==, <= or >=`；多关系 → `CGS line N: one relation per constrain equation` |
 | 未知语句名（`blah();`） | `CGS line N: unknown primitive {name}` |
 
 P4 方法链（`docs/cgs-v3.md`）**+0 行**：`g.show()`、`g.at()`、`g.5` 等链式拼法
@@ -130,6 +131,14 @@ Scene Report（`docs/scene-report.md`）是全函数，本表 **+0 行**：报�
 `UPDATE → 拒绝`（正向替代见 §7）；语句位命中 expression-only 契约。错误契约
 **+1 行**（`instances needs a reference name, got {v}`）；可选子项一并落地：
 `face("plate:+z")` 单串面字面量 ≡ `face("plate", "+z")`（零新增文本）。
+
+**CGS v3 P6 不等式约束**（`docs/cgs-v3.md` §5；解算器侧，语法零新面）—
+`constrain(x) { x <= 5; … } solve;` 方程体顶层关系符 `== / <= / >= / < / >`
+分类进同一 GN 最小二乘：等式残差 `u−v`，不等式 hinge `max(0, u−v)`（满足 ⇒
+残差与梯度同为 0，只裁剪可行域、不牵引解）；`>=`/`>` 解析期翻转为 `<=`、`<`
+视同闭包，向量逐分量。`!=` 拒绝、多顶层关系命中
+`one relation per constrain equation`（错误契约 **+1 行**）；不可行仍显式
+`did not converge`，不静默折中。
 
 **Scene Report 执行结果文本报告**（`docs/scene-report.md`；语言的**输出轴**，
 与 v2/v3 输入轴正交）— `cgs_report(text, asset_root)` / `report_cgs` CLI 把执行后
@@ -389,15 +398,16 @@ docs/                      架构图 / 机器人应用图 (svg)
 
 ## 质量
 
-- `make test`（`cargo test --workspace`）：188 个测试全过 —— 代数恒等式 /
+- `make test`（`cargo test --workspace`）：194 个测试全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / CGS v2（关联查询、
   drill 面引用、constrain 求解、语句边界错误契约）/ CGS v3（P4 后缀方法链：
-  等价金样、错误继承、语句位链；P5 集合选择：顺序金样、计数条件、聚合互通）/
+  等价金样、错误继承、语句位链；P5 集合选择：顺序金样、计数条件、聚合互通；
+  P6 不等式约束：hinge 满足/违约金样、混合可行域、关系符错误）/
   Scene Report（报告格式化、确定性、帧规范化）/
   自由曲面布尔退化用例库 + 交点区间分类 /
   位移曲面烘焙 / CGS 生成回环 / 无头渲染 / 网格烘焙（体积金样）
-  （cga-core 46 + cga-gpu 142；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
+  （cga-core 46 + cga-gpu 148；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/

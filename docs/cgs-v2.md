@@ -256,8 +256,9 @@ constraint  = expr "==" expr ";"                          (* 仅等式，v1 *)
 - 失败：`CGS line N: constrain did not converge (|r|=…, iter=…, var=…)` ——
   显式错误，供 Verifier 归因；不收敛 = 编译错误而非渲染崩溃。
 - 成功：`scope.insert(未知量, 解)` ——后续语句读到的即烘焙常量。
-- v1 只支持 `==`；`<=`/`>=`（不等式约束）语法位置已预留，报错文本明确
-  指出"inequality solving is planned"，不静默降级。
+- v1 只支持 `==`；`<=`/`>=`（不等式约束）的求解已由 `docs/cgs-v3.md` §5 兑现
+  （hinge 残差进同一 GN，`<`/`>` 视同闭包，`!=` 拒绝），本文的占位报错文本
+  不再出现。
 
 ### 6.3 测试
 

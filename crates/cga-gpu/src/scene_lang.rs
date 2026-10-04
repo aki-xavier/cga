@@ -627,6 +627,15 @@ fn drill_end_ref(v: Option<&CgsValue>, line: i32, which: &str) -> Result<Option<
     }
 }
 
+/// Top-level relation of one constrain segment (P6, docs/cgs-v3.md §5).
+/// `Le` covers `<=` and the closed reading of `<`; `>=`/`>` are flipped at
+/// parse time so every stored inequality is `lhs <= rhs`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConstrainRel {
+    Eq,
+    Le,
+}
+
 /// Flatten a constraint value into residuals: Num → 1, Vec3 → 3, List → parts.
 fn flatten_val(v: &CgsValue, line: i32) -> Result<Vec<f64>, String> {
     match v {
@@ -2226,41 +2235,60 @@ impl SceneLoader {
         if segs.is_empty() {
             return Err(format!("CGS line {line}: constrain block is empty"));
         }
-        let mut eqs: Vec<(Vec<CgsToken>, Vec<CgsToken>, i32)> = Vec::new();
+        let mut eqs: Vec<(Vec<CgsToken>, Vec<CgsToken>, i32, ConstrainRel)> = Vec::new();
         for seg in segs {
             let eline = seg[0].line;
             let mut depth = 0i32;
-            let mut eq_at: Option<usize> = None;
-            let mut ineq_at: Option<usize> = None;
+            // P6 (docs/cgs-v3.md §5.1): every top-level segment carries
+            // exactly one relation of any kind — `==`, the inequalities, and
+            // a second occurrence of either are classified by the same scan.
+            let mut rel_at: Option<(usize, &str)> = None;
             for (i, t) in seg.iter().enumerate() {
                 if matches!(t.kind, TokenKind::Lparen | TokenKind::Lbracket) {
                     depth += 1;
                 } else if matches!(t.kind, TokenKind::Rparen | TokenKind::Rbracket) {
                     depth -= 1;
-                } else if depth == 0 && t.kind == TokenKind::Op {
-                    if t.text == "==" {
-                        if eq_at.is_some() {
-                            return Err(format!(
-                                "CGS line {}: one == per constrain equation",
-                                t.line
-                            ));
-                        }
-                        eq_at = Some(i);
-                    } else if matches!(t.text.as_str(), "<" | ">" | "<=" | ">=" | "!=") {
-                        ineq_at = Some(i);
+                } else if depth == 0
+                    && t.kind == TokenKind::Op
+                    && matches!(t.text.as_str(), "==" | "<" | ">" | "<=" | ">=" | "!=")
+                {
+                    if rel_at.is_some() {
+                        return Err(format!(
+                            "CGS line {}: one relation per constrain equation",
+                            t.line
+                        ));
                     }
+                    rel_at = Some((i, t.text.as_str()));
                 }
             }
-            if let Some(i) = eq_at {
-                eqs.push((seg[..i].to_vec(), seg[i + 1..].to_vec(), eline));
-            } else if ineq_at.is_some() {
-                return Err(format!(
-                    "CGS line {eline}: constrain supports == equations only (inequality solving is planned)"
-                ));
-            } else {
-                return Err(format!(
-                    "CGS line {eline}: constrain equations must be `lhs == rhs;`"
-                ));
+            match rel_at {
+                None => {
+                    return Err(format!(
+                        "CGS line {eline}: constrain equations must be `lhs == rhs;`"
+                    ));
+                }
+                Some((i, op)) if op == "!=" => {
+                    return Err(format!(
+                        "CGS line {}: constrain does not support != — use ==, <= or >=",
+                        seg[i].line
+                    ));
+                }
+                Some((i, op)) => {
+                    // `>=`/`>` flip so every stored relation reads
+                    // `lhs <= rhs`; `<` counts as the closed `<=` (hinge
+                    // forward differences cannot preserve strictness).
+                    let (l, r) = if op == ">=" || op == ">" {
+                        (seg[i + 1..].to_vec(), seg[..i].to_vec())
+                    } else {
+                        (seg[..i].to_vec(), seg[i + 1..].to_vec())
+                    };
+                    let rel = if op == "==" {
+                        ConstrainRel::Eq
+                    } else {
+                        ConstrainRel::Le
+                    };
+                    eqs.push((l, r, eline, rel));
+                }
             }
         }
 
@@ -2316,7 +2344,7 @@ impl SceneLoader {
 
     fn constrain_residual(
         &mut self,
-        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32)],
+        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32, ConstrainRel)],
         base_scope: &HashMap<String, CgsValue>,
         unknowns: &[String],
         x: &[f64],
@@ -2326,7 +2354,7 @@ impl SceneLoader {
             scope.insert(u.clone(), CgsValue::Num(*v));
         }
         let mut out: Vec<f64> = Vec::new();
-        for (lhs, rhs, line) in eqs {
+        for (lhs, rhs, line, rel) in eqs {
             let a = self.eval_token_expr(lhs, &scope)?;
             let b = self.eval_token_expr(rhs, &scope)?;
             let fa = flatten_val(&a, *line)?;
@@ -2338,8 +2366,16 @@ impl SceneLoader {
                     fb.len()
                 ));
             }
+            // P6 (docs/cgs-v3.md §5.1): `==` keeps the plain difference;
+            // `lhs <= rhs` (stored form of every inequality) is a hinge —
+            // satisfied ⇒ residual AND gradient are 0, so it only cuts the
+            // feasible set and never pulls the solution. Component-wise, so
+            // vector inequalities apply per component.
             for (u, v) in fa.iter().zip(fb.iter()) {
-                out.push(u - v);
+                out.push(match rel {
+                    ConstrainRel::Eq => u - v,
+                    ConstrainRel::Le => (u - v).max(0.0),
+                });
             }
         }
         Ok(out)
@@ -2351,7 +2387,7 @@ impl SceneLoader {
         line: i32,
         unknowns: &[String],
         x0: Vec<f64>,
-        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32)],
+        eqs: &[(Vec<CgsToken>, Vec<CgsToken>, i32, ConstrainRel)],
         base_scope: &HashMap<String, CgsValue>,
     ) -> Result<Vec<f64>, String> {
         let n = unknowns.len();
@@ -4648,8 +4684,15 @@ mod tests {
     fn test_cgs_constrain_errors() {
         let e = v2_err("constrain(nope) { nope == 1; } solve;");
         assert!(e.contains("not defined"), "{e}");
-        let e = v2_err("var x = 0.0;\nconstrain(x) { x < 1; } solve;");
-        assert!(e.contains("inequality solving is planned"), "{e}");
+        // P6 (docs/cgs-v3.md §5.3): `<` is the closed `<=` — a satisfied
+        // hinge has zero residual and zero gradient, so the initial value
+        // stays put instead of erroring with the old placeholder text.
+        let (sc, _) = cgs_load(
+            "var x = 0.0;\nconstrain(x) { x < 1; } solve;\ntranslate([x, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!(sc.objects[0].position[0].abs() < 1e-9);
         let e = v2_err("var x = 0.0;\nconstrain(x) { x; } solve;");
         assert!(e.contains("must be `lhs == rhs;`"), "{e}");
         let e = v2_err("var x = 0.0;\nconstrain(x) { x == 1 }");
@@ -4660,6 +4703,101 @@ mod tests {
         assert!(e.contains("must be a number"), "{e}");
         let e = v2_err("var x = \"a\";");
         assert!(e.contains("var x must be a number"), "{e}");
+    }
+
+    // ── P6 不等式约束（docs/cgs-v3.md §5）────────────────────────────────
+
+    /// 1. 满足不动：hinge 满足 ⇒ 残差与梯度同为 0，初值可行则解不动。
+    #[test]
+    fn test_cgs_p6_inequality_satisfied_no_pull() {
+        let (sc, _) = cgs_load(
+            "var x = 0.0;\nconstrain(x) { x <= 5; } solve;\ntranslate([x, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert_eq!(sc.objects.len(), 1);
+        assert!(
+            sc.objects[0].position[0].abs() < 1e-9,
+            "{:?}",
+            sc.objects[0].position
+        );
+    }
+
+    /// 2. 违约推边：`<=` 违约被同一 GN 拉到闭包边界（落点可在边界任一侧，
+    /// 距边界 1e-10 量级）。
+    #[test]
+    fn test_cgs_p6_inequality_violated_to_boundary() {
+        let (sc, _) = cgs_load(
+            "var x = 5.0;\nconstrain(x) { x <= 1; } solve;\ntranslate([x, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!(
+            (sc.objects[0].position[0] - 1.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[0].position
+        );
+    }
+
+    /// 3. 等式 + 不等式混合：`>=` 解析期翻转为 `<=`——等式定值 x=y=5，
+    /// 不等式只裁剪不牵引；若翻转失效（误存成 `x <= 0`）解会漂向 x=0，
+    /// 此断言立即抓住。
+    #[test]
+    fn test_cgs_p6_mixed_eq_inequality() {
+        let (sc, _) = cgs_load(
+            "var x = 0.0;\nvar y = 0.0;\nconstrain(x, y) { x + y == 10; x >= 0; y >= 0; } solve;\ntranslate([x, y, 0]) sphere(r=1);",
+            "",
+        );
+        let p = sc.objects[0].position;
+        assert!(
+            (p[0] - 5.0).abs() < 1e-6 && (p[1] - 5.0).abs() < 1e-6,
+            "{p:?}"
+        );
+    }
+
+    /// 4. 不可行 ⇒ 显式失败：走既有 `did not converge` 文本，不静默折中
+    /// （hinge 与等式在此互相矛盾，残差范数永远到不了 1e-10）。
+    #[test]
+    fn test_cgs_p6_infeasible_explicit() {
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x == 6; x <= 5; } solve;");
+        assert!(e.contains("did not converge"), "{e}");
+    }
+
+    /// 5. `!=` 拒绝（P6 唯一新文本）；多顶层关系——`==`+`<=` 混写与
+    /// `a <= b <= c` 链式——命中泛化文本（替代旧 `one == per…`）。
+    #[test]
+    fn test_cgs_p6_relation_errors() {
+        let e = v2_err("var x = 0.0;\nconstrain(x) { x != 1; } solve;");
+        assert!(
+            e.contains("constrain does not support != — use ==, <= or >="),
+            "{e}"
+        );
+        let e = v2_err("var x = 0.0;\nvar y = 0.0;\nconstrain(x, y) { x <= y == 0; } solve;");
+        assert!(e.contains("one relation per constrain equation"), "{e}");
+        let e = v2_err("var x = 0.0;\nvar y = 0.0;\nconstrain(x, y) { x <= y <= 0; } solve;");
+        assert!(e.contains("one relation per constrain equation"), "{e}");
+    }
+
+    /// 6. `<` 视同闭包 `<=`（违约可解到边界、满足不牵引）+ 向量逐分量
+    /// hinge 金样。
+    #[test]
+    fn test_cgs_p6_lt_closed_vector_components() {
+        let (sc, _) = cgs_load(
+            "var x = 5.0;\nconstrain(x) { [x, 0, 0] < [1, 1, 1]; } solve;\ntranslate([x, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!(
+            (sc.objects[0].position[0] - 1.0).abs() < 1e-6,
+            "{:?}",
+            sc.objects[0].position
+        );
+        let (sc, _) = cgs_load(
+            "var x = 0.0;\nconstrain(x) { [x, 0, 0] < [1, 1, 1]; } solve;\ntranslate([x, 0, 0]) sphere(r=1);",
+            "",
+        );
+        assert!(
+            sc.objects[0].position[0].abs() < 1e-9,
+            "{:?}",
+            sc.objects[0].position
+        );
     }
 
     #[test]
