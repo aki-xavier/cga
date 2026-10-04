@@ -1,6 +1,6 @@
 # 自由曲面 + 可证明布尔：补 CGA 内核的两块理论缺口
 
-状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）已落地；P2–P4 待实施。
+状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）、P2（判别式精确路径 + 四次根包）已落地；P3–P4 待实施。
 适用：`crates/cga-gpu/src/{geom_kernels,csg,geometry_extra}.rs`、`crates/cga-core/src/{geometry,modeling}.rs`。
 诊断行号为 2026-10-03 快照，随代码漂移，以符号名为准。
 
@@ -18,6 +18,8 @@
 | 全局 | f64 代数核 / f32 渲染 | Metal 无 f64 | GPU 上一切阈值都是 f32 语义 |
 
 **P1 已消除**：`csg_nearest_surface` 的 `delta = 1e-4`（连同 `t > 1e-6` 近平面）——改成交点间区间分类，见 §3.2；剩余常数集中到 `crates/cga-gpu/src/tol.rs`。`csg_uv` 的位置探针仍固定（遗留项，见 §6）。
+
+**P2 已给出权威路径**（`crates/cga-gpu/src/certify.rs`，CPU f64）：表中 `disc > 1e-12`、`a > 1e-12`、`dk_roots` 三条现在有了正向权威实现——判别式精确符号（`two_prod` 精确分解 + 词典序比较，掠射必然判两根、重根必然判 `Double`、无实根必然判 `None`、尺度退化显式 `Indeterminate`）与四次根包（与 `dk_roots` 同种子的 DK 初值 + 区间符号/单调认证 + Cauchy 界内完整性扫描，`Certified` / `Unknown` 两态）。GPU f32 守卫**本阶段保留原值**（管线分类正确性由 P1 区间分类兜底），权威结果回落 GPU 的接线随 P4。
 
 三个根本问题：
 
@@ -99,7 +101,7 @@ I_k = (t_{k-1}, ∞)   → 2(t+1)（其后已无边界，任取一点都在同�
 于是翻转判据是**精确**的：δ 及其全部失效模式（薄壁、单位依赖、掠射）一并消失，而开销从 2k 个探针降到 k+1 个。代价是仍然**二值**——分不出 `Unknown`，所以：
 
 - Lipschitz 界**不退回**，它转去做区间分类够不着的事：§3.4 导出时的空间域分类（cell 8 角点）、§3.3 段上界；`tol.rs` 的阈值也由 f32 精度（`ULPS · ε · max(|t|, 1)`）派生而非拍脑袋，但**阈值本身仍是二值的**，"宽度 < 阈值即退化"只是把不可分辨折成 `继承`，不是证明。
-- 真正的三值 + 证明留给 P2（interval Newton / 判别式精确路径）。
+- 真正的三值 + 证明已随 P2 落地（判别式精确路径 + 四次根包，见 §6）。
 
 ### 3.3 根隔离 —— IVT 抓不到重根
 
@@ -143,7 +145,7 @@ CGA 给不了的（交回通用几何层）：参数曲面、拓扑、裁剪、�
 |---|---|---|
 | **P0** ✅ | `delta`/`1e-*` 语义盘点 + 退化用例库 | `degenerate.rs` 跑出**当前失败清单**，每条带 `#[ignore]` 注释指向本文 |
 | **P1** ✅ | `csg_nearest_surface` 改**交点间区间分类**（§3.2，无需 ε 即消除 δ）；常数收进 `crates/cga-gpu/src/tol.rs`（`T_MIN` / `DEGENERATE_ULPS` / `UV_PROBE`），阈值由 f32 精度派生、尺度相对化 | P0 的 3 条 δ `#[ignore]` 全部转正；`csg_grazing_sliver_below_delta` 新增并转正；跨单位（size = 1 / 1000）行为一致；`test_cyclide_csg_combines`、`renders_generated_flange` 等既有用例无回归。**遗留**：`csg_uv` 的位置探针仍固定 `UV_PROBE = 1e-4`（只影响贴图取哪个子面，不影响命中）；`lipschitz()` 未按原计划逐原语实现，改由 P2/P4 消化（§3.2） |
-| **P2** | 四次根包 interval Newton（DK 做初值）；判别式走代数精确路径 | 相切/重根用例有确定结果（命中或 `Unknown`），无静默漏判 |
+| **P2** ✅ | 判别式代数精确路径 + 四次根包（DK 做初值 + 区间认证）——新模块 `crates/cga-gpu/src/certify.rs`（区间算术 `inari` 2.0，IEEE 1788.1-2017） | 相切/重根用例有确定结果（`Double` 或 `Unknown`），无静默漏判：`certify.rs` 13 条测试（含 LCG 判别式符号 vs i128 精确参照 600 例、掠射低于旧守卫阈值、亚 ulp 判别式、环面相切/横截、cyclide 回代残差）+ `degenerate.rs::tangent_sphere_ray_deterministic`。**实施注记**：① 认证机制是 interval Newton 的**符号/单调等价形式**——端点严格符号（区间 Horner 点包络）反向 + `0 ∉ F′(X)` 由 IVT 给"恰有一根"，点求值分辨歧义处用中值引理 `d = E/g` 收口；不用非包络的 f64 点值参与 Newton（fl-Horner 舍入偏置会收敛到伪根，P2 实测已证）；② 重根判定**不**走 256 项闭式判别式，走 §3.3 路线 2（`0 ∈ F′(X)` 无法证唯一 → `Unknown`）；③ GPU f32 守卫保留原值、回落接线随 P4；④ P1 遗留的 `lipschitz()` 段上界由本模块的区间 Horner（`eval_iv`/`deriv_iv`）承接，出口随 P4 |
 | **P3** | Bézier/NURBS patch 实现 `crossings`（分离界 + clip），`contains` 用闭壳奇偶或 winding | 自由曲面可进 CSG，导出测试通过 |
 | **P4** | 导出：MC 全判定 cell → 水密保证；mesh 后端换 winding number | 水密性作为断言进 CI（体积/表面积/欧拉示性数校验） |
 

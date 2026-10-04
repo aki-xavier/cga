@@ -54,5 +54,7 @@ pub use headless::*;
 
 pub mod tol;
 
+pub mod certify;
+
 #[cfg(test)]
 mod degenerate;

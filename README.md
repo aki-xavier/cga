@@ -36,7 +36,7 @@ cargo run --release -p cga-examples --bin demo_engine -- 90
 MLX C++ 核心（一次性，约几分钟），之后全部走缓存：
 
 ```bash
-make test     # cargo test --workspace（194 个测试全过）
+make test     # cargo test --workspace（208 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -398,16 +398,17 @@ docs/                      架构图 / 机器人应用图 (svg)
 
 ## 质量
 
-- `make test`（`cargo test --workspace`）：194 个测试全过 —— 代数恒等式 /
+- `make test`（`cargo test --workspace`）：208 个测试全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / CGS v2（关联查询、
   drill 面引用、constrain 求解、语句边界错误契约）/ CGS v3（P4 后缀方法链：
   等价金样、错误继承、语句位链；P5 集合选择：顺序金样、计数条件、聚合互通；
   P6 不等式约束：hinge 满足/违约金样、混合可行域、关系符错误）/
   Scene Report（报告格式化、确定性、帧规范化）/
-  自由曲面布尔退化用例库 + 交点区间分类 /
+  自由曲面布尔退化用例库 + 交点区间分类 + 可证明求根（判别式精确符号、
+  四次根 DK 初值 + 区间符号/单调认证）/
   位移曲面烘焙 / CGS 生成回环 / 无头渲染 / 网格烘焙（体积金样）
-  （cga-core 46 + cga-gpu 148；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
+  （cga-core 46 + cga-gpu 162；另有 1 条退化用例 `#[ignore]`，P4 网格分类落地后清空）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/

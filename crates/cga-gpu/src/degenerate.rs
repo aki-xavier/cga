@@ -204,7 +204,25 @@ fn csg_box_minus_hole_still_hits() {
     );
 }
 
-// ── 5. 网格分类：奇偶计数对非水密网格无意义（P4 换 winding number） ────
+// ── 5. P2：相切的确定结果——管线判无穿越，权威判别式识别重根 ────────────
+
+/// 单位球相切射线（从 (0,1,2) 沿 −z，切点 (0,1,0)，穿入深度 0）：
+/// 管线分类确定地判为**无穿越**（不进入实体）；f64 权威判别式精确为 0 →
+/// [`QuadRoots::Double`]——不是静默丢弃（GPU 守卫 `disc > 1e-12` 会连重根
+/// 一起丢，见 freeform-robust-boolean.md §3.3 路线 1，接线随 P4）。
+#[test]
+fn tangent_sphere_ray_deterministic() {
+    let g = Geometry::SphereGeometry(sphere_geometry(1.0));
+    let t = hit(&g, [0.0, 1.0, 2.0], [0.0, 0.0, -1.0]);
+    assert_eq!(t, None, "相切射线穿深 0：分类应判为无穿越");
+    // 权威路径对同一条射线的判别式 (a,b,c) = (1,−4,4)：精确重根 t = 2
+    assert_eq!(
+        crate::certify::quadratic(1.0, -4.0, 4.0),
+        crate::certify::QuadRoots::Double(2.0)
+    );
+}
+
+// ── 6. 网格分类：奇偶计数对非水密网格无意义（P4 换 winding number） ────
 
 /// 立方体抽掉 +x 面 → +x 方向奇偶计数在体内错位。
 #[test]
