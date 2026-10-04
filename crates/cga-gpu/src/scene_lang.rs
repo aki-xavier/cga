@@ -28,7 +28,7 @@
 //!   `CGS line N: indexing is not supported — use comp(vector, index)`
 //! - unknown statement name → `CGS line N: unknown primitive {name}`
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use cga_core::{
@@ -1074,6 +1074,32 @@ struct CollectedGeom {
     m4: [f64; 16],
 }
 
+/// One geometry instance registered by an active `tag` statement. `world` is
+/// the emission world frame (the element frame `instances()` reads), `rel` the
+/// frame relative to the tag statement's entry context (`drill` reuse); `geo`
+/// is the geometry as registered (pre-transform). Exposed by `cgs_run_result`
+/// for `scene_report` (`docs/scene-report.md` §8).
+#[derive(Clone, Debug)]
+pub struct TagInstance {
+    pub geo: Geometry,
+    pub world: [f64; 16],
+    pub rel: [f64; 16],
+}
+
+/// All tag instances of one load, keyed by tag name. `BTreeMap` (not the
+/// loader's `HashMap`) so report output is deterministic: names iterate in
+/// lexicographic order; instance order inside each `Vec` is emission order.
+pub type TagRegistry = BTreeMap<String, Vec<TagInstance>>;
+
+/// Full load result: scene + camera + the tag registry that `cgs_load`
+/// historically dropped at its exit.
+#[derive(Clone, Debug)]
+pub struct CgsRun {
+    pub scene: Scene,
+    pub camera: PerspectiveCamera,
+    pub tags: TagRegistry,
+}
+
 pub fn cgs_load(text: &str, asset_root: &str) -> (Scene, PerspectiveCamera) {
     match cgs_load_result(text, asset_root) {
         Ok(r) => r,
@@ -1082,6 +1108,20 @@ pub fn cgs_load(text: &str, asset_root: &str) -> (Scene, PerspectiveCamera) {
 }
 
 pub fn cgs_load_result(text: &str, asset_root: &str) -> Result<(Scene, PerspectiveCamera), String> {
+    cgs_run_result(text, asset_root).map(|r| (r.scene, r.camera))
+}
+
+/// `cgs_load` with the tag registry kept — panics on error like `cgs_load`.
+pub fn cgs_run(text: &str, asset_root: &str) -> CgsRun {
+    match cgs_run_result(text, asset_root) {
+        Ok(r) => r,
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// Error path is identical to the historical `cgs_load_result`: same code,
+/// same texts, same line numbers (`docs/scene-report.md` §9, zero new errors).
+pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
     let toks = cgs_lex(text)?;
     let mut l = SceneLoader {
         toks,
@@ -1117,7 +1157,26 @@ pub fn cgs_load_result(text: &str, asset_root: &str) -> Result<(Scene, Perspecti
             c2
         }
     };
-    Ok((l.scene, cam))
+    let tags = l
+        .named
+        .into_iter()
+        .map(|(name, insts)| {
+            let v = insts
+                .into_iter()
+                .map(|i| TagInstance {
+                    geo: i.geo,
+                    world: i.world,
+                    rel: i.rel,
+                })
+                .collect();
+            (name, v)
+        })
+        .collect();
+    Ok(CgsRun {
+        scene: l.scene,
+        camera: cam,
+        tags,
+    })
 }
 
 impl SceneLoader {
@@ -3306,7 +3365,7 @@ impl SceneLoader {
     }
 }
 
-fn csg_op_name(op: CsgOp) -> &'static str {
+pub(crate) fn csg_op_name(op: CsgOp) -> &'static str {
     match op {
         CsgOp::Union => "union",
         CsgOp::Difference => "difference",

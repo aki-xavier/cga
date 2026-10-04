@@ -43,6 +43,9 @@ pub use mesh_io_gltf::*;
 pub mod scene_lang;
 pub use scene_lang::*;
 
+pub mod scene_report;
+pub use scene_report::*;
+
 pub mod cgs_gen;
 pub use cgs_gen::*;
 

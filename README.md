@@ -36,7 +36,7 @@ cargo run --release -p cga-examples --bin demo_engine -- 90
 MLX C++ 核心（一次性，约几分钟），之后全部走缓存：
 
 ```bash
-make test     # cargo test --workspace（166 个测试全过）
+make test     # cargo test --workspace（174 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -86,6 +86,9 @@ missing target statement`）→ 属性语句（`background/camera/*_light`）→
 | 索引记号 `a[…]`（语句或表达式位置） | `CGS line N: indexing is not supported — use comp(vector, index)` |
 | 未知语句名（`blah();`） | `CGS line N: unknown primitive {name}` |
 
+Scene Report（`docs/scene-report.md`）是全函数，本表 **+0 行**：报告生成不产生
+任何诊断文本；`report_cgs` CLI 的 `eprintln`+`exit(1)` 属 CLI 层，不进语言契约。
+
 列表取分量用 `comp(list, i)`（不支持 `a[i]` 索引）。
 
 **CGS v2 关联/求解能力**（`docs/cgs-v2.md`；加法改造，既有 `.cgs` 与既有测试
@@ -105,6 +108,21 @@ missing target statement`）→ 属性语句（`background/camera/*_light`）→
 - **面引用（P3）** — `face(x, "+z")` 面心 / `fnrm(x, "+z")` 法向：box/圆柱/
   圆锥/球/椭球精确，其余 AABB 面心退化；供装配/URDF 挂点——标签绑在构造节点
   上，布尔重算不产生欧氏 CAD 的拓扑命名漂移。
+
+**Scene Report 执行结果文本报告**（`docs/scene-report.md`；语言的**输出轴**，
+与 v2/v3 输入轴正交）— `cgs_report(text, asset_root)` / `report_cgs` CLI 把执行后
+的场景格式化为**确定性逐行文本**，供 LLM 逐行断言结果：
+
+- 场景级 `background`/`camera`（七键照实）/灯行 + 每对象
+  `object <i> <帧前缀> material(…) <几何>;` + `bounds <i>` 行；
+- 几何参数树按 CGS 形打印（`sphere(r=…)`、`box(s=2·half)`、无界 `cylinder(h=-1)`、
+  CSG 名 = 存储序递归），帧键进 `frame(t=…, axis=…, angle=…, lin=…)` token、
+  恒等键与恒等帧整体省略；数值统一六位规范化（`pi/2 → 1.570796`、任意零 → `0`），
+  旋转经矩阵→四元数提取、`angle ∈ [0, π]` 唯一化；
+- tag 注册表段（名按字典序、实例按发射序，即 P5 `instances()` 读取的那份数据）与
+  `summary`（对象/灯/无包围盒计数 + 全场 bbox 并集）；
+- API：`cgs_run_result → CgsRun { scene, camera, tags }`（`cgs_load*` 改为委托、
+  签名与行为零变）；错误契约 **+0 行**。
 
 ## 复杂建模能力
 
@@ -321,6 +339,7 @@ crates/
     src/mesh_raster.rs     CPU 网格光栅化（与光线追踪层深度合成）
     src/mesh_io_gltf.rs    glTF/GLB 读写（save_glb / load_gltf）
     src/scene_lang.rs      CGS 场景语言（lexer + 单遍 parser/evaluator）
+    src/scene_report.rs    Scene Report：执行结果确定性逐行文本（docs/scene-report.md）
     src/cgs_gen.rs         CGS 文本生成 (参数 → 源码, LLM codegen 靶)
     src/headless.rs        无头渲染 (CGS 文本 → PNG 字节)
   cga-examples/            演示 CLI（src/bin/*.rs，见下）
@@ -340,6 +359,7 @@ docs/                      架构图 / 机器人应用图 (svg)
 - `demo_helmet` —— DamagedHelmet.glb 加载渲染 → `examples/helmet/demo_helmet.png`
 - `render_cgs <file.cgs> [out.png] [w h aa]` —— CGS→PNG CLI
 - `bake_cgs <file.cgs> [out.obj|out.glb] [step]` —— CGS→三角网格烘焙（无界面自动跳过）
+- `report_cgs <file.cgs>` —— CGS→Scene Report（stdout 逐行可断言文本，错误 stderr + exit 1）
 - `stereo_pair [seed] [out_dir] [w h] [baseline]` —— 随机三维场景的**双目渲染**：两个朝向完全相同、
   只沿 x 差一个基线的相机，产出一对严格校正的左右图（`left.png` / `right.png`）与几何真值
   （`truth.txt`：焦距、基线、每物件的深度与视差）。供 r3d 的 `stereo` / `depth` 直接读取；
@@ -347,12 +367,13 @@ docs/                      架构图 / 机器人应用图 (svg)
 
 ## 质量
 
-- `make test`（`cargo test --workspace`）：166 个测试全过 —— 代数恒等式 /
+- `make test`（`cargo test --workspace`）：174 个测试全过 —— 代数恒等式 /
   图元关联判据 / versor 往返 / exp-log 往返 / 距离公式 / 抗锯齿 / 引擎渲染定量 /
   CSG 布尔 / 仿射 / 新图元 / cyclide / 网格与互操作 / CGS / CGS v2（关联查询、
-  drill 面引用、constrain 求解、语句边界错误契约）/ 自由曲面布尔退化用例库 /
+  drill 面引用、constrain 求解、语句边界错误契约）/ Scene Report（报告格式化、
+  确定性、帧规范化）/ 自由曲面布尔退化用例库 /
   位移曲面烘焙 / CGS 生成回环 / 无头渲染 / 网格烘焙（体积金样）
-  （cga-core 46 + cga-gpu 120；另有 8 条退化用例 `#[ignore]`，P1 落地后清空）。
+  （cga-core 46 + cga-gpu 128；另有 4 条退化用例 `#[ignore]`，P1 落地后清空）。
 - 测试会把渲染金样图写到 `artifacts/tests/`（cgs_orbit / cone / cyclide /
   ellipsoid / sphere / textured_box / torus / trimesh）。
 - 渲染结果与金样逐像素一致（sphere/cone/ellipsoid/cyclide/torus/textured_box/
