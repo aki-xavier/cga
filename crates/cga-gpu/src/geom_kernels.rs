@@ -7,7 +7,7 @@ use mlx_rs::ops;
 use mlx_rs::Array;
 
 use crate::mlxops::*;
-use crate::{col, identity3, inf_like, vec3_unit};
+use crate::{col, identity3, inf_like, tol, vec3_unit};
 
 pub fn mat3_to_mlx(m: Mat3) -> Array {
     Array::from_slice(
@@ -138,28 +138,107 @@ pub(crate) fn csg_contains(p: &CsgParams, pos: &Array) -> Array {
     acc
 }
 
+/// P1 —— **交点间区间分类**，取代固定 δ 探针。
+///
+/// 排序后的交叉点把射线切成 k+1 个区间：`I_0=(0,t_0)`、`I_j=(t_{j-1},t_j)`、
+/// `I_k=(t_{k-1},∞)`。每个区间取一个**严格内部**的采样点求 `csg_contains`：
+/// 表面只出现在相邻区间成员关系不同的交叉点上——采样点与任何边界的距离由构造
+/// 保证 > 0，因此**不需要 δ**，也就不再有"特征尺寸 < δ 就整块消失"的失效模式。
+///
+/// **退化区间（宽度 ≤ [`crate::tol`] 阈值，即相切/重根/重复原语给出的重合交点）
+/// 沿用前一区间的采样点**，于是它的成员关系恒等于前一区间：
+/// - 相切的一对重合交点：两侧成员关系相同 → 抵消，切点不会被当成表面；
+/// - 两个孩子给出**同一个面**（重复原语）的重合交点：翻转在下一个区间才出现，
+///   仍然命中该面（"作废"式处理会把这种合法交点也抵消掉——已由
+///   `test_cyclide_csg_combines` 回归）。
+///
+/// 交叉点还须"远离相机"（`t > tol(t)`，约 `1e-6`）才可成为命中，这是从精度导出的
+/// 近平面，旧实现写死 `1e-6`。见 `docs/freeform-robust-boolean.md` §3.1–§3.3。
 fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (ts, ns, _) = csg_crossings(p, o, d);
-    let order = ck(ops::argsort_axis(&ts, 1));
-    let ts_s = ck(ts.take_along_axis(&order, 1));
+    let b = ts.shape()[0];
+    let k = ts.shape()[1] as usize;
+    debug_assert!(k > 0, "csg needs >= 1 crossing column");
+    let k1 = (k + 1) as i32;
+
+    // 1) 只保留相机前方的交点，再排序（inf 自动沉底）
+    let ahead = ck(ck(ts.is_finite()).logical_and(s_gt(&ts, tol::T_MIN)));
+    let tf = ck(ops::select(&ahead, &ts, &inf_like(&ts)));
+    let order = ck(ops::argsort_axis(&tf, 1));
+    let tf = ck(tf.take_along_axis(&order, 1));
     let ns_s = ck(ns.take_along_axis(ck(order.expand_dims(2)), 1));
-    let ts_f = ck(ops::select(
-        ck(ts_s.is_finite()),
-        &ts_s,
-        ck(ops::zeros_like(&ts_s)),
+
+    // 2) 区间端点 a_j = t_{j-1}、b_j = t_j（末列 b_k = inf 作哨兵 → k+1 个区间）
+    let mut va: Vec<i32> = vec![0]; // a_0 未用（I_0 恒取射线原点）
+    va.extend(0..k as i32);
+    let mut vb: Vec<i32> = (0..k as i32).collect();
+    vb.push(k as i32 - 1); // b_k 先占位，随后覆写成 inf
+    let ja = ck(ops::broadcast_to(
+        Array::from_slice(&va, &[1, k1]),
+        &[b, k1],
     ));
-    let delta = 1e-4;
-    let p_plus = ck(ck(o.expand_dims(1)).add(ck(
-        ck(s_add(&ts_f, delta).expand_dims(2)).multiply(ck(d.expand_dims(1)))
-    )));
-    let p_minus = ck(ck(o.expand_dims(1)).add(ck(
-        ck(s_sub(&ts_f, delta).expand_dims(2)).multiply(ck(d.expand_dims(1)))
-    )));
-    let in_plus = csg_contains(p, &p_plus);
-    let in_minus = csg_contains(p, &p_minus);
-    let flip = ck(ck(ck(in_plus.ne(&in_minus)).logical_and(s_gt(&ts_s, 1e-6)))
-        .logical_and(ck(ts_s.is_finite())));
-    let cand = ck(ops::select(&flip, &ts_s, inf_like(&ts_s)));
+    let jb = ck(ops::broadcast_to(
+        Array::from_slice(&vb, &[1, k1]),
+        &[b, k1],
+    ));
+    let a = ck(tf.take_along_axis(&ja, 1));
+    let mut bc = ck(tf.take_along_axis(&jb, 1));
+    let mut last = vec![0.0f32; k1 as usize];
+    last[(k1 - 1) as usize] = 1.0;
+    let last = ck(ops::broadcast_to(
+        s_eq(&Array::from_slice(&last, &[1, k1]), 1.0),
+        &[b, k1],
+    ));
+    bc = ck(ops::select(&last, &inf_like(&bc), &bc));
+
+    // 3) 各区间的**自备**采样点与可信判据（全向量化）
+    //    I_j：两端有限且宽度 > 退化阈值 → 中点；
+    //    尾区间（a 有限、b=inf）→ 2(a+1)：其后已无任何边界，任取一点都在同一区间；
+    //    其余（重合交点 / 填充列）→ 不可信，下一步继承。
+    let a_fin = ck(a.is_finite());
+    let b_fin = ck(bc.is_finite());
+    let both = ck(a_fin.logical_and(&b_fin));
+    let tail = ck(a_fin.logical_and(ck(b_fin.logical_not())));
+    let mid = ck(ops::select(
+        &both,
+        &ck(ck(a.add(&bc)).multiply(fs(0.5))),
+        &ck(ops::zeros_like(&a)),
+    ));
+    let tail_s = ck(ck(a.add(fs(1.0))).multiply(fs(2.0))); // 2(t+1) > t
+    let own_val = ck(ops::select(&tail, &tail_s, &mid));
+    let gap = ck(bc.subtract(&a));
+    let wide = ck(both.logical_and(s_gt(&ck(gap.subtract(&tol::tol_arr(&a))), 0.0)));
+    let own = ck(wide.logical_or(&tail));
+
+    // 4) 顺序继承：不可信区间沿用前一区间的采样点（依赖链，逐列 [b,1] select）
+    let mut s_cols: Vec<Array> = Vec::with_capacity(k + 1);
+    s_cols.push(ck(ops::zeros::<f32>(&[b, 1]))); // I_0 = 射线原点 t = 0
+    for j in 1..=k {
+        let prev = s_cols[j - 1].clone();
+        let own_j = ck(col(&own, j as i32).reshape(&[b, 1]));
+        let val_j = ck(col(&own_val, j as i32).reshape(&[b, 1]));
+        s_cols.push(ck(ops::select(&own_j, &val_j, &prev)));
+    }
+    let s = ck(ops::concatenate(&s_cols, 1)); // [b, k+1]
+
+    // 5) k+1 个区间的成员关系（一次求值；旧实现要 2k 个探针）
+    let pos = ck(ck(o.expand_dims(1)).add(ck(ck(s.expand_dims(2)).multiply(ck(d.expand_dims(1))))));
+    let mem = csg_contains(p, &pos);
+
+    // 6) 翻转 = 相邻区间成员关系不同，且交叉点离相机足够远（派生的近平面）
+    let ga = ck(ops::broadcast_to(
+        Array::from_slice(&(0..k as i32).collect::<Vec<_>>(), &[1, k as i32]),
+        &[b, k as i32],
+    ));
+    let gb = ck(ops::broadcast_to(
+        Array::from_slice(&(1..=k as i32).collect::<Vec<_>>(), &[1, k as i32]),
+        &[b, k as i32],
+    ));
+    let m0 = ck(mem.take_along_axis(&ga, 1));
+    let m1 = ck(mem.take_along_axis(&gb, 1));
+    let near = ck(ck(tf.is_finite()).logical_and(s_gt(&ck(tf.subtract(&tol::tol_arr(&tf))), 0.0)));
+    let flip = ck(ck(m0.ne(&m1)).logical_and(&near));
+    let cand = ck(ops::select(&flip, &tf, inf_like(&tf)));
     let t = ck(cand.min_axes(&[1], false));
     let mask = ck(t.is_finite());
     let idx = ck(ops::indexing::argmin_axis(&cand, 1, false));
@@ -191,7 +270,7 @@ pub fn csg_shadow(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array) {
 pub fn csg_uv(p: &CsgParams, pos: &Array, n: &Array) -> Array {
     let mut uv = ck(ops::zeros::<f32>(&[pos.shape()[0], 2]));
     let mut found = ck(ops::zeros_dtype(&[pos.shape()[0]], mlx_rs::Dtype::Bool));
-    let delta = 1e-4;
+    let delta = tol::UV_PROBE;
     for cp in &p.children {
         let bp = ck(pos.add(s_mul(n, delta)));
         let bm = ck(pos.subtract(s_mul(n, delta)));

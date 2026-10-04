@@ -63,7 +63,6 @@ fn thin_shell(wall: f64) -> Geometry {
 
 /// 壁厚 5e-5 < delta：t±δ 双侧探测跨越整面墙 → 翻转判不出来 → 第一外表面消失。
 #[test]
-#[ignore = "P1: delta=1e-4 跳过 <delta 的壁厚，见 freeform-robust-boolean.md §1"]
 fn thin_shell_outer_face_visible() {
     let g = thin_shell(5e-5);
     let t = hit(&g, [-2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
@@ -78,7 +77,6 @@ fn thin_shell_outer_face_visible() {
 /// 大单位（size=1000, wall=0.05）正常；小单位（size=1, wall=5e-5）整体消失 ——
 /// 因为 δ=1e-4 是**绝对**容差，生死由"特征尺寸 vs δ"决定，与设计无关。
 #[test]
-#[ignore = "P1: δ 为绝对容差 → 同一设计换单位即改变行为，见 freeform-robust-boolean.md §1(1)"]
 fn unit_scale_invariance() {
     for size in [1.0, 1000.0] {
         let wall = size * 5e-5;
@@ -120,7 +118,7 @@ fn thick_shell_outer_face_visible() {
 
 // ── 2. 掠射：判别式守卫 + delta 双重吃掉近切交点 ────────────────────────
 
-/// y = 1-1e-6 的掠射球：两次交点间距 ~2.8e-3 > 2δ → 现状命中。
+/// 掠射球（穿入深度 2.8e-3 > 2δ）：对照组，新旧实现都应命中。
 #[test]
 fn grazing_sphere_coarse_entry() {
     let g = Geometry::SphereGeometry(sphere_geometry(1.0));
@@ -132,16 +130,21 @@ fn grazing_sphere_coarse_entry() {
     );
 }
 
-/// y = 1-1e-10：穿入深度 ~1.4e-5 < delta，翻转探测落在球外 → 漏判。
-/// 对渲染不可见，对导出分类是**漏检表面**（P1 的 `Unknown` 必须能报出来）。
+/// **穿入深度 < δ 的掠射薄片（走 CSG 路径）**：半径 0.01 的球，射线以约 1 ulp
+/// 的余量掠过 → 穿入深度 ~4.7e-6 < δ=1e-4。旧实现的 t±δ 探针两侧都落在球外
+/// → 翻转判不出来 → 整条射线漏判；区间分类只看相邻区间成员关系 → 命中。
+///
+/// 注：单位球上这个用例**在 f32 下不可达**（`1.0 - 1e-10` 舍入成 `1.0`，判别式
+/// 精确为 0，是真正的相切），所以用小半径把薄片压到 δ 以下。
 #[test]
-#[ignore = "P1: delta 探测跨越 <delta 的穿入深度 → 漏判，见 freeform-robust-boolean.md §1(2)(3)"]
-fn grazing_sphere_fine_entry() {
-    let g = Geometry::SphereGeometry(sphere_geometry(1.0));
-    let t = hit(&g, [0.0, 1.0 - 1e-10, 0.0], [1.0, 0.0, 0.0]);
+fn csg_grazing_sliver_below_delta() {
+    let ball = Geometry::SphereGeometry(sphere_geometry(0.01));
+    let below = Geometry::PlaneGeometry(cga_core::plane_geometry([0.0, 1.0, 0.0], -10.0));
+    let g = Geometry::CsgGeometry(csg_geometry(CsgOp::Union, vec![ball, below]));
+    let t = hit(&g, [0.0, 0.01 - 1e-9, 0.0], [1.0, 0.0, 0.0]);
     assert!(
         t.is_some_and(|t| t > 0.0 && t < 1e-4),
-        "期望掠射交点 t≈1.4e-5，实际 {:?}",
+        "期望掠射薄片交点 t≈5e-6，实际 {:?}",
         t
     );
 }

@@ -52,5 +52,7 @@ pub use cgs_gen::*;
 pub mod headless;
 pub use headless::*;
 
+pub mod tol;
+
 #[cfg(test)]
 mod degenerate;
