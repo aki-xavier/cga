@@ -82,8 +82,8 @@ make fmt      # cargo fmt --all
 | 层 | 内容 |
 | --- | --- |
 | **CGA 核心** | 32 分量 multivector（纯 `[f64; 32]`）；Motor versor 变换 (gp/reverse/log/velocity)；exp/log/插值；直接形式 `op` 与对偶形式 `ip` 两种关联判据 |
-| **渲染引擎** | three.js 命名 API：Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls；对象 = blade，变换 = Motor 共轭；`renderer(w, h, aa, n)` 超采样 |
-| **复杂建模** | **CSG** 递归真布尔（crossings/contains 实体协议）；**仿射扩展** scale/mirror 射线逆变换 + Newton 极分解；**新图元** cone/torus/ellipsoid/cyclide；**网格** Möller–Trumbore 批量求交 + extrude/loft + OBJ/glTF/GLB |
+| **渲染引擎** | three.js 命名 API：Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls；对象 = blade，变换 = Motor 共轭；`Renderer::new(w, h, aa, n)` 超采样 |
+| **复杂建模** | **CSG** 递归真布尔（crossings/contains 实体协议）；**仿射扩展** scale/mirror 射线逆变换 + Newton 极分解；**新图元** cone/torus（`arc<2π` 即 tube 弧环管）/ellipsoid/cyclide；**网格** Möller–Trumbore 批量求交 + extrude/loft + OBJ/glTF/GLB |
 | **MLX GPU** | 每像素向量化解析求交，全分辨率单帧一次 kernel 批量（mlx-rs / Metal）；相机空间 X 右 / Y 下 / Z 前 |
 
 ## CGS 场景语言（OpenSCAD 风格）
@@ -133,7 +133,7 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 | **v3 P6** | 不等式约束 | 方程体 `== / <= / >= / < / >` 进同一 GN 最小二乘：等式残差 `u−v`，不等式 hinge `max(0, u−v)`（满足 ⇒ 残差与梯度为 0，只裁剪可行域）；`!=` 拒绝；不可行仍显式 `did not converge` |
 | **Report** | 执行结果文本 | `cgs_report(text, asset_root)` / `report_cgs` CLI：场景级 background/camera/灯行 + `object <i> …` 行 + `bounds` + 几何参数树 + tag 注册表 + `summary`，数值六位规范化、帧唯一化；全函数，错误契约 **+0 行** |
 
-详见 [`docs/cgs-v2.md`](docs/cgs-v2.md)、[`docs/cgs-v3.md`](docs/cgs-v3.md)、[`docs/scene-report.md`](docs/scene-report.md)。v2/v3 全部特性（约束解孔位 → `drill` 贯穿 → `face` 面心挂立柱 → `instances` 计数架顶梁）的联合汇演见画廊 `assembly.cgs`（源码 30 行，`examples/cgs/assembly.cgs`）。
+详见 [`docs/cgs-v2.md`](docs/cgs-v2.md)、[`docs/cgs-v3.md`](docs/cgs-v3.md)、[`docs/scene-report.md`](docs/scene-report.md)。v2/v3 全部特性（约束解孔位 → `drill` 贯穿 → `face` 面心挂立柱 → `instances` 计数架顶梁）的联合汇演见画廊 `assembly.cgs`（源码 32 行，`examples/cgs/assembly.cgs`）。
 
 ## CGA 建模 vs 传统欧氏建模
 
@@ -281,7 +281,7 @@ cargo run --release -p cga-examples --bin stereo_pair -- 7 examples/stereo 480 3
 - **阴影** 每光源一条遮挡射线（硬阴影），无软阴影；无后处理 / tonemap；无 envMap/IBL（高 metalness 材质会显黑，demo 因此压低金属度）。
 - **纹理** `material(map=...)` 解析 UV，无 mipmap/过滤控制。
 - **scale/mirror** 经 AffineGeometry 射线逆变换（非 versor 可达）；blade 语义（meet/关联判据）不适用于仿射形变后的图元。
-- **CSG** 相切/共面退化配置依赖 δ=1e-4 双侧采样；节点单材质；`circle` 非实体。
+- **CSG** 交点间区间分类（无 δ 采样）；相切/重根走判别式精确路径，判不出显式 `Unknown` 而非静默猜（`docs/freeform-robust-boolean.md` P0–P4）；节点单材质；`circle` 非实体。
 - **非 blade 图元** cone/torus/ellipsoid/cyclide/网格经射线逆变换接入；cyclide 环型是光滑亏格-1 曲面，尖型自交、CSG 成员性语义退化。
 - **网格** 暴力 O(N·F) 无 BVH、平坦法向、无纹理坐标；glTF 导入暂限单 primitive；内外分类用广义环绕数（开网格/整体反向可用，混合朝向仍无意义）；CSG 复合时 `contains` 按 256MB 临时量预算分块求值（防 OOM，代价是逐块同步变慢），`crossings` 尚未分块。
 - **精度** 代数核心恒为 CPU float64，渲染内核 float32（MLX/Metal 无 float64，参数进相机空间后 near-origin）。
