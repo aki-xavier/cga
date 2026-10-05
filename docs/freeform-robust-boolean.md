@@ -1,6 +1,6 @@
 # 自由曲面 + 可证明布尔：补 CGA 内核的两块理论缺口
 
-状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）、P2（判别式精确路径 + 四次根包）、P3（Bézier 补丁 CSG 叶，见 §6）已落地；P4 待实施。
+状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）、P2（判别式精确路径 + 四次根包）、P3（Bézier 补丁 CSG 叶，见 §6）、P4（绕数网格后端 + 水密烘焙导出，见 §6）已落地。
 适用：`crates/cga-gpu/src/{geom_kernels,csg,geometry_extra}.rs`、`crates/cga-core/src/{geometry,modeling}.rs`。
 诊断行号为 2026-10-03 快照，随代码漂移，以符号名为准。
 
@@ -42,7 +42,7 @@
 | 掠射球 y=1−1e−10（穿深 ~1.4e−5） | 命中 | **None** | <2δ 的穿入深度漏判 |
 | 相切并集，从球心向 +x | t=3（切点非表面） | t=3 | 相切处的正确行为护栏 |
 | 盒 − 圆柱孔（正常路径） | t=1.5 / contains 正确 | 命中且正确 | 回归护栏 |
-| 缺面立方体，体内点 | `true` | **`false`** | 奇偶计数对非水密网格必错（P4） |
+| 缺面立方体，体内点 | `true` | **`false`** | 奇偶计数对非水密网格必错（P4 已修复：换广义环绕数，用例转正） |
 
 #### 1.1.1 P1 落地后的复测（同日）
 
@@ -147,7 +147,7 @@ CGA 给不了的（交回通用几何层）：参数曲面、拓扑、裁剪、�
 | **P1** ✅ | `csg_nearest_surface` 改**交点间区间分类**（§3.2，无需 ε 即消除 δ）；常数收进 `crates/cga-gpu/src/tol.rs`（`T_MIN` / `DEGENERATE_ULPS` / `UV_PROBE`），阈值由 f32 精度派生、尺度相对化 | P0 的 3 条 δ `#[ignore]` 全部转正；`csg_grazing_sliver_below_delta` 新增并转正；跨单位（size = 1 / 1000）行为一致；`test_cyclide_csg_combines`、`renders_generated_flange` 等既有用例无回归。**遗留**：`csg_uv` 的位置探针仍固定 `UV_PROBE = 1e-4`（只影响贴图取哪个子面，不影响命中）；`lipschitz()` 未按原计划逐原语实现，改由 P2/P4 消化（§3.2） |
 | **P2** ✅ | 判别式代数精确路径 + 四次根包（DK 做初值 + 区间认证）——新模块 `crates/cga-gpu/src/certify.rs`（区间算术 `inari` 2.0，IEEE 1788.1-2017） | 相切/重根用例有确定结果（`Double` 或 `Unknown`），无静默漏判：`certify.rs` 13 条测试（含 LCG 判别式符号 vs i128 精确参照 600 例、掠射低于旧守卫阈值、亚 ulp 判别式、环面相切/横截、cyclide 回代残差）+ `degenerate.rs::tangent_sphere_ray_deterministic`。**实施注记**：① 认证机制是 interval Newton 的**符号/单调等价形式**——端点严格符号（区间 Horner 点包络）反向 + `0 ∉ F′(X)` 由 IVT 给"恰有一根"，点求值分辨歧义处用中值引理 `d = E/g` 收口；不用非包络的 f64 点值参与 Newton（fl-Horner 舍入偏置会收敛到伪根，P2 实测已证）；② 重根判定**不**走 256 项闭式判别式，走 §3.3 路线 2（`0 ∈ F′(X)` 无法证唯一 → `Unknown`）；③ GPU f32 守卫保留原值、回落接线随 P4；④ P1 遗留的 `lipschitz()` 段上界由本模块的区间 Horner（`eval_iv`/`deriv_iv`）承接，出口随 P4 |
 | **P3** ✅ | Bicubic (rational) Bézier patch as a CSG leaf (`BezierPatchGeometry`/`BezierParams`, CGS `bezier(points=16, thickness, div)`) — `crossings`/`contains`/`field`/`bounds` ride the proven trimesh MT kernels over a uniform `div×div` tessellation whose chordal error bound (`chord_error()`) is asserted in tests; `thickness > 0` stitches a watertight offset shell (shared-index top/bottom/sides, all-edges-×2 asserted) so the slab is a genuine solid, `thickness = 0` stays a render-only surface (CSG/bake reject with explicit text, same family as `circle`) | open surface renders + casts shadows; solid slab enters `union/difference/intersection`, `bake()` volume ≈ area×thickness, `examples/cgs/freeform.cgs` (hood + curved-groove CSG) loads and renders. 17 new tests (core eval/normal/chord/rational/manifold/field-sign/validation; GPU hit/contains/CSG/bake-volume; CGS build/query/errors/example). **Deliberately deferred**: per-pixel Sederberg clipping on GPU (Metal/f32 cannot hold interval arithmetic — same constraint as P2 §P4); the uniform tessellation + analytic chord bound is the P3 crossing path, exactly as `extrude`/`loft` meshes. **Measured limit**: CSG×mesh memory scales as O(rays × crossings × tris) — the P1 interval sampler evaluates `contains` at `rays×(k+1)` points in one MT broadcast (gallery-res 640×480 aa=2 OOMs past ~60 cutter tris); chunked/batched MT evaluation is filed as P4-adjacent performance work |
-| **P4** | 导出：MC 全判定 cell → 水密保证；mesh 后端换 winding number | 水密性作为断言进 CI（体积/表面积/欧拉示性数校验） |
+| **P4** ✅ | ① 网格 `contains`/`field` 后端换**广义环绕数**（Jacobson 2013，van Oosterom–Strackee 立体角，`\|w\| > 1/2` 判据容忍整体反向）——CPU（`bake.rs::trimesh_field`）与 GPU（`trimesh.rs::trimesh_winding` + `csg.rs::trimesh_contains`）同步替换 +x 奇偶计数；GPU 侧按 `WINDING_CHUNK_BYTES = 256MB` 临时量预算对点轴分块、逐块 eval（P3 实测的 CSG×网格 O(rays×交点×三角) OOM 由此封顶，P4-adjacent 性能项一并兑现）。② 烘焙导出**水密保证**：网格半 cell 外扩（消除"表面恰贴格外层节点 v≡0"的系统性退化）→ marching tetrahedra（v=0 端点 lerp 位精确特判）→ 位精确顶点焊接 → 分量级 BFS 一致定向（逐三角梯度翻转在场折痕处噪声翻转，实测圆柱烘焙 34 条不一致边，改为按连通分量以最自信面播种传播）；非有限场值显式报错（§3.1 导出不许弃权）。③ `BakedMesh::topology_report()`：边界边/非流形边/定向不一致边/欧拉示性数进 CI 断言 | 水密性作为断言进 CI：sphere/box/cylinder/cone/ellipsoid χ=2、torus χ=0、sphere−内含 box 双壳 χ=4，全部 `is_watertight && is_consistently_oriented`；P0 最后一条 `#[ignore]`（缺面立方体奇偶误判）转正；新增开网格场符号、翻转网格、分块一致性（budget=1 vs usize::MAX 逐位相等）、非有限拒绝共 8 条测试。**实施注记**：① Kuhn 六四面体剖分跨 cell 面一致（体对角 0–6 在共享面上映到同一对角线），焊接后水密是构造性结论；② 恰好落在零节点上的四面体产生零面积退化三角（交叉点全部塌缩到同一/两节点），`emit_tri` 直接丢弃——其所代表的区域由邻 cell 的非退化面完整覆盖，丢弃无损；③ 遗留：P2 认证根回落 GPU f32 守卫的接线、`csg_uv` 的 `UV_PROBE` 固定探针、`trimesh_crossings` 的分块（contains 已分块，crossings 为 rays×f 量级）仍未做 |
 
 **性能约束**：Metal 无 f64，区间求值不能下 GPU。分层——GPU 只走"界已在 CPU 端算好/已证"的快速路径，出现 `Unknown` 时回落 f64 CPU 路径（渲染则直接弃权交抗锯齿），不把区间算术塞进 kernel。
 

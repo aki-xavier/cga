@@ -349,13 +349,11 @@ pub(crate) fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
     let p_l = affine_point_to_local(p.a_inv3, p.t_inv, pos);
     let shape: Vec<i32> = p_l.shape()[..p_l.shape().len() - 1].to_vec();
     let pts = ck(p_l.reshape(&[-1, 3]));
-    let d = ck(ops::broadcast_to(arr3(1.0, 0.0, 0.0), pts.shape()));
-    let (tv0, te1, te2, tnrm) = tri_mlx(p);
-    let (tall, _, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &pts, &d);
-    let count = ck(ck(ck(tall.is_finite()).as_type::<i32>()).sum_axes(&[-1], false));
-    let two = Array::from_slice(&[2], &[]);
-    let one = Array::from_slice(&[1], &[]);
-    ck(ck(ck(count.remainder(&two)).eq(&one)).reshape(&shape))
+    let w = crate::trimesh_winding_chunked(p, &pts, crate::WINDING_CHUNK_BYTES);
+    // inside ⇔ |w| > 1/2 ⇔ |ΣΩ| > 2π; |·| tolerates a globally flipped
+    // orientation (orientation-free convention, Jacobson 2013 §2).
+    let inside = s_gt(&ck(w.abs()), 2.0 * std::f64::consts::PI);
+    ck(inside.reshape(&shape))
 }
 
 pub fn geom_crossings(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array, Array) {

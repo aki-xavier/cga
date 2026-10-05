@@ -192,34 +192,6 @@ fn cyclide_field(p: CyclideParams, x: [f64; 3]) -> f64 {
     (rho + bb).powi(2) - 4.0 * (x0 * p.a - p.c * p.d).powi(2) - 4.0 * p.b * p.b * y0 * y0
 }
 
-fn mt_hit(a: [f64; 3], e1: [f64; 3], e2: [f64; 3], o: [f64; 3], d: [f64; 3]) -> Option<f64> {
-    let pvec = [
-        d[1] * e2[2] - d[2] * e2[1],
-        d[2] * e2[0] - d[0] * e2[2],
-        d[0] * e2[1] - d[1] * e2[0],
-    ];
-    let det = dot(e1, pvec);
-    if det.abs() < 1e-15 {
-        return None;
-    }
-    let inv = 1.0 / det;
-    let tvec = sub(o, a);
-    let u = dot(tvec, pvec) * inv;
-    if !(0.0..=1.0).contains(&u) {
-        return None;
-    }
-    let qvec = [
-        tvec[1] * e1[2] - tvec[2] * e1[1],
-        tvec[2] * e1[0] - tvec[0] * e1[2],
-        tvec[0] * e1[1] - tvec[1] * e1[0],
-    ];
-    let v = dot(d, qvec) * inv;
-    if v < 0.0 || u + v > 1.0 {
-        return None;
-    }
-    Some(dot(e2, qvec) * inv)
-}
-
 fn pt_tri_dist2(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
     let ab = sub(b, a);
     let ac = sub(c, a);
@@ -276,27 +248,40 @@ fn pt_tri_dist2(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
     dist * dist
 }
 
+/// Signed solid angle of triangle (a, b, c) seen from the origin
+/// (van Oosterom–Strackee). `a`,`b`,`c` are vertex positions relative to the
+/// query point. Summed over an oriented mesh this gives 4π·winding_number.
+fn solid_angle(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    let la = dot(a, a).sqrt();
+    let lb = dot(b, b).sqrt();
+    let lc = dot(c, c).sqrt();
+    let det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+        + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    let den = la * lb * lc + dot(a, b) * lc + dot(b, c) * la + dot(c, a) * lb;
+    2.0 * det.atan2(den)
+}
+
+/// Signed-distance-style field via the generalized winding number
+/// (Jacobson 2013): magnitude = distance to the closest triangle,
+/// sign = |w| > 1/2. Unlike +x parity counting this classifies non-watertight
+/// or open meshes sanely (a small missing patch only shifts w by its solid
+/// angle fraction); `|w|` tolerates a globally flipped orientation.
 fn trimesh_field(p: &TrimeshParams, x: [f64; 3]) -> f64 {
     let l = to_local(p.a_inv3, p.t_inv, x);
-    let d = [0.7241, 0.4413, 0.5306];
-    let mut count = 0u32;
+    let mut w = 0.0;
     let mut best = f64::INFINITY;
     for i in 0..p.v0.len() {
         let a = p.v0[i];
         let b = [a[0] + p.e1[i][0], a[1] + p.e1[i][1], a[2] + p.e1[i][2]];
         let c = [a[0] + p.e2[i][0], a[1] + p.e2[i][1], a[2] + p.e2[i][2]];
-        if let Some(t) = mt_hit(a, p.e1[i], p.e2[i], l, d) {
-            if t > 1e-9 {
-                count += 1;
-            }
-        }
+        w += solid_angle(sub(a, l), sub(b, l), sub(c, l));
         let dd = pt_tri_dist2(l, a, b, c);
         if dd < best {
             best = dd;
         }
     }
     let dist = best.sqrt();
-    if count % 2 == 1 {
+    if (w / (4.0 * std::f64::consts::PI)).abs() > 0.5 {
         -dist
     } else {
         dist
@@ -540,6 +525,16 @@ const TETS: [[usize; 4]; 6] = [
 const TET_EDGES: [[usize; 2]; 6] = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
 
 fn lerp_pt(a: [f64; 3], va: f64, b: [f64; 3], vb: f64) -> [f64; 3] {
+    // Exact endpoint cases: a zero-valued grid node is a crossing shared by
+    // every incident cell; returning the node bit-exactly (instead of
+    // `a + 1.0 * (b - a)`, which is not bit-exact in f64) keeps the weld and
+    // the edge-pairing topology check exact.
+    if va == 0.0 {
+        return a;
+    }
+    if vb == 0.0 {
+        return b;
+    }
     let t = va / (va - vb);
     [
         a[0] + t * (b[0] - a[0]),
@@ -560,37 +555,25 @@ fn grad(params: &GeometryParams, x: [f64; 3]) -> [f64; 3] {
 fn emit_tri(
     verts: &mut Vec<[f64; 3]>,
     faces: &mut Vec<[i32; 3]>,
-    params: &GeometryParams,
     a: [f64; 3],
     b: [f64; 3],
     c: [f64; 3],
 ) {
-    let ab = sub(b, a);
-    let ac = sub(c, a);
-    let n = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    let cen = [
-        (a[0] + b[0] + c[0]) / 3.0,
-        (a[1] + b[1] + c[1]) / 3.0,
-        (a[2] + b[2] + c[2]) / 3.0,
-    ];
-    let g = grad(params, cen);
-    let base = verts.len() as i32;
-    if dot(n, g) < 0.0 {
-        verts.extend_from_slice(&[a, c, b]);
-    } else {
-        verts.extend_from_slice(&[a, b, c]);
+    // Zero-area faces (the iso-surface passes exactly through a grid node and
+    // several crossings collapse onto it) carry no area and no orientation;
+    // drop them. The region they degenerate from is covered by the adjacent
+    // cells' faces.
+    if a == b || b == c || a == c {
+        return;
     }
+    let base = verts.len() as i32;
+    verts.extend_from_slice(&[a, b, c]);
     faces.push([base, base + 1, base + 2]);
 }
 
 fn polygonize_tet(
     verts: &mut Vec<[f64; 3]>,
     faces: &mut Vec<[i32; 3]>,
-    params: &GeometryParams,
     p: [[f64; 3]; 4],
     v: [f64; 4],
 ) {
@@ -615,7 +598,7 @@ fn polygonize_tet(
                 es.push(e);
             }
         }
-        emit_tri(verts, faces, params, x(es[0]), x(es[1]), x(es[2]));
+        emit_tri(verts, faces, x(es[0]), x(es[1]), x(es[2]));
     } else if n_in == 3 {
         let k = inside.iter().position(|&b| !b).unwrap();
         let mut es = Vec::new();
@@ -624,7 +607,7 @@ fn polygonize_tet(
                 es.push(e);
             }
         }
-        emit_tri(verts, faces, params, x(es[0]), x(es[1]), x(es[2]));
+        emit_tri(verts, faces, x(es[0]), x(es[1]), x(es[2]));
     } else {
         let mut ins = Vec::new();
         let mut outs = Vec::new();
@@ -645,8 +628,8 @@ fn polygonize_tet(
         let q1 = x(edge_of(ins[0], outs[1]));
         let q2 = x(edge_of(ins[1], outs[1]));
         let q3 = x(edge_of(ins[1], outs[0]));
-        emit_tri(verts, faces, params, q0, q1, q2);
-        emit_tri(verts, faces, params, q0, q2, q3);
+        emit_tri(verts, faces, q0, q1, q2);
+        emit_tri(verts, faces, q0, q2, q3);
     }
 }
 
@@ -656,6 +639,42 @@ pub struct BakedMesh {
     pub faces: Vec<[i32; 3]>,
 }
 
+/// Topology audit of a baked mesh. Marching tetrahedra over a fully decided
+/// sign grid (no undecidable corners) yields a closed surface by construction;
+/// this report turns that guarantee into an assertion.
+///
+/// Degenerate (zero-area) faces arise when the iso-surface passes exactly
+/// through a grid node; they carry no area and pair their non-self edges
+/// internally, so the audit ignores them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TopologyReport {
+    /// Vertices referenced by non-degenerate faces.
+    pub vertices: usize,
+    /// Non-degenerate faces.
+    pub faces: usize,
+    /// Zero-area faces (repeated vertex index), excluded from all counts.
+    pub degenerate_faces: usize,
+    /// Edges with exactly one incident non-degenerate face (holes).
+    pub boundary_edges: usize,
+    /// Edges with more than two incident non-degenerate faces.
+    pub nonmanifold_edges: usize,
+    /// Closed edges whose two incident faces wind in the same direction.
+    pub inconsistent_edges: usize,
+    /// V − E + F over the non-degenerate part (2 per spherical shell, 0 per
+    /// torus shell, additive over disjoint shells).
+    pub euler: i64,
+}
+
+impl TopologyReport {
+    pub fn is_watertight(&self) -> bool {
+        self.faces > 0 && self.boundary_edges == 0 && self.nonmanifold_edges == 0
+    }
+
+    pub fn is_consistently_oriented(&self) -> bool {
+        self.inconsistent_edges == 0
+    }
+}
+
 impl BakedMesh {
     pub fn is_empty(&self) -> bool {
         self.faces.is_empty()
@@ -663,6 +682,87 @@ impl BakedMesh {
 
     pub fn triangle_count(&self) -> usize {
         self.faces.len()
+    }
+
+    /// Merge bit-identical vertices (grid nodes and lerp crossings are shared
+    /// bit-exactly across cells) so topology can be audited per edge.
+    pub fn weld(&mut self) {
+        use std::collections::HashMap;
+        let mut map: HashMap<(u64, u64, u64), i32> = HashMap::with_capacity(self.vertices.len());
+        let mut verts: Vec<[f64; 3]> = Vec::with_capacity(self.vertices.len());
+        let mut remap = vec![0i32; self.vertices.len()];
+        for (i, v) in self.vertices.iter().enumerate() {
+            let key = (v[0].to_bits(), v[1].to_bits(), v[2].to_bits());
+            let id = *map.entry(key).or_insert_with(|| {
+                verts.push(*v);
+                (verts.len() - 1) as i32
+            });
+            remap[i] = id;
+        }
+        for f in &mut self.faces {
+            *f = [
+                remap[f[0] as usize],
+                remap[f[1] as usize],
+                remap[f[2] as usize],
+            ];
+        }
+        self.vertices = verts;
+    }
+
+    pub fn topology_report(&self) -> TopologyReport {
+        use std::collections::HashMap;
+        let mut half: HashMap<(i32, i32), usize> = HashMap::new();
+        let mut used: Vec<bool> = vec![false; self.vertices.len()];
+        let mut degenerate_faces = 0;
+        let mut faces = 0;
+        for f in &self.faces {
+            if f[0] == f[1] || f[1] == f[2] || f[2] == f[0] {
+                degenerate_faces += 1;
+                continue;
+            }
+            faces += 1;
+            for &i in f {
+                used[i as usize] = true;
+            }
+            for e in [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]] {
+                *half.entry((e[0], e[1])).or_insert(0) += 1;
+            }
+        }
+        let mut boundary_edges = 0;
+        let mut nonmanifold_edges = 0;
+        let mut inconsistent_edges = 0;
+        let mut edges = 0usize;
+        let mut seen: HashMap<(i32, i32), (usize, usize)> = HashMap::new();
+        for (&(a, b), &n) in &half {
+            let key = (a.min(b), a.max(b));
+            let e = seen.entry(key).or_default();
+            if a < b {
+                e.0 += n;
+            } else {
+                e.1 += n;
+            }
+        }
+        for &(fwd, rev) in seen.values() {
+            edges += 1;
+            let total = fwd + rev;
+            if total == 1 {
+                boundary_edges += 1;
+            } else if total > 2 {
+                nonmanifold_edges += 1;
+            } else if fwd != 1 || rev != 1 {
+                inconsistent_edges += 1;
+            }
+        }
+        let vertices = used.iter().filter(|&&u| u).count();
+        TopologyReport {
+            vertices,
+            faces,
+            degenerate_faces,
+            boundary_edges,
+            nonmanifold_edges,
+            inconsistent_edges,
+            euler: vertices as i64 - edges as i64 + faces as i64,
+        }
     }
 }
 
@@ -684,6 +784,107 @@ impl BakedMesh {
     }
 }
 
+/// Re-orient every connected shell consistently (BFS over shared edges),
+/// seeded by the field gradient at the most confident face of each shell.
+/// Per-triangle gradient flips are noisy at field creases (cap rims, CSG
+/// seams); propagation makes orientation consistent by construction.
+fn orient_outward(mesh: &mut BakedMesh, params: &GeometryParams) {
+    use std::collections::HashMap;
+    let mut edge_faces: HashMap<(i32, i32), Vec<(usize, bool)>> = HashMap::new();
+    for (fi, f) in mesh.faces.iter().enumerate() {
+        for e in [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]] {
+            edge_faces
+                .entry((e[0].min(e[1]), e[0].max(e[1])))
+                .or_default()
+                .push((fi, e[0] < e[1]));
+        }
+    }
+    let n = mesh.faces.len();
+    let mut flip = vec![false; n];
+    let mut visited = vec![false; n];
+    let face_geom = |fi: usize| -> ([f64; 3], [f64; 3]) {
+        let f = mesh.faces[fi];
+        let (a, b, c) = (
+            mesh.vertices[f[0] as usize],
+            mesh.vertices[f[1] as usize],
+            mesh.vertices[f[2] as usize],
+        );
+        let ab = sub(b, a);
+        let ac = sub(c, a);
+        let nrm = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        let cen = [
+            (a[0] + b[0] + c[0]) / 3.0,
+            (a[1] + b[1] + c[1]) / 3.0,
+            (a[2] + b[2] + c[2]) / 3.0,
+        ];
+        (nrm, cen)
+    };
+    for seed in 0..n {
+        if visited[seed] {
+            continue;
+        }
+        // Collect the connected component first, then seed orientation at the
+        // face whose normal best agrees with the field gradient.
+        let mut comp = Vec::new();
+        let mut stack = vec![seed];
+        visited[seed] = true;
+        while let Some(fi) = stack.pop() {
+            comp.push(fi);
+            let f = mesh.faces[fi];
+            for e in [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]] {
+                if let Some(list) = edge_faces.get(&(e[0].min(e[1]), e[0].max(e[1]))) {
+                    for &(gi, _) in list {
+                        if !visited[gi] {
+                            visited[gi] = true;
+                            stack.push(gi);
+                        }
+                    }
+                }
+            }
+        }
+        let mut best = seed;
+        let mut best_conf = -1.0;
+        for &fi in &comp {
+            let (nrm, cen) = face_geom(fi);
+            let conf = dot(nrm, grad(params, cen)).abs();
+            if conf > best_conf {
+                best_conf = conf;
+                best = fi;
+            }
+        }
+        let (nrm, cen) = face_geom(best);
+        flip[best] = dot(nrm, grad(params, cen)) < 0.0;
+        let mut stack = vec![best];
+        let mut done = vec![false; n];
+        done[best] = true;
+        while let Some(fi) = stack.pop() {
+            let f = mesh.faces[fi];
+            for e in [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]] {
+                let dir = (e[0] < e[1]) != flip[fi]; // traversal after flip
+                if let Some(list) = edge_faces.get(&(e[0].min(e[1]), e[0].max(e[1]))) {
+                    for &(gi, gdir) in list {
+                        if gi != fi && !done[gi] {
+                            // neighbor must traverse the shared edge oppositely
+                            flip[gi] = gdir == dir;
+                            done[gi] = true;
+                            stack.push(gi);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (fi, f) in mesh.faces.iter_mut().enumerate() {
+        if flip[fi] {
+            f.swap(1, 2);
+        }
+    }
+}
+
 pub const MAX_BAKE_NODES: usize = 6_000_000;
 
 impl GeometryParams {
@@ -701,9 +902,27 @@ impl GeometryParams {
         let [lo, hi] = self
             .bounds()
             .ok_or("bake: unbounded geometry (plane/infinite)")?;
-        let nx = ((hi[0] - lo[0]) / step).ceil().max(1.0) as usize;
-        let ny = ((hi[1] - lo[1]) / step).ceil().max(1.0) as usize;
-        let nz = ((hi[2] - lo[2]) / step).ceil().max(1.0) as usize;
+        // Pad by half a cell on every side: with tight bounds the surface
+        // would otherwise sit exactly on the outer grid nodes (v == 0), the
+        // systematically degenerate configuration for cell classification.
+        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+        let mut nx = (span[0] / step).ceil().max(1.0) as usize;
+        let mut ny = (span[1] / step).ceil().max(1.0) as usize;
+        let mut nz = (span[2] / step).ceil().max(1.0) as usize;
+        let lo = [
+            lo[0] - 0.5 * span[0] / nx as f64,
+            lo[1] - 0.5 * span[1] / ny as f64,
+            lo[2] - 0.5 * span[2] / nz as f64,
+        ];
+        let hi = [
+            hi[0] + 0.5 * span[0] / nx as f64,
+            hi[1] + 0.5 * span[1] / ny as f64,
+            hi[2] + 0.5 * span[2] / nz as f64,
+        ];
+        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+        nx = (span[0] / step).ceil().max(1.0) as usize;
+        ny = (span[1] / step).ceil().max(1.0) as usize;
+        nz = (span[2] / step).ceil().max(1.0) as usize;
         let nodes = (nx + 1).saturating_mul(ny + 1).saturating_mul(nz + 1);
         if nodes > MAX_BAKE_NODES {
             return Err(format!(
@@ -728,6 +947,13 @@ impl GeometryParams {
                 }
             }
         }
+        // Export may not abstain (§3.1 of the robustness plan): every grid
+        // node must have a decided sign before any cell is emitted.
+        if let Some(bad) = vals.iter().position(|v| !v.is_finite()) {
+            return Err(format!(
+                "bake: non-finite field value at grid node {bad} (undecidable corner)"
+            ));
+        }
         let val = |i: usize, j: usize, k: usize| vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i];
         let mut mesh = BakedMesh::default();
         for k in 0..nz {
@@ -743,11 +969,13 @@ impl GeometryParams {
                     for tet in &TETS {
                         let p = [cp[tet[0]], cp[tet[1]], cp[tet[2]], cp[tet[3]]];
                         let v = [cv[tet[0]], cv[tet[1]], cv[tet[2]], cv[tet[3]]];
-                        polygonize_tet(&mut mesh.vertices, &mut mesh.faces, self, p, v);
+                        polygonize_tet(&mut mesh.vertices, &mut mesh.faces, p, v);
                     }
                 }
             }
         }
+        mesh.weld();
+        orient_outward(&mut mesh, self);
         Ok(mesh)
     }
 }
@@ -757,7 +985,7 @@ mod tests {
     use super::*;
     use crate::{
         BoxGeometry, ConeGeometry, CsgGeometry, CsgOp, CylinderGeometry, EllipsoidGeometry,
-        Geometry, SphereGeometry, TorusGeometry, TrimeshGeometry,
+        Geometry, SphereGeometry, TorusGeometry, TrimeshGeometry, TrimeshParams,
     };
 
     fn world(g: &Geometry) -> GeometryParams {
@@ -828,7 +1056,9 @@ mod tests {
     }
 
     #[test]
-    fn trimesh_parity_bake() {
+    fn trimesh_winding_bake() {
+        // Inward-oriented closed cube: the winding field classifies by |w|,
+        // so a consistent global flip must not change the sign.
         let v = [
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -860,6 +1090,102 @@ mod tests {
         let m = p.bake(0.1).unwrap();
         let vv = m.volume().abs();
         assert!((vv - 1.0).abs() < 0.12, "V={vv}");
+    }
+
+    #[test]
+    fn trimesh_winding_open_mesh_field() {
+        // Cube with the x=1 cap removed: parity counting fails here, the
+        // winding number still classifies (the missing patch only costs its
+        // solid-angle fraction 1/6 from the center).
+        let (verts, faces) = crate::extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
+        let keep: Vec<[i32; 3]> = faces
+            .iter()
+            .filter(|f| {
+                let cx =
+                    (verts[f[0] as usize][0] + verts[f[1] as usize][0] + verts[f[2] as usize][0])
+                        / 3.0;
+                cx < 0.9
+            })
+            .copied()
+            .collect();
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &keep));
+        let p = world(&g);
+        assert!(
+            p.field([0.5, 0.5, 0.5]) < 0.0,
+            "inside point of an open mesh must stay inside"
+        );
+        assert!(p.field([1.5, 0.5, 0.5]) > 0.0);
+    }
+
+    fn assert_shells(m: &BakedMesh, want_euler: i64) {
+        let r = m.topology_report();
+        assert!(r.is_watertight(), "not watertight: {r:?}");
+        assert!(r.is_consistently_oriented(), "inconsistent winding: {r:?}");
+        assert_eq!(r.euler, want_euler, "euler mismatch: {r:?}");
+    }
+
+    #[test]
+    fn watertight_sphere_and_torus() {
+        let s = world(&Geometry::SphereGeometry(SphereGeometry::new(1.0)));
+        assert_shells(&s.bake(0.08).unwrap(), 2);
+        let t = world(&Geometry::TorusGeometry(TorusGeometry::new(1.0, 0.3)));
+        assert_shells(&t.bake(0.08).unwrap(), 0);
+    }
+
+    #[test]
+    fn watertight_box() {
+        // Tight bounds: without the half-cell pad the faces would sit exactly
+        // on grid nodes (v == 0) — the systematically degenerate case.
+        let b = world(&Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0)));
+        assert_shells(&b.bake(0.1).unwrap(), 2);
+    }
+
+    #[test]
+    fn watertight_cylinder_cone_ellipsoid() {
+        let cy = world(&Geometry::CylinderGeometry(CylinderGeometry::new(0.5, 2.0)));
+        assert_shells(&cy.bake(0.08).unwrap(), 2);
+        let co = world(&Geometry::ConeGeometry(ConeGeometry::new(0.5, 1.0)));
+        assert_shells(&co.bake(0.06).unwrap(), 2);
+        let el = world(&Geometry::EllipsoidGeometry(EllipsoidGeometry::new(
+            1.0, 0.5, 0.5,
+        )));
+        assert_shells(&el.bake(0.08).unwrap(), 2);
+    }
+
+    #[test]
+    fn watertight_cavity_euler_additive() {
+        // Sphere with a fully contained box cavity: two disjoint shells,
+        // chi = 2 + 2 = 4.
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
+            CsgOp::Difference,
+            vec![
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
+            ],
+        ));
+        let p = world(&g);
+        assert_shells(&p.bake(0.08).unwrap(), 4);
+    }
+
+    #[test]
+    fn bake_rejects_nonfinite_field() {
+        let eye = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let p = GeometryParams::TrimeshParams(TrimeshParams {
+            a_inv3: eye,
+            t_inv: [0.0; 3],
+            a_fwd: crate::mat4_identity(),
+            v0: vec![[0.0, 0.0, 0.0]],
+            e1: vec![[f64::NAN, 0.0, 0.0]],
+            e2: vec![[0.0, 1.0, 0.0]],
+            nrm: vec![[0.0, 0.0, 1.0]],
+            lo: [-1.0; 3],
+            hi: [1.0; 3],
+        });
+        let e = p.bake(0.1).unwrap_err();
+        assert!(
+            e.contains("non-finite"),
+            "export may not abstain silently: {e}"
+        );
     }
 
     #[test]

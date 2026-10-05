@@ -92,6 +92,63 @@ pub fn trimesh_uv(_p: &TrimeshParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::zeros::<f32>(&[pos.shape()[0], 2]))
 }
 
+/// Summed signed solid angles (van Oosterom–Strackee) of every triangle seen
+/// from each query point — 4π × the generalized winding number
+/// (Jacobson 2013). `pts` are mesh-local, shape (n, 3); returns (n,).
+/// Unlike +x parity counting this classifies non-watertight / open meshes
+/// sanely: a small missing patch only shifts the sum by its solid-angle
+/// fraction instead of flipping whole regions.
+fn winding_sum(tv0: &Array, te1: &Array, te2: &Array, pts: &Array) -> Array {
+    let a = ck(ck(tv0.expand_dims(0)).subtract(ck(pts.expand_dims(1)))); // (n,f,3)
+    let b = ck(a.add(ck(te1.expand_dims(0))));
+    let c = ck(a.add(ck(te2.expand_dims(0))));
+    let la = ck(ck(ck(a.multiply(&a)).sum_axes(&[-1], false)).sqrt());
+    let lb = ck(ck(ck(b.multiply(&b)).sum_axes(&[-1], false)).sqrt());
+    let lc = ck(ck(ck(c.multiply(&c)).sum_axes(&[-1], false)).sqrt());
+    let det = ck(ck(a.multiply(&cross3(&b, &c))).sum_axes(&[-1], false));
+    let ab = ck(ck(a.multiply(&b)).sum_axes(&[-1], false));
+    let bc = ck(ck(b.multiply(&c)).sum_axes(&[-1], false));
+    let ca = ck(ck(c.multiply(&a)).sum_axes(&[-1], false));
+    let den = ck(
+        ck(ck(ck(la.multiply(&lb)).multiply(&lc)).add(&ck(ab.multiply(&lc))))
+            .add(&ck(ck(bc.multiply(&la)).add(&ck(ca.multiply(&lb))))),
+    );
+    let omega = ck(ops::atan2(&det, &den));
+    s_mul(&ck(omega.sum_axes(&[-1], false)), 2.0)
+}
+
+pub(crate) fn trimesh_winding(p: &TrimeshParams, pts: &Array) -> Array {
+    let (tv0, te1, te2, _nrm) = tri_mlx(p);
+    winding_sum(&tv0, &te1, &te2, pts)
+}
+
+/// Peak-bytes budget for the (n, f, 3) f32 temporaries of one winding chunk.
+/// The CSG interval sampler calls `contains` with rays×(k+1) points in one
+/// broadcast (see freeform-robust-boolean.md P3 measured limit); beyond this
+/// budget the point axis is chunked and each chunk evaluated eagerly.
+pub(crate) const WINDING_CHUNK_BYTES: usize = 256 * 1024 * 1024;
+
+pub(crate) fn trimesh_winding_chunked(p: &TrimeshParams, pts: &Array, budget: usize) -> Array {
+    let n = pts.shape()[0] as usize;
+    // ~8 live (n,f,3) f32 temporaries inside winding_sum.
+    let per_pt = p.v0.len().max(1) * 3 * 4 * 8;
+    let chunk = (budget / per_pt.max(1)).max(1024);
+    if n <= chunk {
+        return trimesh_winding(p, pts);
+    }
+    pts.eval().unwrap();
+    let flat: &[f32] = pts.as_slice();
+    let (tv0, te1, te2, _nrm) = tri_mlx(p);
+    let mut out: Vec<f32> = Vec::with_capacity(n);
+    for c in flat.chunks(chunk * 3) {
+        let m = (c.len() / 3) as i32;
+        let w = winding_sum(&tv0, &te1, &te2, &Array::from_slice(c, &[m, 3]));
+        w.eval().unwrap();
+        out.extend_from_slice(w.as_slice::<f32>());
+    }
+    Array::from_slice(&out, &[n as i32])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +247,77 @@ mod tests {
         mask.eval().unwrap();
         assert!(mask.as_slice::<bool>()[0]);
         assert!((f64::from(t.item_cast::<f32>()) - 2.0).abs() < 1e-3);
+    }
+
+    fn tm_cube() -> Geometry {
+        // Closed unit cube [0,1]^3, globally inward orientation — the winding
+        // backend classifies by |w|, so a consistent global flip must not
+        // change inside/outside.
+        let v = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let f = [
+            [0, 1, 2],
+            [0, 2, 3],
+            [4, 6, 5],
+            [4, 7, 6],
+            [0, 4, 5],
+            [0, 5, 1],
+            [1, 5, 6],
+            [1, 6, 2],
+            [2, 6, 7],
+            [2, 7, 3],
+            [3, 7, 4],
+            [3, 4, 0],
+        ];
+        Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f))
+    }
+
+    #[test]
+    fn test_trimesh_winding_closed_cube() {
+        let g = tm_cube();
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let cga_core::GeometryParams::TrimeshParams(tp) = p else {
+            panic!()
+        };
+        let pts = Array::from_slice(&[0.5f32, 0.5, 0.5, 5.0, 0.5, 0.5], &[2, 3]);
+        let w = trimesh_winding(&tp, &pts);
+        w.eval().unwrap();
+        let ws = w.as_slice::<f32>();
+        assert!(
+            (ws[0].abs() - 4.0 * std::f32::consts::PI).abs() < 0.1,
+            "center |ΣΩ| ≈ 4π, got {}",
+            ws[0]
+        );
+        assert!(ws[1].abs() < 0.1, "far outside |ΣΩ| ≈ 0, got {}", ws[1]);
+    }
+
+    #[test]
+    fn test_trimesh_winding_chunked_matches_unchunked() {
+        let g = tm_cube();
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let cga_core::GeometryParams::TrimeshParams(tp) = p else {
+            panic!()
+        };
+        let n = 3000usize; // > the 1024-point chunk floor with a tiny budget
+        let mut flat = vec![0.0f32; n * 3];
+        for i in 0..n {
+            flat[i * 3] = (i % 13) as f32 * 0.11 - 0.6;
+            flat[i * 3 + 1] = ((i / 13) % 7) as f32 * 0.19 - 0.5;
+            flat[i * 3 + 2] = ((i / 91) % 5) as f32 * 0.23 - 0.4;
+        }
+        let pts = Array::from_slice(&flat, &[n as i32, 3]);
+        let full = trimesh_winding_chunked(&tp, &pts, usize::MAX);
+        let chunked = trimesh_winding_chunked(&tp, &pts, 1);
+        full.eval().unwrap();
+        chunked.eval().unwrap();
+        assert_eq!(full.as_slice::<f32>(), chunked.as_slice::<f32>());
     }
 }

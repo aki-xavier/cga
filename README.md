@@ -52,7 +52,7 @@ CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cg
 要求 Rust stable（1.8x+）、macOS Apple Silicon。`mlx-rs` 首次构建会编译 MLX C++ 核心（一次性，之后走缓存）：
 
 ```bash
-make test     # cargo test --workspace（225 个测试全过）
+make test     # cargo test --workspace（235 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -147,7 +147,7 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 
 **自由曲面 P3** — `bezier(points=16, thickness, div)` 有理双三次 Bézier 补丁：`crossings`/`contains`/`field`/`bounds` 复用网格 MT 内核（均匀 `div×div` 剖分 + 解析弦高界断言）；`thickness>0` 缝合水密偏置厚壳（共享索引 top/bottom/侧壁，全边 ×2 断言），为真实体、可进 CSG 与烘焙；`thickness=0` 为渲染面（CSG/烘焙显式拒绝，与 `circle` 同族）。见 `examples/cgs/freeform.cgs`（曲面罩 + 曲面开槽 CSG）。实测约束：CSG×网格内存按 O(射线 × 交点 × 三角) 增长（区间分类逐射线多点采样），高 div 配低分辨率/aa。
 
-**烘焙** — `bake` 把任意 CSG 隐式体变三角网格，**纯 CPU f64 无 GPU 依赖（Linux/CI 可用）**：有符号场（与 GPU `*_contains` 同号）→ marching tetrahedra（Kuhn 六四面体）→ 数值梯度定向法向。
+**烘焙** — `bake` 把任意 CSG 隐式体变三角网格，**纯 CPU f64 无 GPU 依赖（Linux/CI 可用）**：有符号场（与 GPU `*_contains` 同号）→ marching tetrahedra（Kuhn 六四面体）→ 位精确焊接 + 分量级一致定向，**水密为构造性结论**（`topology_report()` 边界边/非流形边/欧拉示性数进 CI 断言）；非有限场值显式报错（导出不弃权）。
 
 ```bash
 cargo run --release -p cga-examples --bin bake_cgs -- examples/cgs/mechanical.cgs out.obj 0.1
@@ -237,7 +237,7 @@ cargo run --release -p cga-examples --bin stereo_pair -- 7 examples/stereo 480 3
 - **scale/mirror** 经 AffineGeometry 射线逆变换（非 versor 可达）；blade 语义（meet/关联判据）不适用于仿射形变后的图元。
 - **CSG** 相切/共面退化配置依赖 δ=1e-4 双侧采样；节点单材质；`circle` 非实体。
 - **非 blade 图元** cone/torus/ellipsoid/cyclide/网格经射线逆变换接入；cyclide 环型是光滑亏格-1 曲面，尖型自交、CSG 成员性语义退化。
-- **网格** 暴力 O(N·F) 无 BVH、平坦法向、无纹理坐标；glTF 导入暂限单 primitive；CSG 与网格（含 bezier 厚壳）复合时内存按 O(射线×交点×三角) 增长，高分辨率先降 `div`/aa（`freeform.cgs` 头注有实测配比）。
+- **网格** 暴力 O(N·F) 无 BVH、平坦法向、无纹理坐标；glTF 导入暂限单 primitive；内外分类用广义环绕数（开网格/整体反向可用，混合朝向仍无意义）；CSG 复合时 `contains` 按 256MB 临时量预算分块求值（防 OOM，代价是逐块同步变慢），`crossings` 尚未分块。
 - **精度** 代数核心恒为 CPU float64，渲染内核 float32（MLX/Metal 无 float64，参数进相机空间后 near-origin）。
 
 ## 机器人领域潜在应用
@@ -294,7 +294,7 @@ docs/                       架构图、机器人图、cgs-v2/v3、scene-report�
 
 ## 质量
 
-- `make test`：**225 个测试全过**（cga-core 56 + cga-gpu 169，另 1 条退化用例 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作 / CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 + Bézier 补丁叶（求值/弦高界/水密壳/CSG/烘焙体积/CGS 错误契约）/ 烘焙体积金样。
+- `make test`：**235 个测试全过**（cga-core 62 + cga-gpu 173，无 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作（绕数分类：开网格、整体反向、分块一致性）/ CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 + Bézier 补丁叶（求值/弦高界/水密壳/CSG/烘焙体积/CGS 错误契约）/ 烘焙体积与水密拓扑（边界边/非流形边/欧拉示性数）金样。
 - 渲染金样写入 `artifacts/tests/`（gitignored），sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg 金样 **RMSE = 0**。
 
 ## License

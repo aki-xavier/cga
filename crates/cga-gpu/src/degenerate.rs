@@ -185,7 +185,6 @@ fn tangent_sphere_ray_deterministic() {
 }
 
 #[test]
-#[ignore = "P4: trimesh_contains 用 +x 奇偶计数，非水密即错，见 freeform-robust-boolean.md §3.4"]
 fn open_mesh_inside_still_classifies() {
     let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
 
@@ -203,5 +202,40 @@ fn open_mesh_inside_still_classifies() {
         contains(&g, &[[0.5, 0.5, 0.5], [1.5, 0.5, 0.5]]),
         [true, false],
         "缺面后体内点仍应判为实体"
+    );
+}
+
+#[test]
+fn flipped_closed_mesh_still_classifies() {
+    // 全局反转向封闭立方体：绕数取 |w|，整体翻转不改变内外判据。
+    let v = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let f = [
+        [0, 1, 2],
+        [0, 2, 3],
+        [4, 6, 5],
+        [4, 7, 6],
+        [0, 4, 5],
+        [0, 5, 1],
+        [1, 5, 6],
+        [1, 6, 2],
+        [2, 6, 7],
+        [2, 7, 3],
+        [3, 7, 4],
+        [3, 4, 0],
+    ];
+    let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f));
+    assert_eq!(
+        contains(&g, &[[0.5, 0.5, 0.5], [2.0, 0.5, 0.5]]),
+        [true, false],
+        "整体反向的封闭网格仍应正确分类"
     );
 }
