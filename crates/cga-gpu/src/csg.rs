@@ -331,7 +331,7 @@ fn cyclide_contains(p: CyclideParams, pos: &Array) -> Array {
     cyclide_local_contains(p.a, p.b, p.d, p.c, p.shift, &p_l)
 }
 
-fn trimesh_crossings(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+pub(crate) fn trimesh_crossings(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (tv0, te1, te2, tnrm) = tri_mlx(p);
     let (tall, nall, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &o_l, &d_u);
@@ -345,7 +345,7 @@ fn trimesh_crossings(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, 
     (ts, ns, valid)
 }
 
-fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
+pub(crate) fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
     let p_l = affine_point_to_local(p.a_inv3, p.t_inv, pos);
     let shape: Vec<i32> = p_l.shape()[..p_l.shape().len() - 1].to_vec();
     let pts = ck(p_l.reshape(&[-1, 3]));
@@ -369,6 +369,7 @@ pub fn geom_crossings(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array
         GeometryParams::TorusParams(p) => torus_crossings(*p, o, d),
         GeometryParams::CyclideParams(p) => cyclide_crossings(*p, o, d),
         GeometryParams::TrimeshParams(p) => trimesh_crossings(p, o, d),
+        GeometryParams::BezierParams(p) => trimesh_crossings(&p.to_trimesh_params(), o, d),
         GeometryParams::CircleParams(_) => panic!("circle is not a solid (no crossings)"),
         GeometryParams::CsgParams(p) => crate::csg_crossings(p, o, d),
         GeometryParams::AffineParams(p) => crate::affine_crossings(p, o, d),
@@ -386,6 +387,7 @@ pub fn geom_contains(p: &GeometryParams, pos: &Array) -> Array {
         GeometryParams::TorusParams(p) => torus_contains(*p, pos),
         GeometryParams::CyclideParams(p) => cyclide_contains(*p, pos),
         GeometryParams::TrimeshParams(p) => trimesh_contains(p, pos),
+        GeometryParams::BezierParams(p) => trimesh_contains(&p.to_trimesh_params(), pos),
         GeometryParams::CircleParams(_) => panic!("circle is not a solid (no contains)"),
         GeometryParams::CsgParams(p) => crate::csg_contains(p, pos),
         GeometryParams::AffineParams(p) => crate::affine_contains(p, pos),

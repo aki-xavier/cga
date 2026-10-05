@@ -14,4 +14,5 @@ pub enum Geometry {
     CylinderGeometry(CylinderGeometry),
     BoxGeometry(BoxGeometry),
     CircleGeometry(CircleGeometry),
+    BezierPatchGeometry(BezierPatchGeometry),
 }

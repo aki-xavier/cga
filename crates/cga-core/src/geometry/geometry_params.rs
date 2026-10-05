@@ -12,6 +12,7 @@ pub enum GeometryParams {
     TorusParams(TorusParams),
     BoxParams(BoxParams),
     CylinderParams(CylinderParams),
+    BezierParams(BezierParams),
     PlaneParams(PlaneParams),
     SphereParams(SphereParams),
 }

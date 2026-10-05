@@ -14,6 +14,11 @@ impl CsgGeometry {
             if let Geometry::CircleGeometry(_) = c {
                 panic!("circle is not a solid (no crossings/contains)")
             }
+            if let Geometry::BezierPatchGeometry(b) = c {
+                if !b.is_solid() {
+                    panic!("bezier surface (thickness=0) is not a solid (no crossings/contains)")
+                }
+            }
         }
         CsgGeometry { op, children }
     }

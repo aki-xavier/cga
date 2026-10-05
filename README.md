@@ -52,7 +52,7 @@ CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cg
 要求 Rust stable（1.8x+）、macOS Apple Silicon。`mlx-rs` 首次构建会编译 MLX C++ 核心（一次性，之后走缓存）：
 
 ```bash
-make test     # cargo test --workspace（208 个测试全过）
+make test     # cargo test --workspace（225 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -81,7 +81,7 @@ camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs orbit.png 640 480 2
 ```
 
-- **修饰符** `translate/rotate/scale/mirror/material` 作用于紧随语句或 `{}` 块，可嵌套；图元 `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/extrude/loft/mesh`。
+- **修饰符** `translate/rotate/scale/mirror/material` 作用于紧随语句或 `{}` 块，可嵌套；图元 `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/bezier/extrude/loft/mesh`（`bezier(points=16个[x,y,z], thickness=0, div=8)`：`thickness=0` 为渲染面，`>0` 为水密厚壳、可进 CSG/烘焙）。
 - **语言能力** 变量/表达式/数学函数、`for+range`、`module`、`if-else`、`echo`、CSG `union/difference/intersection`；完整语法见 `crates/cga-gpu/src/scene_lang.rs` 文件头。
 - **列表取分量** `comp(list, i)`（不支持 `a[i]` 索引）。
 
@@ -144,6 +144,8 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 **仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解为 motor·linear，`rotate` 与 `scale/mirror` 任意嵌套顺序均正确。
 
 **网格与互操作** — `MeshGeometry`（Möller–Trumbore 批量求交，平坦法向，无 BVH）；`modeling.rs` 的 extrude（耳切凹轮廓三角化）与 loft（等点数多截面）；`mesh_io.rs` 纯 stdlib OBJ 读写，`mesh_io_gltf.rs` glTF/GLB 读写（节点变换/层级/材质色）。
+
+**自由曲面 P3** — `bezier(points=16, thickness, div)` 有理双三次 Bézier 补丁：`crossings`/`contains`/`field`/`bounds` 复用网格 MT 内核（均匀 `div×div` 剖分 + 解析弦高界断言）；`thickness>0` 缝合水密偏置厚壳（共享索引 top/bottom/侧壁，全边 ×2 断言），为真实体、可进 CSG 与烘焙；`thickness=0` 为渲染面（CSG/烘焙显式拒绝，与 `circle` 同族）。见 `examples/cgs/freeform.cgs`（曲面罩 + 曲面开槽 CSG）。实测约束：CSG×网格内存按 O(射线 × 交点 × 三角) 增长（区间分类逐射线多点采样），高 div 配低分辨率/aa。
 
 **烘焙** — `bake` 把任意 CSG 隐式体变三角网格，**纯 CPU f64 无 GPU 依赖（Linux/CI 可用）**：有符号场（与 GPU `*_contains` 同号）→ marching tetrahedra（Kuhn 六四面体）→ 数值梯度定向法向。
 
@@ -235,7 +237,7 @@ cargo run --release -p cga-examples --bin stereo_pair -- 7 examples/stereo 480 3
 - **scale/mirror** 经 AffineGeometry 射线逆变换（非 versor 可达）；blade 语义（meet/关联判据）不适用于仿射形变后的图元。
 - **CSG** 相切/共面退化配置依赖 δ=1e-4 双侧采样；节点单材质；`circle` 非实体。
 - **非 blade 图元** cone/torus/ellipsoid/cyclide/网格经射线逆变换接入；cyclide 环型是光滑亏格-1 曲面，尖型自交、CSG 成员性语义退化。
-- **网格** 暴力 O(N·F) 无 BVH、平坦法向、无纹理坐标；glTF 导入暂限单 primitive。
+- **网格** 暴力 O(N·F) 无 BVH、平坦法向、无纹理坐标；glTF 导入暂限单 primitive；CSG 与网格（含 bezier 厚壳）复合时内存按 O(射线×交点×三角) 增长，高分辨率先降 `div`/aa（`freeform.cgs` 头注有实测配比）。
 - **精度** 代数核心恒为 CPU float64，渲染内核 float32（MLX/Metal 无 float64，参数进相机空间后 near-origin）。
 
 ## 机器人领域潜在应用
@@ -292,7 +294,7 @@ docs/                       架构图、机器人图、cgs-v2/v3、scene-report�
 
 ## 质量
 
-- `make test`：**208 个测试全过**（cga-core 46 + cga-gpu 162，另 1 条退化用例 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作 / CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 / 烘焙体积金样。
+- `make test`：**225 个测试全过**（cga-core 56 + cga-gpu 169，另 1 条退化用例 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作 / CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 + Bézier 补丁叶（求值/弦高界/水密壳/CSG/烘焙体积/CGS 错误契约）/ 烘焙体积金样。
 - 渲染金样写入 `artifacts/tests/`（gitignored），sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg 金样 **RMSE = 0**。
 
 ## License

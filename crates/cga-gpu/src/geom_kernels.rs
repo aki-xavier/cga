@@ -363,6 +363,14 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
                 hi: ghi,
             })
         }
+        Geometry::BezierPatchGeometry(g) => {
+            let (ai, ti, af) = m.affine_from_motor(identity3());
+            let mut p = cga_core::BezierParams::tessellated(g);
+            p.a_inv3 = ai;
+            p.t_inv = ti;
+            p.a_fwd = af;
+            GeometryParams::BezierParams(p)
+        }
         Geometry::CsgGeometry(g) => {
             let mut ch: Vec<GeometryParams> = Vec::new();
             for c in &g.children {

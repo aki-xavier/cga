@@ -1,6 +1,6 @@
 # 自由曲面 + 可证明布尔：补 CGA 内核的两块理论缺口
 
-状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）、P2（判别式精确路径 + 四次根包）已落地；P3–P4 待实施。
+状态：P0（诊断 + 退化用例库）、P1（消除 δ 的区间分类 + `tol` 容差表）、P2（判别式精确路径 + 四次根包）、P3（Bézier 补丁 CSG 叶，见 §6）已落地；P4 待实施。
 适用：`crates/cga-gpu/src/{geom_kernels,csg,geometry_extra}.rs`、`crates/cga-core/src/{geometry,modeling}.rs`。
 诊断行号为 2026-10-03 快照，随代码漂移，以符号名为准。
 
@@ -146,7 +146,7 @@ CGA 给不了的（交回通用几何层）：参数曲面、拓扑、裁剪、�
 | **P0** ✅ | `delta`/`1e-*` 语义盘点 + 退化用例库 | `degenerate.rs` 跑出**当前失败清单**，每条带 `#[ignore]` 注释指向本文 |
 | **P1** ✅ | `csg_nearest_surface` 改**交点间区间分类**（§3.2，无需 ε 即消除 δ）；常数收进 `crates/cga-gpu/src/tol.rs`（`T_MIN` / `DEGENERATE_ULPS` / `UV_PROBE`），阈值由 f32 精度派生、尺度相对化 | P0 的 3 条 δ `#[ignore]` 全部转正；`csg_grazing_sliver_below_delta` 新增并转正；跨单位（size = 1 / 1000）行为一致；`test_cyclide_csg_combines`、`renders_generated_flange` 等既有用例无回归。**遗留**：`csg_uv` 的位置探针仍固定 `UV_PROBE = 1e-4`（只影响贴图取哪个子面，不影响命中）；`lipschitz()` 未按原计划逐原语实现，改由 P2/P4 消化（§3.2） |
 | **P2** ✅ | 判别式代数精确路径 + 四次根包（DK 做初值 + 区间认证）——新模块 `crates/cga-gpu/src/certify.rs`（区间算术 `inari` 2.0，IEEE 1788.1-2017） | 相切/重根用例有确定结果（`Double` 或 `Unknown`），无静默漏判：`certify.rs` 13 条测试（含 LCG 判别式符号 vs i128 精确参照 600 例、掠射低于旧守卫阈值、亚 ulp 判别式、环面相切/横截、cyclide 回代残差）+ `degenerate.rs::tangent_sphere_ray_deterministic`。**实施注记**：① 认证机制是 interval Newton 的**符号/单调等价形式**——端点严格符号（区间 Horner 点包络）反向 + `0 ∉ F′(X)` 由 IVT 给"恰有一根"，点求值分辨歧义处用中值引理 `d = E/g` 收口；不用非包络的 f64 点值参与 Newton（fl-Horner 舍入偏置会收敛到伪根，P2 实测已证）；② 重根判定**不**走 256 项闭式判别式，走 §3.3 路线 2（`0 ∈ F′(X)` 无法证唯一 → `Unknown`）；③ GPU f32 守卫保留原值、回落接线随 P4；④ P1 遗留的 `lipschitz()` 段上界由本模块的区间 Horner（`eval_iv`/`deriv_iv`）承接，出口随 P4 |
-| **P3** | Bézier/NURBS patch 实现 `crossings`（分离界 + clip），`contains` 用闭壳奇偶或 winding | 自由曲面可进 CSG，导出测试通过 |
+| **P3** ✅ | Bicubic (rational) Bézier patch as a CSG leaf (`BezierPatchGeometry`/`BezierParams`, CGS `bezier(points=16, thickness, div)`) — `crossings`/`contains`/`field`/`bounds` ride the proven trimesh MT kernels over a uniform `div×div` tessellation whose chordal error bound (`chord_error()`) is asserted in tests; `thickness > 0` stitches a watertight offset shell (shared-index top/bottom/sides, all-edges-×2 asserted) so the slab is a genuine solid, `thickness = 0` stays a render-only surface (CSG/bake reject with explicit text, same family as `circle`) | open surface renders + casts shadows; solid slab enters `union/difference/intersection`, `bake()` volume ≈ area×thickness, `examples/cgs/freeform.cgs` (hood + curved-groove CSG) loads and renders. 17 new tests (core eval/normal/chord/rational/manifold/field-sign/validation; GPU hit/contains/CSG/bake-volume; CGS build/query/errors/example). **Deliberately deferred**: per-pixel Sederberg clipping on GPU (Metal/f32 cannot hold interval arithmetic — same constraint as P2 §P4); the uniform tessellation + analytic chord bound is the P3 crossing path, exactly as `extrude`/`loft` meshes. **Measured limit**: CSG×mesh memory scales as O(rays × crossings × tris) — the P1 interval sampler evaluates `contains` at `rays×(k+1)` points in one MT broadcast (gallery-res 640×480 aa=2 OOMs past ~60 cutter tris); chunked/batched MT evaluation is filed as P4-adjacent performance work |
 | **P4** | 导出：MC 全判定 cell → 水密保证；mesh 后端换 winding number | 水密性作为断言进 CI（体积/表面积/欧拉示性数校验） |
 
 **性能约束**：Metal 无 f64，区间求值不能下 GPU。分层——GPU 只走"界已在 CPU 端算好/已证"的快速路径，出现 `Unknown` 时回落 f64 CPU 路径（渲染则直接弃权交抗锯齿），不把区间算术塞进 kernel。

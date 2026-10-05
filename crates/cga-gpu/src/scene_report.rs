@@ -150,6 +150,9 @@ fn fmt_geom(g: &Geometry) -> String {
             fmt_vec3(t.lo),
             fmt_vec3(t.hi)
         ),
+        Geometry::BezierPatchGeometry(b) => {
+            format!("bezier(thickness={}, div={})", fmt_num(b.thickness), b.div)
+        }
         Geometry::CsgGeometry(c) => {
             let kids: Vec<String> = c.children.iter().map(fmt_geom).collect();
             format!("{}({})", csg_op_name(c.op), kids.join(", "))

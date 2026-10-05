@@ -34,6 +34,9 @@ impl Geometry {
                 n: [0.0, 0.0, 1.0],
                 r: g.radius,
             }),
+            Geometry::BezierPatchGeometry(g) => {
+                GeometryParams::BezierParams(crate::BezierParams::tessellated(g))
+            }
             Geometry::ConeGeometry(g) => {
                 let (ai, ti, af) = id.affine_from_motor(eye3);
                 GeometryParams::ConeParams(ConeParams {
@@ -351,6 +354,7 @@ impl GeometryParams {
             GeometryParams::TorusParams(p) => torus_field(*p, x),
             GeometryParams::CyclideParams(p) => cyclide_field(*p, x),
             GeometryParams::TrimeshParams(p) => trimesh_field(p, x),
+            GeometryParams::BezierParams(p) => trimesh_field(&p.to_trimesh_params(), x),
             GeometryParams::AffineParams(p) => affine_field(p, x),
             GeometryParams::CsgParams(p) => csg_field(p.op, &p.children, x),
             GeometryParams::CircleParams(_) => panic!("circle is not a solid (no field)"),
@@ -492,6 +496,7 @@ impl GeometryParams {
                 ))
             }
             GeometryParams::TrimeshParams(p) => Some(corners_bounds(p.lo, p.hi, &p.a_fwd)),
+            GeometryParams::BezierParams(p) => Some(corners_bounds(p.lo, p.hi, &p.a_fwd)),
             GeometryParams::CsgParams(p) => {
                 let bs: Vec<_> = p.children.iter().map(|c| c.bounds()).collect();
                 if p.op == CsgOp::Difference {
@@ -688,6 +693,9 @@ impl GeometryParams {
         }
         match self {
             GeometryParams::CircleParams(_) => return Err("bake: circle is not a solid".into()),
+            GeometryParams::BezierParams(p) if p.thickness <= 0.0 => {
+                return Err("bake: bezier surface (thickness=0) is not a solid".into())
+            }
             _ => {}
         }
         let [lo, hi] = self

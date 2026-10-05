@@ -37,6 +37,9 @@ pub use csg::*;
 pub mod trimesh;
 pub use trimesh::*;
 
+pub mod bezier;
+pub use bezier::*;
+
 pub mod mesh_io_gltf;
 pub use mesh_io_gltf::*;
 

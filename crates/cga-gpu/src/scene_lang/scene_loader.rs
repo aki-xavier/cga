@@ -373,6 +373,13 @@ impl SceneLoader {
                             "CGS line {line}: {name} children must be solids (circle is not)"
                         ));
                     }
+                    if let Geometry::BezierPatchGeometry(b) = &g.geo {
+                        if !b.is_solid() {
+                            return Err(format!(
+                                "CGS line {line}: {name} children must be solids (bezier surface with thickness=0 is not)"
+                            ));
+                        }
+                    }
                     let (cm, cl) = decompose_rigid(g.m4);
                     kids.push(Geometry::AffineGeometry(AffineGeometry::with_motor(
                         g.geo, cm, cl,
@@ -1943,6 +1950,14 @@ impl SceneLoader {
                     csg_op_name(op)
                 ));
             }
+            if let Geometry::BezierPatchGeometry(b) = &c.geo {
+                if !b.is_solid() {
+                    return Err(format!(
+                        "CGS line {line}: {} children must be solids (bezier surface with thickness=0 is not)",
+                        csg_op_name(op)
+                    ));
+                }
+            }
             let (cm, cl) = decompose_rigid(c.m4);
             kids.push(Geometry::AffineGeometry(AffineGeometry::with_motor(
                 c.geo, cm, cl,
@@ -2087,6 +2102,23 @@ impl SceneLoader {
                 )?;
                 Ok(Geometry::EllipsoidGeometry(EllipsoidGeometry::new(
                     r[0], r[1], r[2],
+                )))
+            }
+            "bezier" => {
+                let raw = args.get("points").cloned().unwrap_or(CgsValue::Num(0.0));
+                let pts = points16(&raw, line, "bezier.points")?;
+                let thickness = cgs_num(
+                    &args.get("thickness").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    line,
+                    "bezier.thickness",
+                )?;
+                let div = cgs_num(
+                    &args.get("div").cloned().unwrap_or(CgsValue::Num(8.0)),
+                    line,
+                    "bezier.div",
+                )? as usize;
+                Ok(Geometry::BezierPatchGeometry(BezierPatchGeometry::new(
+                    &pts, thickness, div,
                 )))
             }
             "extrude" => {

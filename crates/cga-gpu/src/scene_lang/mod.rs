@@ -3,9 +3,9 @@ use std::fmt;
 
 use cga_core::{
     clamp01, decompose_rigid, extrude, load_obj, loft, mat4_identity, mat4_mul, transform_point,
-    validate_profile, AffineGeometry, BoxGeometry, CircleGeometry, ConeGeometry, CsgGeometry,
-    CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry, Multivector,
-    PlaneGeometry, SphereGeometry, TorusGeometry, TrimeshGeometry,
+    validate_profile, AffineGeometry, BezierPatchGeometry, BoxGeometry, CircleGeometry,
+    ConeGeometry, CsgGeometry, CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry,
+    Geometry, Multivector, PlaneGeometry, SphereGeometry, TorusGeometry, TrimeshGeometry,
 };
 
 use crate::mesh_io_gltf::{gltf_to_geometry, load_gltf};
@@ -558,6 +558,7 @@ const GEOM_EXPR_NAMES: &[&str] = &[
     "extrude",
     "loft",
     "mesh",
+    "bezier",
 ];
 
 const QUERY_FNS: &[&str] = &[
@@ -1007,6 +1008,31 @@ fn validate_geometry_params(
                 }
             }
         }
+        "bezier" => {
+            if cgs_arg_num(args, "thickness") < 0.0 {
+                return Err(format!("CGS line {line}: bezier.thickness must be >= 0"));
+            }
+            let div = cgs_arg_num(args, "div");
+            if div.fract() != 0.0 || div < 1.0 || div > 32.0 {
+                return Err(format!(
+                    "CGS line {line}: bezier.div must be an integer in 1..=32"
+                ));
+            }
+            match args.get("points") {
+                Some(CgsValue::List(items)) if items.len() == 16 => {}
+                Some(CgsValue::List(items)) => {
+                    return Err(format!(
+                        "CGS line {line}: bezier.points needs 16 [x,y,z] control points, got {}",
+                        items.len()
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "CGS line {line}: bezier.points needs 16 [x,y,z] control points, got none"
+                    ));
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -1042,6 +1068,25 @@ fn profile2d(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 2]>, Strin
     }
 }
 
+fn points16(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 3]>, String> {
+    match v {
+        CgsValue::List(items) => {
+            if items.len() != 16 {
+                return Err(format!(
+                    "CGS line {line}: {what} needs 16 [x,y,z] control points, got {}",
+                    items.len()
+                ));
+            }
+            let mut pts: Vec<[f64; 3]> = Vec::with_capacity(16);
+            for p in items {
+                pts.push(cgs_vec3(p, line, what)?);
+            }
+            Ok(pts)
+        }
+        _ => Err(format!("CGS line {line}: {what} needs a list")),
+    }
+}
+
 fn cgs_sig_names(name: &str) -> Vec<&'static str> {
     match name {
         "sphere" => vec!["r"],
@@ -1055,6 +1100,7 @@ fn cgs_sig_names(name: &str) -> Vec<&'static str> {
         "ellipsoid" => vec!["radii"],
         "extrude" => vec!["profile", "h"],
         "loft" => vec!["profiles", "zs"],
+        "bezier" => vec!["points"],
         "mesh" => vec!["file"],
         "translate" => vec!["t"],
         "rotate" => vec!["axis", "angle"],
@@ -1080,6 +1126,10 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
         }
         "cylinder" => {
             m.insert("h".to_string(), CgsValue::Num(-1.0));
+        }
+        "bezier" => {
+            m.insert("thickness".to_string(), CgsValue::Num(0.0));
+            m.insert("div".to_string(), CgsValue::Num(8.0));
         }
         "directional_light" | "point_light" => {
             m.insert("intensity".to_string(), CgsValue::Num(1.0));
@@ -2301,5 +2351,87 @@ mod tests {
             "pl = plane(n=[0, 1, 0]);\ntag(\"pl\") show(pl);\ndrill(r=0.2, from=\"pl:+y\", to=\"pl:-y\");",
         );
         assert!(e.contains("no finite bounds"), "{e}");
+    }
+
+    fn bez_pts_flat() -> String {
+        let mut s = String::from("[");
+        for i in 0..4 {
+            for j in 0..4 {
+                if i + j > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!(
+                    "[{}, {}, 0]",
+                    -1.0 + i as f64 * (2.0 / 3.0),
+                    -1.0 + j as f64 * (2.0 / 3.0)
+                ));
+            }
+        }
+        s.push(']');
+        s
+    }
+
+    #[test]
+    fn test_cgs_bezier_build_and_query() {
+        let src = format!(
+            "b = bezier(points={}, thickness=0.2, div=4);\nshow(b);",
+            bez_pts_flat()
+        );
+        let (sc, _) = cgs_load(&src, "");
+        assert_eq!(sc.objects.len(), 1);
+        let src2 = format!(
+            "b = bezier(points={}, thickness=0.2, div=4);\ntag(\"bb\") show(b);\ntranslate(center(\"bb\")) sphere(r=0.1);",
+            bez_pts_flat()
+        );
+        let (sc2, _) = cgs_load(&src2, "");
+        assert_eq!(sc2.objects.len(), 2);
+        let p = sc2.objects[1].position;
+        assert!(
+            p[0].abs() < 1e-9 && p[1].abs() < 1e-9 && p[2].abs() < 1e-9,
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn test_cgs_bezier_errors() {
+        let e = v2_err("bezier(points=[[0,0,0],[1,0,0],[0,1,0]], thickness=0.2);");
+        assert!(e.contains("needs 16 [x,y,z] control points"), "{e}");
+        let e = v2_err(&format!(
+            "bezier(points={}, thickness=-1.0);",
+            bez_pts_flat()
+        ));
+        assert!(e.contains("bezier.thickness must be >= 0"), "{e}");
+        let e = v2_err(&format!("bezier(points={}, div=0);", bez_pts_flat()));
+        assert!(e.contains("bezier.div must be an integer in 1..=32"), "{e}");
+        let e = v2_err(&format!(
+            "difference() {{ bezier(points={}); box(s=[2,2,2]); }}",
+            bez_pts_flat()
+        ));
+        assert!(
+            e.contains("must be solids (bezier surface with thickness=0 is not)"),
+            "{e}"
+        );
+        let e = v2_err(&format!(
+            "s = bezier(points={});\ndifference(s, box(s=[2,2,2]));",
+            bez_pts_flat()
+        ));
+        assert!(
+            e.contains("must be solids (bezier surface with thickness=0 is not)"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn test_cgs_freeform_example() {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/cgs/freeform.cgs"
+        ))
+        .expect("read freeform.cgs");
+        let (sc, _) = cgs_load(
+            &text,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"),
+        );
+        assert_eq!(sc.objects.len(), 3);
     }
 }
