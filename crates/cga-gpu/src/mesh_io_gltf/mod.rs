@@ -1,33 +1,10 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde_json::Value;
-
 use crate::scene_graph::Color;
 use crate::{Material, MaterialParams};
 use cga_core::{
-    from_column_major, from_trs, mat4_identity, mat4_mul, to_column_major, transform_point,
-    CsgGeometry, CsgOp, Geometry, TrimeshGeometry,
+    from_column_major, mat4_identity, mat4_mul, to_column_major, transform_point, CsgGeometry,
+    CsgOp, Geometry, TrimeshGeometry,
 };
 
-pub mod gltf_accessor;
-pub(crate) use self::gltf_accessor::*;
-pub mod gltf_buffer_view;
-pub(crate) use self::gltf_buffer_view::*;
-pub mod gltf_buffer;
-pub(crate) use self::gltf_buffer::*;
-pub mod gltf_primitive;
-pub(crate) use self::gltf_primitive::*;
-pub mod gltf_mesh;
-pub(crate) use self::gltf_mesh::*;
-pub mod gltf_node;
-pub(crate) use self::gltf_node::*;
-pub mod gltf_scene;
-pub(crate) use self::gltf_scene::*;
-pub mod gltf_pbr;
-pub(crate) use self::gltf_pbr::*;
-pub mod gltf_material;
-pub(crate) use self::gltf_material::*;
-pub mod gltf_root;
-pub(crate) use self::gltf_root::*;
 pub mod gltf_mesh_out;
 pub use self::gltf_mesh_out::*;
 pub mod gltf_mesh_in;
@@ -48,34 +25,6 @@ fn align4(b: &mut Vec<u8>) {
     while !b.len().is_multiple_of(4) {
         b.push(0);
     }
-}
-
-fn f32_at(b: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn node_local_matrix(n: &GltfNode) -> [f64; 16] {
-    if n.matrix.len() == 16 {
-        let mut m = [0.0f64; 16];
-        m.copy_from_slice(&n.matrix);
-        return from_column_major(m);
-    }
-    let t = if n.translation.len() == 3 {
-        [n.translation[0], n.translation[1], n.translation[2]]
-    } else {
-        [0.0, 0.0, 0.0]
-    };
-    let r = if n.rotation.len() == 4 {
-        [n.rotation[0], n.rotation[1], n.rotation[2], n.rotation[3]]
-    } else {
-        [0.0, 0.0, 0.0, 1.0]
-    };
-    let sc = if n.scale.len() == 3 {
-        [n.scale[0], n.scale[1], n.scale[2]]
-    } else {
-        [1.0, 1.0, 1.0]
-    };
-    from_trs(t, r, sc)
 }
 
 pub fn save_glb(path: &str, meshes: &[GltfMeshIn]) {
@@ -209,86 +158,74 @@ pub fn save_glb(path: &str, meshes: &[GltfMeshIn]) {
     std::fs::write(path, out).unwrap_or_else(|_| panic!("cannot write {path}"));
 }
 
-fn read_accessor(gltf: &GltfRoot, bins: &[Vec<u8>], idx: usize) -> Vec<f64> {
-    let acc = &gltf.accessors[idx];
-    let bv = &gltf.buffer_views[acc.buffer_view as usize];
-    if bv.buffer < 0 || bv.buffer as usize >= bins.len() {
-        panic!("accessor {idx} references missing buffer {}", bv.buffer);
-    }
-    let buf = &bins[bv.buffer as usize];
-    let ncomp = match acc.typ.as_str() {
-        "SCALAR" => 1,
-        "VEC2" => 2,
-        "VEC3" => 3,
-        "VEC4" => 4,
-        _ => panic!("unsupported accessor type {}", acc.typ),
-    };
-    let base = (bv.byte_offset + acc.byte_offset) as usize;
-    let stride = if bv.byte_stride > 0 {
-        bv.byte_stride as usize
-    } else {
-        acc.component_type_bytes() as usize * ncomp
-    };
-    let mut out: Vec<f64> = Vec::with_capacity(acc.count as usize * ncomp);
-    for i in 0..acc.count as usize {
-        let o = base + i * stride;
-        for c in 0..ncomp {
-            let off = o + c * acc.component_type_bytes() as usize;
-            let v = match acc.component_type {
-                5126 => f32_at(buf, off) as f64,
-                5125 => u32::from_le_bytes(buf[off..off + 4].try_into().unwrap()) as f64,
-                5123 => u16::from_le_bytes(buf[off..off + 2].try_into().unwrap()) as f64,
-                5121 => buf[off] as f64,
-                _ => panic!("unsupported componentType {}", acc.component_type),
-            };
-            out.push(v);
+fn node_world_matrix(node: &gltf::Node, parent: [f64; 16]) -> [f64; 16] {
+    let local = match node.transform() {
+        gltf::scene::Transform::Matrix { matrix } => {
+            let mut flat = [0.0f64; 16];
+            for c in 0..4 {
+                for r in 0..4 {
+                    flat[c * 4 + r] = matrix[c][r] as f64;
+                }
+            }
+            from_column_major(flat)
         }
-    }
-    out
+        gltf::scene::Transform::Decomposed {
+            translation,
+            rotation,
+            scale,
+        } => cga_core::from_trs(
+            [
+                translation[0] as f64,
+                translation[1] as f64,
+                translation[2] as f64,
+            ],
+            [
+                rotation[0] as f64,
+                rotation[1] as f64,
+                rotation[2] as f64,
+                rotation[3] as f64,
+            ],
+            [scale[0] as f64, scale[1] as f64, scale[2] as f64],
+        ),
+    };
+    mat4_mul(parent, local)
 }
 
 fn load_gltf_visit(
-    gltf: &GltfRoot,
-    bins: &[Vec<u8>],
-    _path: &str,
+    document: &gltf::Document,
+    buffers: &Vec<Vec<u8>>,
     idx: usize,
     parent: [f64; 16],
     out: &mut Vec<GltfMeshOut>,
 ) {
-    let node = &gltf.nodes[idx];
-    let world = mat4_mul(parent, node_local_matrix(node));
-    if let Some(m) = node.mesh {
-        let mob = &gltf.meshes[m as usize];
-        for prim in &mob.primitives {
-            if prim.mode != 4 && prim.mode != 0 {
+    let node = document.nodes().nth(idx).unwrap();
+    let world = node_world_matrix(&node, parent);
+    if let Some(mesh) = node.mesh() {
+        for prim in mesh.primitives() {
+            if prim.mode() != gltf::mesh::Mode::Triangles {
                 continue;
             }
-            let pos_idx = *prim
-                .attributes
-                .get("POSITION")
+            let reader = prim.reader(|b| buffers.get(b.index()).map(|data| &data[..]));
+            let pos_reader = reader
+                .read_positions()
                 .unwrap_or_else(|| panic!("primitive missing POSITION"));
-            let pos = read_accessor(gltf, bins, pos_idx as usize);
             let mut verts: Vec<[f64; 3]> = Vec::new();
-            let mut i = 0;
-            while i < pos.len() {
-                verts.push([pos[i], pos[i + 1], pos[i + 2]]);
-                i += 3;
+            for p in pos_reader {
+                verts.push([p[0] as f64, p[1] as f64, p[2] as f64]);
             }
-
             let mut uvs: Vec<[f64; 2]> = Vec::new();
-            if let Some(uv_idx) = prim.attributes.get("TEXCOORD_0") {
-                let uvdata = read_accessor(gltf, bins, *uv_idx as usize);
-                let mut i = 0;
-                while i + 1 < uvdata.len() {
-                    uvs.push([uvdata[i], uvdata[i + 1]]);
-                    i += 2;
+            if let Some(gltf::mesh::util::ReadTexCoords::F32(tc)) = reader.read_tex_coords(0) {
+                for uv in tc {
+                    uvs.push([uv[0] as f64, uv[1] as f64]);
                 }
             }
             let mut raw_idx: Vec<i32> = Vec::new();
-            if let Some(ii) = prim.indices {
-                let idx_acc = read_accessor(gltf, bins, ii as usize);
-                for v in idx_acc {
-                    raw_idx.push(v as i32);
+            if let Some(indices) = reader.read_indices() {
+                use gltf::mesh::util::ReadIndices::*;
+                match indices {
+                    U8(it) => raw_idx.extend(it.map(|i| i as i32)),
+                    U16(it) => raw_idx.extend(it.map(|i| i as i32)),
+                    U32(it) => raw_idx.extend(it.map(|i| i as i32)),
                 }
             } else {
                 for i in 0..verts.len() {
@@ -305,35 +242,15 @@ fn load_gltf_visit(
                 i += 3;
             }
 
-            let mut color = [1.0, 1.0, 1.0];
-            let mut metalness = 0.05;
-            let mut roughness = 0.5;
-            let mut emissive = [0.0, 0.0, 0.0];
-            if let Some(mat_ptr) = prim.material {
-                if (mat_ptr as usize) < gltf.materials.len() {
-                    let mat = &gltf.materials[mat_ptr as usize];
-                    if mat.pbr.base_color_factor.len() >= 3 {
-                        color = [
-                            mat.pbr.base_color_factor[0],
-                            mat.pbr.base_color_factor[1],
-                            mat.pbr.base_color_factor[2],
-                        ];
-                    }
-                    metalness = 0.2_f64.min(mat.pbr.metallic_factor);
-                    roughness = if mat.pbr.roughness_factor > 0.05 {
-                        mat.pbr.roughness_factor
-                    } else {
-                        0.5
-                    };
-                    if mat.emissive_factor.len() >= 3 {
-                        emissive = [
-                            mat.emissive_factor[0],
-                            mat.emissive_factor[1],
-                            mat.emissive_factor[2],
-                        ];
-                    }
-                }
-            }
+            let mat = prim.material();
+            let pbr = mat.pbr_metallic_roughness();
+            let base = pbr.base_color_factor();
+            let color = [base[0] as f64, base[1] as f64, base[2] as f64];
+            let metalness = 0.2_f64.min(pbr.metallic_factor() as f64);
+            let rf = pbr.roughness_factor() as f64;
+            let roughness = if rf > 0.05 { rf } else { 0.5 };
+            let em = mat.emissive_factor();
+            let emissive = [em[0] as f64, em[1] as f64, em[2] as f64];
             out.push(GltfMeshOut {
                 vertices: verts,
                 faces,
@@ -346,8 +263,8 @@ fn load_gltf_visit(
             });
         }
     }
-    for child in &node.children {
-        load_gltf_visit(gltf, bins, _path, *child as usize, world, out);
+    for child in node.children() {
+        load_gltf_visit(document, buffers, child.index(), world, out);
     }
 }
 
@@ -373,186 +290,18 @@ pub fn gltf_to_geometry(outs: &[GltfMeshOut]) -> Geometry {
     Geometry::CsgGeometry(CsgGeometry::new(CsgOp::Union, kids))
 }
 
-fn resolve_gltf_buffer(path: &str, uri: &str, embedded: &[u8]) -> Result<Vec<u8>, String> {
-    if uri.is_empty() {
-        return Ok(embedded.to_vec());
-    }
-    if uri.starts_with("data:") {
-        let comma = uri
-            .find(',')
-            .ok_or_else(|| "malformed data URI in glTF buffer".to_string())?;
-        return STANDARD
-            .decode(&uri[comma + 1..])
-            .map_err(|e| e.to_string());
-    }
-    let dir = match path.rfind('/') {
-        Some(i) => &path[..i],
-        None => ".",
-    };
-    let full = if dir.is_empty() || dir == "." {
-        uri.to_string()
-    } else {
-        format!("{dir}/{uri}")
-    };
-    std::fs::read(&full).map_err(|_| format!("cannot read glTF buffer {full}"))
-}
-
-fn j_int(v: &Value, key: &str) -> i32 {
-    v.get(key).and_then(|x| x.as_i64()).unwrap_or(0) as i32
-}
-
-fn j_f64(v: &Value, key: &str) -> f64 {
-    v.get(key).and_then(|x| x.as_f64()).unwrap_or(0.0)
-}
-
-fn j_opt_int(v: &Value, key: &str) -> Option<i32> {
-    v.get(key).and_then(|x| x.as_i64()).map(|x| x as i32)
-}
-
-fn j_string(v: &Value, key: &str) -> String {
-    v.get(key)
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn j_f64_array(v: &Value, key: &str) -> Vec<f64> {
-    match v.get(key).and_then(|x| x.as_array()) {
-        Some(a) => a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect(),
-        None => Vec::new(),
-    }
-}
-
-fn j_int_array(v: &Value, key: &str) -> Vec<i32> {
-    match v.get(key).and_then(|x| x.as_array()) {
-        Some(a) => a.iter().map(|x| x.as_i64().unwrap_or(0) as i32).collect(),
-        None => Vec::new(),
-    }
-}
-
-fn j_array<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    match v.get(key).and_then(|x| x.as_array()) {
-        Some(a) => a.as_slice(),
-        None => &[],
-    }
-}
-
-fn parse_gltf_root(json_text: &str) -> Result<GltfRoot, String> {
-    let v: Value = serde_json::from_str(json_text).map_err(|e| e.to_string())?;
-    let mut root = GltfRoot {
-        scene: j_int(&v, "scene"),
-        ..Default::default()
-    };
-    for b in j_array(&v, "buffers") {
-        root.buffers.push(GltfBuffer {
-            uri: j_string(b, "uri"),
-        });
-    }
-    for bv in j_array(&v, "bufferViews") {
-        root.buffer_views.push(GltfBufferView {
-            buffer: j_int(bv, "buffer"),
-            byte_offset: j_int(bv, "byteOffset"),
-            byte_length: j_int(bv, "byteLength"),
-            byte_stride: j_int(bv, "byteStride"),
-        });
-    }
-    for a in j_array(&v, "accessors") {
-        root.accessors.push(GltfAccessor {
-            buffer_view: j_int(a, "bufferView"),
-            component_type: j_int(a, "componentType"),
-            count: j_int(a, "count"),
-            typ: j_string(a, "type"),
-            byte_offset: j_int(a, "byteOffset"),
-        });
-    }
-    for m in j_array(&v, "meshes") {
-        let mut mesh = GltfMesh::default();
-        for p in j_array(m, "primitives") {
-            let mut attributes = std::collections::HashMap::new();
-            if let Some(obj) = p.get("attributes").and_then(|x| x.as_object()) {
-                for (k, val) in obj {
-                    attributes.insert(k.clone(), val.as_i64().unwrap_or(0) as i32);
-                }
-            }
-            mesh.primitives.push(GltfPrimitive {
-                attributes,
-                indices: j_opt_int(p, "indices"),
-                mode: j_int(p, "mode"),
-                material: j_opt_int(p, "material"),
-            });
-        }
-        root.meshes.push(mesh);
-    }
-    for n in j_array(&v, "nodes") {
-        root.nodes.push(GltfNode {
-            mesh: j_opt_int(n, "mesh"),
-            matrix: j_f64_array(n, "matrix"),
-            translation: j_f64_array(n, "translation"),
-            rotation: j_f64_array(n, "rotation"),
-            scale: j_f64_array(n, "scale"),
-            children: j_int_array(n, "children"),
-        });
-    }
-    for s in j_array(&v, "scenes") {
-        root.scenes.push(GltfScene {
-            nodes: j_int_array(s, "nodes"),
-        });
-    }
-    for m in j_array(&v, "materials") {
-        let null = Value::Null;
-        let pbr_v = m.get("pbrMetallicRoughness").unwrap_or(&null);
-        root.materials.push(GltfMaterial {
-            pbr: GltfPbr {
-                base_color_factor: j_f64_array(pbr_v, "baseColorFactor"),
-                metallic_factor: j_f64(pbr_v, "metallicFactor"),
-                roughness_factor: j_f64(pbr_v, "roughnessFactor"),
-            },
-            emissive_factor: j_f64_array(m, "emissiveFactor"),
-        });
-    }
-    Ok(root)
-}
-
 pub fn load_gltf(path: &str) -> Result<Vec<GltfMeshOut>, String> {
-    let data = std::fs::read(path).map_err(|_| format!("cannot read {path}"))?;
-    let mut json_text = String::new();
-    let mut bin_chunk: Vec<u8> = Vec::new();
-    if data.len() >= 4 && u32::from_le_bytes(data[0..4].try_into().unwrap()) == 0x46546C67 {
-        if u32::from_le_bytes(data[4..8].try_into().unwrap()) != 2 {
-            return Err(format!("{path}: only glTF 2.0 supported"));
-        }
-        let mut offset = 12usize;
-        while offset + 8 <= data.len() {
-            let clen = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            let ctype = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap());
-            let chunk = &data[offset + 8..offset + 8 + clen];
-            if ctype == 0x4E4F534A {
-                json_text = String::from_utf8_lossy(chunk).into_owned();
-            } else if ctype == 0x004E4942 {
-                bin_chunk = chunk.to_vec();
-            }
-            offset += 8 + clen;
-        }
-    } else {
-        json_text = String::from_utf8_lossy(&data).into_owned();
-    }
-    let gltf = parse_gltf_root(&json_text).map_err(|e| format!("bad glTF JSON: {e}"))?;
-    if gltf.scenes.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut bins: Vec<Vec<u8>> = vec![Vec::new(); gltf.buffers.len()];
-    for (i, buf) in gltf.buffers.iter().enumerate() {
-        bins[i] = resolve_gltf_buffer(path, &buf.uri, &bin_chunk)?;
-    }
-    let scene_idx = if (gltf.scene as usize) < gltf.scenes.len() {
-        gltf.scene as usize
-    } else {
-        0
-    };
+    let (document, buffers, _images) = gltf::import(path).map_err(|e| format!("bad glTF: {e}"))?;
+    let buffers: Vec<Vec<u8>> = buffers.into_iter().map(|b| b.0).collect();
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next());
     let mut out: Vec<GltfMeshOut> = Vec::new();
-    for root in gltf.scenes[scene_idx].nodes.clone() {
-        load_gltf_visit(&gltf, &bins, path, root as usize, mat4_identity(), &mut out);
+    let Some(scene) = scene else {
+        return Ok(out);
+    };
+    for root in scene.nodes() {
+        load_gltf_visit(&document, &buffers, root.index(), mat4_identity(), &mut out);
     }
     Ok(out)
 }
@@ -597,46 +346,6 @@ mod tests {
             assert_eq!(of, f);
         }
         std::fs::remove_file("/tmp/cga_roundtrip.glb").ok();
-    }
-
-    #[test]
-    fn test_gltf_json_roundtrip() {
-        let (verts, faces) = tetra();
-        let mut bin: Vec<u8> = Vec::new();
-        for p in &verts {
-            push_f32(&mut bin, p[0] as f32);
-            push_f32(&mut bin, p[1] as f32);
-            push_f32(&mut bin, p[2] as f32);
-        }
-        let pos_len = bin.len();
-        for f in &faces {
-            push_u32(&mut bin, f[0] as u32);
-            push_u32(&mut bin, f[1] as u32);
-            push_u32(&mut bin, f[2] as u32);
-        }
-        let idx_len = bin.len() - pos_len;
-        std::fs::write("/tmp/cga_tetra.bin", &bin).expect("write bin");
-        let json_str = format!(
-            "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"indices\":1,\"mode\":4}}]}}],\"buffers\":[{{\"uri\":\"cga_tetra.bin\",\"byteLength\":{}}}],\"bufferViews\":[{{\"buffer\":0,\"byteOffset\":0,\"byteLength\":{pos_len}}},{{\"buffer\":0,\"byteOffset\":{pos_len},\"byteLength\":{idx_len}}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":{},\"type\":\"VEC3\"}},{{\"bufferView\":1,\"componentType\":5125,\"count\":{},\"type\":\"SCALAR\"}}]}}",
-            bin.len(),
-            verts.len(),
-            faces.len() * 3
-        );
-        std::fs::write("/tmp/cga_tetra.gltf", json_str).expect("write gltf");
-        let out = load_gltf("/tmp/cga_tetra.gltf").unwrap();
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].vertices.len(), 4);
-        assert_eq!(out[0].faces.len(), 4);
-        for (ov, v) in out[0].vertices.iter().zip(&verts) {
-            assert!((ov[0] - v[0]).abs() < 1e-5);
-            assert!((ov[1] - v[1]).abs() < 1e-5);
-            assert!((ov[2] - v[2]).abs() < 1e-5);
-        }
-        for (of, f) in out[0].faces.iter().zip(&faces) {
-            assert_eq!(of, f);
-        }
-        std::fs::remove_file("/tmp/cga_tetra.gltf").ok();
-        std::fs::remove_file("/tmp/cga_tetra.bin").ok();
     }
 
     #[test]

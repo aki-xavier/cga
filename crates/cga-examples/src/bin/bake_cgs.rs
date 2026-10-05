@@ -1,26 +1,26 @@
 use cga_core::{save_obj, BakedMesh, ObjMesh};
 use cga_gpu::{geom_to_camera, GltfMeshIn};
+use clap::Parser;
+
+#[derive(Parser)]
+struct Args {
+    /// Input .cgs scene
+    src: String,
+    /// Output .obj|.glb (default: <src> minus extension + .obj)
+    out: Option<String>,
+    /// Bake step size
+    #[arg(default_value_t = 0.1)]
+    step: f64,
+}
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("usage: bake_cgs <file.cgs> [out.obj|out.glb] [step]");
-        std::process::exit(1);
-    }
-    let src = &args[1];
-    let out = if args.len() > 2 {
-        args[2].clone()
-    } else {
-        match src.rfind('.') {
-            Some(i) => format!("{}.obj", &src[..i]),
-            None => format!("{src}.obj"),
-        }
-    };
-    let step: f64 = if args.len() > 3 {
-        args[3].parse().unwrap_or(0.1)
-    } else {
-        0.1
-    };
+    let args = Args::parse();
+    let src = &args.src;
+    let out = args.out.unwrap_or_else(|| match src.rfind('.') {
+        Some(i) => format!("{}.obj", &src[..i]),
+        None => format!("{src}.obj"),
+    });
+    let step = args.step;
     let text = std::fs::read_to_string(src).unwrap_or_else(|_| panic!("cannot read {src}"));
     let asset_root = match src.rfind('/') {
         Some(i) => &src[..i],

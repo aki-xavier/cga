@@ -2,12 +2,28 @@ use cga_core::*;
 use cga_gpu::*;
 use std::fs;
 
-#[path = "rng.rs"]
-pub mod rng;
-pub(crate) use self::rng::*;
+use rand::rngs::StdRng;
+use rand::{Rng as _, SeedableRng};
+
 #[path = "placement.rs"]
 pub mod placement;
 pub(crate) use self::placement::*;
+
+struct Rng(StdRng);
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        Rng(StdRng::seed_from_u64(seed))
+    }
+    fn unit(&mut self) -> f64 {
+        self.0.random()
+    }
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        self.0.random_range(lo..hi)
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.0.random_range(0..n)
+    }
+}
 
 const FOV: f64 = 50.0;
 
@@ -166,19 +182,33 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let seed: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let out_dir = args
-        .get(2)
-        .cloned()
-        .unwrap_or_else(|| "artifacts/stereo".to_string());
-    let w: i32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(640);
-    let h: i32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(480);
-    let baseline: f64 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0.10);
-    if w <= 0 || h <= 0 || baseline <= 0.0 {
-        eprintln!("usage: stereo_pair [seed] [out_dir] [w] [h] [baseline]");
-        std::process::exit(2);
-    }
+    let (seed, out_dir, w, h, baseline) = {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Args {
+            /// Random seed
+            #[arg(default_value_t = 0)]
+            seed: u64,
+            /// Output directory
+            #[arg(default_value = "artifacts/stereo")]
+            out_dir: String,
+            /// Image width
+            #[arg(default_value_t = 640)]
+            w: i32,
+            /// Image height
+            #[arg(default_value_t = 480)]
+            h: i32,
+            /// Stereo baseline
+            #[arg(default_value_t = 0.10)]
+            baseline: f64,
+        }
+        let a = Args::parse();
+        if a.w <= 0 || a.h <= 0 || a.baseline <= 0.0 {
+            eprintln!("w, h and baseline must be positive");
+            std::process::exit(2);
+        }
+        (a.seed, a.out_dir, a.w, a.h, a.baseline)
+    };
 
     let mut rng = Rng::new(seed);
     let (sc, placed) = build_scene(&mut rng);

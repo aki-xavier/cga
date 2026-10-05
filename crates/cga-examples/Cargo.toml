@@ -8,6 +8,8 @@ description = "Demo CLIs for the cga crates."
 cga-core = { path = "../cga-core" }
 cga-gpu = { path = "../cga-gpu" }
 mlx-rs = { workspace = true }
+rand = "0.9"
+clap = { version = "4", features = ["derive"] }
 
 [lints]
 workspace = true

@@ -1,36 +1,32 @@
 use cga_gpu::*;
+use clap::Parser;
+
+#[derive(Parser)]
+struct Args {
+    /// Input .cgs scene
+    src: String,
+    /// Output PNG (default: <src> minus extension + .png)
+    out: Option<String>,
+    /// Image width
+    #[arg(default_value_t = 640)]
+    w: i32,
+    /// Image height
+    #[arg(default_value_t = 480)]
+    h: i32,
+    /// Samples per pixel (anti-aliasing)
+    #[arg(default_value_t = 2)]
+    aa: i32,
+}
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("usage: render_cgs <file.cgs> [out.png] [w h aa]");
-        std::process::exit(1);
-    }
-    let src = &args[1];
+    let args = Args::parse();
+    let src = &args.src;
 
-    let out = if args.len() > 2 {
-        args[2].clone()
-    } else {
-        match src.rfind('.') {
-            Some(i) => format!("{}.png", &src[..i]),
-            None => format!("{src}.png"),
-        }
-    };
-    let w: i32 = if args.len() > 3 {
-        args[3].parse().unwrap_or(0)
-    } else {
-        640
-    };
-    let h: i32 = if args.len() > 4 {
-        args[4].parse().unwrap_or(0)
-    } else {
-        480
-    };
-    let aa: i32 = if args.len() > 5 {
-        args[5].parse().unwrap_or(0)
-    } else {
-        2
-    };
+    let out = args.out.unwrap_or_else(|| match src.rfind('.') {
+        Some(i) => format!("{}.png", &src[..i]),
+        None => format!("{src}.png"),
+    });
+    let (w, h, aa) = (args.w, args.h, args.aa);
     let text = std::fs::read_to_string(src).unwrap_or_else(|_| panic!("cannot read {src}"));
 
     let asset_root = match src.rfind('/') {

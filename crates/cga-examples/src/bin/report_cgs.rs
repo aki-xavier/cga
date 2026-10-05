@@ -1,10 +1,12 @@
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("usage: report_cgs <file.cgs>");
-        std::process::exit(1);
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Args {
+        /// Input .cgs scene
+        src: String,
     }
-    let src = &args[1];
+    let args = Args::parse();
+    let src = &args.src;
     let text = std::fs::read_to_string(src).unwrap_or_else(|e| {
         eprintln!("report_cgs: cannot read {src}: {e}");
         std::process::exit(1);

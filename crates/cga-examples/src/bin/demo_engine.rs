@@ -144,11 +144,15 @@ fn build_scene() -> Scene {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let frames: i32 = if args.len() > 1 {
-        args[1].parse().unwrap_or(90)
-    } else {
-        90
+    let frames: i32 = {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Args {
+            /// Number of orbit frames
+            #[arg(default_value_t = 90)]
+            frames: i32,
+        }
+        Args::parse().frames
     };
 
     let out_dir = "examples/engine";
