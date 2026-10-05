@@ -39,7 +39,7 @@ fn main() {
     };
     let (sc, mut cam) = cgs_load(&text, asset_root);
     cam.aspect = f64::from(w) / f64::from(h);
-    let mut r = renderer(w, h, aa, 3);
+    let mut r = Renderer::new(w, h, aa, 3);
     let img = r.render(sc, cam);
     save_frame_png(&out, &img);
     println!("saved {out}");

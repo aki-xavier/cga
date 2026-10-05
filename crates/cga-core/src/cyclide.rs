@@ -1,4 +1,3 @@
-use crate::primitives::{circle, point, sphere};
 use crate::Multivector;
 
 #[derive(Clone, Copy, Debug)]
@@ -9,14 +8,16 @@ pub struct DupinCyclide {
     pub shift: [f64; 3],
 }
 
-pub fn dupin_cyclide(a: f64, b: f64, d: f64, shift: [f64; 3]) -> DupinCyclide {
-    if !(a > b && b > 0.0) {
-        panic!("need a > b > 0, got a={}, b={}", a, b);
+impl DupinCyclide {
+    pub fn new(a: f64, b: f64, d: f64, shift: [f64; 3]) -> DupinCyclide {
+        if !(a > b && b > 0.0) {
+            panic!("need a > b > 0, got a={}, b={}", a, b);
+        }
+        if d <= 0.0 {
+            panic!("need d > 0, got d={}", d);
+        }
+        DupinCyclide { a, b, d, shift }
     }
-    if d <= 0.0 {
-        panic!("need d > 0, got d={}", d);
-    }
-    DupinCyclide { a, b, d, shift }
 }
 
 impl DupinCyclide {
@@ -45,14 +46,14 @@ impl DupinCyclide {
 
     pub fn generator_sphere(&self, u: f64) -> Multivector {
         let sp = self.spine(u);
-        sphere(sp, self.radius(u))
+        Multivector::sphere(sp, self.radius(u))
     }
 
     pub fn focal_spheres(&self) -> (Multivector, Multivector) {
         let c = self.c();
         (
-            sphere([c, 0.0, 0.0], self.a - self.d),
-            sphere([-c, 0.0, 0.0], self.a + self.d),
+            Multivector::sphere([c, 0.0, 0.0], self.a - self.d),
+            Multivector::sphere([-c, 0.0, 0.0], self.a + self.d),
         )
     }
 
@@ -83,7 +84,7 @@ impl DupinCyclide {
         if rho2 <= 0.0 {
             panic!("characteristic circle radius non-positive (cusp/degenerate)");
         }
-        circle(center, rho2.sqrt(), ep)
+        Multivector::circle(center, rho2.sqrt(), ep)
     }
 
     pub fn surface(&self, u: f64, v: f64) -> [f64; 3] {
@@ -161,46 +162,48 @@ impl DupinCyclide {
     }
 
     pub fn inversion_versor(&self) -> Multivector {
-        sphere([0.0, 0.0, 0.0], 1.0)
+        Multivector::sphere([0.0, 0.0, 0.0], 1.0)
     }
 
     pub fn invert_point(&self, p: &Multivector) -> Multivector {
         let s = self.inversion_versor();
         let out = s.gp(p).gp(&s);
         let c = out.coords();
-        point(c[0], c[1], c[2])
+        Multivector::point(c[0], c[1], c[2])
     }
 }
 
-pub fn from_torus_inversion(major: f64, minor: f64, shift_x: f64) -> DupinCyclide {
-    let r = major;
-    let rr = minor;
-    if !(r > rr && rr > 0.0) {
-        panic!(
-            "need major > minor > 0, got major={}, minor={}",
-            major, minor
-        );
-    }
-    let s = shift_x;
-    let xs = [s + r + rr, s + r - rr, s - r + rr, s - r - rr];
-    for x in xs {
-        if x.abs() < 1e-12 {
-            panic!("torus passes through inversion centre; result not a ring");
+impl DupinCyclide {
+    pub fn from_torus_inversion(major: f64, minor: f64, shift_x: f64) -> DupinCyclide {
+        let r = major;
+        let rr = minor;
+        if !(r > rr && rr > 0.0) {
+            panic!(
+                "need major > minor > 0, got major={}, minor={}",
+                major, minor
+            );
         }
+        let s = shift_x;
+        let xs = [s + r + rr, s + r - rr, s - r + rr, s - r - rr];
+        for x in xs {
+            if x.abs() < 1e-12 {
+                panic!("torus passes through inversion centre; result not a ring");
+            }
+        }
+        let mut ys = [1.0 / xs[0], 1.0 / xs[1], 1.0 / xs[2], 1.0 / xs[3]];
+        ys.sort_by(|a: &f64, b: &f64| a.total_cmp(b));
+        let y1 = ys[3];
+        let y2 = ys[2];
+        let y3 = ys[1];
+        let y4 = ys[0];
+        let a = 0.25 * (y1 + y2 - y3 - y4);
+        let d = 0.25 * (y1 - y2 + y3 - y4);
+        let c = 0.25 * (-y1 + y2 + y3 - y4);
+        let m0 = 0.25 * (y1 + y2 + y3 + y4);
+        if c.abs() < 1e-12 * 1.0_f64.max(a.abs()) {
+            panic!("torus centred at inversion centre stays a torus (c=0); need shift_x != 0");
+        }
+        let b = (a * a - c * c).sqrt();
+        Self::new(a, b, d, [m0, 0.0, 0.0])
     }
-    let mut ys = [1.0 / xs[0], 1.0 / xs[1], 1.0 / xs[2], 1.0 / xs[3]];
-    ys.sort_by(|a: &f64, b: &f64| a.total_cmp(b));
-    let y1 = ys[3];
-    let y2 = ys[2];
-    let y3 = ys[1];
-    let y4 = ys[0];
-    let a = 0.25 * (y1 + y2 - y3 - y4);
-    let d = 0.25 * (y1 - y2 + y3 - y4);
-    let c = 0.25 * (-y1 + y2 + y3 - y4);
-    let m0 = 0.25 * (y1 + y2 + y3 + y4);
-    if c.abs() < 1e-12 * 1.0_f64.max(a.abs()) {
-        panic!("torus centred at inversion centre stays a torus (c=0); need shift_x != 0");
-    }
-    let b = (a * a - c * c).sqrt();
-    dupin_cyclide(a, b, d, [m0, 0.0, 0.0])
 }

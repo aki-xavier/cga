@@ -1,4 +1,4 @@
-use crate::{e0, einf, mv_scalar, mv_vector, Multivector};
+use crate::Multivector;
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, Debug)]
@@ -9,49 +9,170 @@ pub struct Quaternion {
     pub z: f64,
 }
 
-pub fn motor_identity() -> Multivector {
-    mv_scalar(1.0)
-}
-
-pub fn motor_rotor(axis: [f64; 3], angle: f64) -> Multivector {
-    let mut ax = axis[0];
-    let mut ay = axis[1];
-    let mut az = axis[2];
-    let norm_ax = (ax * ax + ay * ay + az * az).sqrt();
-    if norm_ax < 1e-12 {
-        return motor_identity();
+impl Quaternion {
+    pub fn from_matrix(m: Mat3) -> Quaternion {
+        let trace = m[0][0] + m[1][1] + m[2][2];
+        if trace > 0.0 {
+            let s = (trace + 1.0).sqrt() * 2.0;
+            return Quaternion {
+                w: 0.25 * s,
+                x: (m[2][1] - m[1][2]) / s,
+                y: (m[0][2] - m[2][0]) / s,
+                z: (m[1][0] - m[0][1]) / s,
+            };
+        }
+        if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+            let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
+            return Quaternion {
+                w: (m[2][1] - m[1][2]) / s,
+                x: 0.25 * s,
+                y: (m[0][1] + m[1][0]) / s,
+                z: (m[0][2] + m[2][0]) / s,
+            };
+        }
+        if m[1][1] > m[2][2] {
+            let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
+            return Quaternion {
+                w: (m[0][2] - m[2][0]) / s,
+                x: (m[0][1] + m[1][0]) / s,
+                y: 0.25 * s,
+                z: (m[1][2] + m[2][1]) / s,
+            };
+        }
+        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
+        Quaternion {
+            w: (m[1][0] - m[0][1]) / s,
+            x: (m[0][2] + m[2][0]) / s,
+            y: (m[1][2] + m[2][1]) / s,
+            z: 0.25 * s,
+        }
     }
-    ax /= norm_ax;
-    ay /= norm_ax;
-    az /= norm_ax;
-    let half = angle / 2.0;
-    let s = half.cos();
-    let sf = half.sin();
-    let mut vals = [0.0; 32];
-    vals[0] = s;
-    vals[6] = -sf * az;
-    vals[7] = sf * ay;
-    vals[10] = -sf * ax;
-    Multivector { values: vals }
 }
 
-// 为什么: 四元数不必单位化——轴向归一后用 scale-invariant 形式 2·atan2(|xyz|, w) 提取角度，对未归一四元数也鲁棒。
-pub fn rotor_from_quaternion(q: Quaternion) -> Multivector {
-    let w = q.w;
-    let x = q.x;
-    let y = q.y;
-    let z = q.z;
-    let n = (w * w + x * x + y * y + z * z).sqrt();
-    if n < 1e-12 {
-        return motor_identity();
+impl Multivector {
+    pub fn identity() -> Multivector {
+        Self::scalar(1.0)
     }
-    let angle = 2.0 * (x * x + y * y + z * z).sqrt().atan2(w);
-    motor_rotor([x / n, y / n, z / n], angle)
-}
 
-pub fn translator(displacement: [f64; 3]) -> Multivector {
-    let tv = mv_vector(displacement[0], displacement[1], displacement[2], 0.0, 0.0);
-    mv_scalar(1.0).sub(&tv.op(&einf()).mul_scalar(0.5))
+    pub fn rotor(axis: [f64; 3], angle: f64) -> Multivector {
+        let mut ax = axis[0];
+        let mut ay = axis[1];
+        let mut az = axis[2];
+        let norm_ax = (ax * ax + ay * ay + az * az).sqrt();
+        if norm_ax < 1e-12 {
+            return Self::identity();
+        }
+        ax /= norm_ax;
+        ay /= norm_ax;
+        az /= norm_ax;
+        let half = angle / 2.0;
+        let s = half.cos();
+        let sf = half.sin();
+        let mut vals = [0.0; 32];
+        vals[0] = s;
+        vals[6] = -sf * az;
+        vals[7] = sf * ay;
+        vals[10] = -sf * ax;
+        Multivector { values: vals }
+    }
+
+    pub fn from_quaternion(q: Quaternion) -> Multivector {
+        let w = q.w;
+        let x = q.x;
+        let y = q.y;
+        let z = q.z;
+        let n = (w * w + x * x + y * y + z * z).sqrt();
+        if n < 1e-12 {
+            return Self::identity();
+        }
+        let angle = 2.0 * (x * x + y * y + z * z).sqrt().atan2(w);
+        Self::rotor([x / n, y / n, z / n], angle)
+    }
+
+    pub fn translator(displacement: [f64; 3]) -> Multivector {
+        let tv = Self::vector(displacement[0], displacement[1], displacement[2], 0.0, 0.0);
+        Self::scalar(1.0).sub(&tv.op(&Self::einf()).mul_scalar(0.5))
+    }
+
+    pub fn from_matrix(r: Mat3, t: [f64; 3]) -> Multivector {
+        Self::translator(t).gp(&Self::from_quaternion(Quaternion::from_matrix(r)))
+    }
+
+    pub fn velocity(angular: [f64; 3], linear: [f64; 3]) -> Multivector {
+        let wx = angular[0];
+        let wy = angular[1];
+        let wz = angular[2];
+        let mut vals = [0.0; 32];
+        vals[6] = wz;
+        vals[7] = -wy;
+        vals[10] = wx;
+        let rot = Multivector { values: vals };
+        let tv = Self::vector(linear[0], linear[1], linear[2], 0.0, 0.0);
+        rot.add(&tv.op(&Self::einf()))
+    }
+
+    pub fn exp(&self, scale: f64) -> Multivector {
+        let bv = self.mul_scalar(scale);
+        let vals = bv.values;
+        let wx = vals[10];
+        let wy = -vals[7];
+        let wz = vals[6];
+        let vx = vals[9];
+        let vy = vals[12];
+        let vz = vals[14];
+
+        let w_bar = [2.0 * wx, 2.0 * wy, 2.0 * wz];
+        let v_bar = [2.0 * vx, 2.0 * vy, 2.0 * vz];
+        let theta = (w_bar[0] * w_bar[0] + w_bar[1] * w_bar[1] + w_bar[2] * w_bar[2]).sqrt();
+        let v_norm = (v_bar[0] * v_bar[0] + v_bar[1] * v_bar[1] + v_bar[2] * v_bar[2]).sqrt();
+        if theta < 1e-12 {
+            if v_norm < 1e-12 {
+                return Self::identity();
+            }
+
+            return Self::scalar(1.0).sub(&bv);
+        }
+        if v_norm < 1e-12 {
+            return Self::rotor(
+                [w_bar[0] / theta, w_bar[1] / theta, w_bar[2] / theta],
+                theta,
+            );
+        }
+
+        let bx = w_bar[0];
+        let by = w_bar[1];
+        let bz = w_bar[2];
+        let w = mat3_new([0.0, -bz, by], [bz, 0.0, -bx], [-by, bx, 0.0]);
+        let ww = mat3_mul(w, w);
+        let theta2 = theta * theta;
+        let sin_t = theta.sin();
+        let cos_t = theta.cos();
+        let a_r = sin_t / theta;
+        let b_r = (1.0 - cos_t) / theta2;
+        let a_v = (1.0 - cos_t) / theta2;
+        let b_v = (theta - sin_t) / (theta2 * theta);
+        let eye = mat3_identity();
+        let r = mat3_add_scaled(mat3_add_scaled(eye, a_r, w), b_r, ww);
+        let v = mat3_add_scaled(mat3_add_scaled(eye, a_v, w), b_v, ww);
+        let t = mat3_vec(v, v_bar);
+        Self::from_matrix(r, t)
+    }
+
+    pub fn extract_velocity(&self, m_prev: &Multivector, dt: f64) -> ([f64; 3], [f64; 3]) {
+        if dt <= 0.0 {
+            panic!("dt must be > 0, got {dt}");
+        }
+        let delta = m_prev.reverse().gp(self);
+        let v = delta.log().mul_scalar(2.0 / dt);
+        let vals = v.values;
+        let wx = vals[10];
+        let wy = -vals[7];
+        let wz = vals[6];
+        let vx = vals[9];
+        let vy = vals[12];
+        let vz = vals[14];
+        ([wx, wy, wz], [vx, vy, vz])
+    }
 }
 
 pub type Mat3 = [[f64; 3]; 3];
@@ -100,50 +221,7 @@ fn mat3_add_scaled(a: Mat3, s: f64, b: Mat3) -> Mat3 {
     r
 }
 
-pub fn matrix_to_quaternion(m: Mat3) -> Quaternion {
-    let trace = m[0][0] + m[1][1] + m[2][2];
-    if trace > 0.0 {
-        let s = (trace + 1.0).sqrt() * 2.0;
-        return Quaternion {
-            w: 0.25 * s,
-            x: (m[2][1] - m[1][2]) / s,
-            y: (m[0][2] - m[2][0]) / s,
-            z: (m[1][0] - m[0][1]) / s,
-        };
-    }
-    if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
-        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
-        return Quaternion {
-            w: (m[2][1] - m[1][2]) / s,
-            x: 0.25 * s,
-            y: (m[0][1] + m[1][0]) / s,
-            z: (m[0][2] + m[2][0]) / s,
-        };
-    }
-    if m[1][1] > m[2][2] {
-        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
-        return Quaternion {
-            w: (m[0][2] - m[2][0]) / s,
-            x: (m[0][1] + m[1][0]) / s,
-            y: 0.25 * s,
-            z: (m[1][2] + m[2][1]) / s,
-        };
-    }
-    let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
-    Quaternion {
-        w: (m[1][0] - m[0][1]) / s,
-        x: (m[0][2] + m[2][0]) / s,
-        y: (m[1][2] + m[2][1]) / s,
-        z: 0.25 * s,
-    }
-}
-
-pub fn motor_from_matrix(r: Mat3, t: [f64; 3]) -> Multivector {
-    translator(t).gp(&rotor_from_quaternion(matrix_to_quaternion(r)))
-}
-
 impl Multivector {
-    // 为什么: 这是 versor 共轭 M·obj·M~，保持 obj 的 blade 结构（grade 不变）；用 motor 当旋转/平移作用到任意 blade 上时都靠它。
     pub fn apply(&self, obj: &Multivector) -> Multivector {
         self.gp(obj).gp(&self.reverse())
     }
@@ -154,19 +232,18 @@ impl Multivector {
 
     pub fn interpolate(&self, other: &Multivector, t: f64) -> Multivector {
         let delta = self.reverse().gp(other);
-        self.gp(&motor_exp(&delta.log(), t))
+        self.gp(&delta.log().exp(t))
     }
 
-    // 为什么: 4×4 齐次变换 [R|t] 展平为行优先 16 分量（行 r、列 c 落在下标 4r+c），与 GLM/glm 习惯一致，便于直接喂给现有 GPU 代码。
     pub fn to_matrix(&self) -> [f64; 16] {
-        let origin_t = self.apply(&e0());
+        let origin_t = self.apply(&Self::e0());
         let tx = origin_t.values[1];
         let ty = origin_t.values[2];
         let tz = origin_t.values[3];
 
-        let px_t = self.apply(&mv_vector(1.0, 0.0, 0.0, 1.0, 0.5));
-        let py_t = self.apply(&mv_vector(0.0, 1.0, 0.0, 1.0, 0.5));
-        let pz_t = self.apply(&mv_vector(0.0, 0.0, 1.0, 1.0, 0.5));
+        let px_t = self.apply(&Self::vector(1.0, 0.0, 0.0, 1.0, 0.5));
+        let py_t = self.apply(&Self::vector(0.0, 1.0, 0.0, 1.0, 0.5));
+        let pz_t = self.apply(&Self::vector(0.0, 0.0, 1.0, 1.0, 0.5));
 
         [
             px_t.values[1] - tx,
@@ -244,92 +321,11 @@ impl Multivector {
             let v_inv = mat3_add_scaled(mat3_add_scaled(mat3_identity(), -0.5, wxm), coeff, wx2);
             mat3_vec(v_inv, tv)
         };
-        velocity_bivector(
+        Self::velocity(
             [w_bar[0] / 2.0, w_bar[1] / 2.0, w_bar[2] / 2.0],
             [v_bar[0] / 2.0, v_bar[1] / 2.0, v_bar[2] / 2.0],
         )
     }
-}
-
-pub fn velocity_bivector(angular: [f64; 3], linear: [f64; 3]) -> Multivector {
-    let wx = angular[0];
-    let wy = angular[1];
-    let wz = angular[2];
-    let mut vals = [0.0; 32];
-    vals[6] = wz;
-    vals[7] = -wy;
-    vals[10] = wx;
-    let rot = Multivector { values: vals };
-    let tv = mv_vector(linear[0], linear[1], linear[2], 0.0, 0.0);
-    rot.add(&tv.op(&einf()))
-}
-
-// 为什么: 沿 bivector B 做指数 exp(-scale·B)；这里 B 采用 half-twist 约定 B = ½(ω + v∧einf)，使小 twist 可线性化、与 SE(3) twist theory 一致。
-pub fn motor_exp(b: &Multivector, scale: f64) -> Multivector {
-    let bv = b.mul_scalar(scale);
-    let vals = bv.values;
-    let wx = vals[10];
-    let wy = -vals[7];
-    let wz = vals[6];
-    let vx = vals[9];
-    let vy = vals[12];
-    let vz = vals[14];
-
-    let w_bar = [2.0 * wx, 2.0 * wy, 2.0 * wz];
-    let v_bar = [2.0 * vx, 2.0 * vy, 2.0 * vz];
-    let theta = (w_bar[0] * w_bar[0] + w_bar[1] * w_bar[1] + w_bar[2] * w_bar[2]).sqrt();
-    let v_norm = (v_bar[0] * v_bar[0] + v_bar[1] * v_bar[1] + v_bar[2] * v_bar[2]).sqrt();
-    if theta < 1e-12 {
-        if v_norm < 1e-12 {
-            return motor_identity();
-        }
-
-        return mv_scalar(1.0).sub(&bv);
-    }
-    if v_norm < 1e-12 {
-        return motor_rotor(
-            [w_bar[0] / theta, w_bar[1] / theta, w_bar[2] / theta],
-            theta,
-        );
-    }
-
-    let bx = w_bar[0];
-    let by = w_bar[1];
-    let bz = w_bar[2];
-    let w = mat3_new([0.0, -bz, by], [bz, 0.0, -bx], [-by, bx, 0.0]);
-    let ww = mat3_mul(w, w);
-    let theta2 = theta * theta;
-    let sin_t = theta.sin();
-    let cos_t = theta.cos();
-    let a_r = sin_t / theta;
-    let b_r = (1.0 - cos_t) / theta2;
-    let a_v = (1.0 - cos_t) / theta2;
-    let b_v = (theta - sin_t) / (theta2 * theta);
-    let eye = mat3_identity();
-    let r = mat3_add_scaled(mat3_add_scaled(eye, a_r, w), b_r, ww);
-    let v = mat3_add_scaled(mat3_add_scaled(eye, a_v, w), b_v, ww);
-    let t = mat3_vec(v, v_bar);
-    motor_from_matrix(r, t)
-}
-
-pub fn extract_velocity(
-    m_curr: &Multivector,
-    m_prev: &Multivector,
-    dt: f64,
-) -> ([f64; 3], [f64; 3]) {
-    if dt <= 0.0 {
-        panic!("dt must be > 0, got {dt}");
-    }
-    let delta = m_prev.reverse().gp(m_curr);
-    let v = delta.log().mul_scalar(2.0 / dt);
-    let vals = v.values;
-    let wx = vals[10];
-    let wy = -vals[7];
-    let wz = vals[6];
-    let vx = vals[9];
-    let vy = vals[12];
-    let vz = vals[14];
-    ([wx, wy, wz], [vx, vy, vz])
 }
 
 #[cfg(test)]
@@ -338,19 +334,19 @@ mod tests {
     use std::f64::consts::PI;
 
     fn point_mv(x: f64, y: f64, z: f64) -> Multivector {
-        mv_vector(x, y, z, 1.0, 0.5 * (x * x + y * y + z * z))
+        Multivector::vector(x, y, z, 1.0, 0.5 * (x * x + y * y + z * z))
     }
 
     #[test]
     fn test_translator() {
-        let t = translator([1.0, 2.0, 3.0]);
+        let t = Multivector::translator([1.0, 2.0, 3.0]);
         let q = t.apply(&point_mv(0.0, 0.0, 0.0)).coords();
         assert!(q[0] == 1.0 && q[1] == 2.0 && q[2] == 3.0);
     }
 
     #[test]
     fn test_rotor_z_quarter() {
-        let r = motor_rotor([0.0, 0.0, 1.0], PI / 2.0);
+        let r = Multivector::rotor([0.0, 0.0, 1.0], PI / 2.0);
         let q = r.apply(&point_mv(1.0, 0.0, 0.0)).coords();
         assert!((q[0] - 0.0).abs() < 1e-6);
         assert!((q[1] - 1.0).abs() < 1e-6);
@@ -359,7 +355,8 @@ mod tests {
 
     #[test]
     fn test_to_matrix_roundtrip() {
-        let m = translator([1.0, 2.0, 3.0]).gp(&motor_rotor([0.0, 1.0, 0.0], PI / 2.0));
+        let m = Multivector::translator([1.0, 2.0, 3.0])
+            .gp(&Multivector::rotor([0.0, 1.0, 0.0], PI / 2.0));
         let mtx = m.to_matrix();
         assert!((mtx[3] - 1.0).abs() < 1e-6);
         assert!((mtx[7] - 2.0).abs() < 1e-6);
@@ -368,16 +365,18 @@ mod tests {
 
     #[test]
     fn test_exp_log_roundtrip() {
-        let m = translator([0.3, -0.4, 0.5]).gp(&motor_rotor([0.1, 0.6, -0.2], 0.7));
+        let m = Multivector::translator([0.3, -0.4, 0.5])
+            .gp(&Multivector::rotor([0.1, 0.6, -0.2], 0.7));
         let b = m.log();
-        let m2 = motor_exp(&b, 1.0);
+        let m2 = b.exp(1.0);
         assert!(m.approx_eq(&m2));
     }
 
     #[test]
     fn test_interpolate_endpoints() {
-        let a = motor_identity();
-        let b = translator([1.0, 0.0, 0.0]).gp(&motor_rotor([0.0, 0.0, 1.0], 0.5));
+        let a = Multivector::identity();
+        let b =
+            Multivector::translator([1.0, 0.0, 0.0]).gp(&Multivector::rotor([0.0, 0.0, 1.0], 0.5));
         assert!(a.interpolate(&b, 0.0).approx_eq(&a));
         assert!(a.interpolate(&b, 1.0).approx_eq(&b));
     }
@@ -392,14 +391,14 @@ mod tests {
             y: 0.0,
             z: 2.0 * s,
         };
-        let p = rotor_from_quaternion(q)
+        let p = Multivector::from_quaternion(q)
             .apply(&point_mv(1.0, 0.0, 0.0))
             .coords();
         assert!((p[0] - 0.5).abs() < 1e-9);
         assert!((p[1] - 3.0_f64.sqrt() / 2.0).abs() < 1e-9);
         assert!(p[2].abs() < 1e-9);
 
-        let p2 = rotor_from_quaternion(q)
+        let p2 = Multivector::from_quaternion(q)
             .apply(&point_mv(0.0, 0.0, 1.0))
             .coords();
         assert!((p2[2] - 1.0).abs() < 1e-9);
@@ -410,9 +409,9 @@ mod tests {
     #[test]
     fn test_extract_velocity() {
         let dt = 0.1;
-        let m0 = motor_rotor([0.0, 0.0, 1.0], 0.0);
-        let m1 = motor_rotor([0.0, 0.0, 1.0], 0.1);
-        let (ang, lin) = extract_velocity(&m1, &m0, dt);
+        let m0 = Multivector::rotor([0.0, 0.0, 1.0], 0.0);
+        let m1 = Multivector::rotor([0.0, 0.0, 1.0], 0.1);
+        let (ang, lin) = m1.extract_velocity(&m0, dt);
         assert!((ang[2] - 1.0).abs() < 1e-3);
         assert!(lin[0].abs() < 1e-6);
         assert!(lin[1].abs() < 1e-6);

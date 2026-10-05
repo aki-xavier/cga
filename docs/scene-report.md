@@ -46,13 +46,13 @@ CGS 脚本执行后，结果今天只有三种出口：
 | `Scene { objects: Vec<Mesh>, lights, background }`；`Mesh { base: Object3D, geometry, material }` | `scene.rs:50`、`scene.rs:6` | 报告字段的唯一数据来源 |
 | `Object3D { position, rotation_axis, rotation_angle, motor_override, linear }`；`motor()` 统一返回刚体 motor | `scene_graph.rs:76`、`113` | 世界变换统一走 `motor()`（CGS 路径恒为 `Some(motor)`） |
 | `Geometry` 12 变体；`CylinderGeometry.half = -1` 表示无界；`TorusGeometry.arc` 默认 TAU；`TrimeshGeometry` 自带 `lo/hi/n_faces`；`AffineGeometry { inner, linear, motor }`；`CsgGeometry { op, children }` | `cga-core/geometry.rs:194`、`136–157`、`348`、`220`、`affine_geom.rs:6`、`csg_node.rs:11` | §5.4 逐变体映射；无界/默认值语义直接来自存储 |
-| `add_geometry`：`decompose_rigid(ctx)` → 刚体进 mesh motor，`linear≠I` 时几何包 `AffineGeometry`；`mesh()` 的 `linear` 恒 `identity3()` | `scene_lang.rs:2914–2940`、`scene.rs:28` | 对象行 = 刚体语句前缀 + `frame(lin=…)` 包裹（分解顺序 `world = motor∘linear`，见 `affine_from_motor` `affine.rs:44`） |
+| `add_geometry`：`decompose_rigid(ctx)` → 刚体进 mesh motor，`linear≠I` 时几何包 `AffineGeometry`；`Mesh::new()` 的 `linear` 恒 `identity3()` | `scene_lang.rs:2914–2940`、`scene.rs:28` | 对象行 = 刚体语句前缀 + `frame(lin=…)` 包裹（分解顺序 `world = motor∘linear`，见 `Multivector::affine_from_motor` `affine.rs:44`） |
 | `csg_block`：每个子几何**无条件**包 `transformed_geometry(geo, cm, cl)`；结果几何是世界系（发射上下文已烤入）、实例槽 identity、mesh motor=identity | `scene_lang.rs:2962–2995` | CSG 子节点必出 `frame()` token；CSG 对象行无前缀、无平移键 |
 | `register` → `Inst { geo, world, rel }` 存进 `named: HashMap<String, Vec<Inst>>`，`Vec` push 序 = 发射序 | `scene_lang.rs:1698`、`1066`、`1060` | tag 段：名按字典序（消 HashMap 序），实例按发射序；`rel` 不入报告 |
 | `cgs_load_result` 出口把 `named` 整个丢弃 | `scene_lang.rs:1077–1121` | 需新增 `CgsRun` 出口承载注册表；`cgs_load*` 改为委托、签名不动 |
 | `plane(n, d)` 构造 blade = `mv_vector(nx,ny,nz, 0, d)`；`geom_to_camera` 反解 `d = pi.einf_coeff()` | `primitives.rs:16–28`、`geom_kernels.rs:301–307` | `plane(n=…, d=…)` 提取与构造互逆（局部系、恒等 motor 下） |
 | `geom_to_camera` 覆盖全部 12 变体（含 `AffineGeometry`/`CsgGeometry` 递归） | `geom_kernels.rs:286–403` | 世界系参数与 bbox 的现成通路（`bake_cgs.rs:41` 同款用法） |
-| `bounds_of`：plane→None、circle→None、`h<0` cylinder→None；Difference→**首子** bounds、Union→并、Intersection→交 | `bake.rs:468–541` | `no_bounds=N` 计数与 summary bbox 语义按此定义 |
+| `GeometryParams::bounds`：plane→None、circle→None、`h<0` cylinder→None；Difference→**首子** bounds、Union→并、Intersection→交 | `bake.rs:468–541` | `no_bounds=N` 计数与 summary bbox 语义按此定义 |
 | motor→轴角现成件：`motor.to_matrix()` → `matrix_to_quaternion` → `2·atan2(‖xyz‖, w)` 范式 | `motors.rs:103`、`48` | 对象/实例旋转输出的唯一提取路径（经矩阵，约定无歧义） |
 | `basic_material` 存 `kind=Basic, roughness=0, metalness=0, emissive=黑, ior=1.5, absorption=0, map=None` | `shading.rs:50–62` | `unlit=true` 行的字段值就是存储值，回读自洽 |
 | CGS kw 表：`sphere r` / `plane n(+d默认0)` / `cylinder r(+h默认-1)` / `box s` / `cone r,h` / `torus R,r` / `cyclide a,b,d` / `ellipsoid radii` / `translate t` / `rotate axis,angle` / `background color`；material kw = color/map/unlit/roughness/metalness/emissive/opacity/ior/absorption；camera 语句只读 fov/aspect/position/target 四键 | `scene_lang.rs:3448–3525`、`2451–2489` | 报告 kw 名与 CGS **逐位一致**（`cgs_sig_names`/`cgs_sig_defaults` 是命名权威） |
@@ -118,7 +118,7 @@ summary objects=2 lights=2 no_bounds=0 bbox_lo=[-0.5,-1,-1] bbox_hi=[1.7,1,1]
 报告行序固定如下（任何场景都是这个骨架，缺项跳过）：
 
 1. `scene version=1`
-2. `background(color=0x…);`（缺省时打印 `scene()` 的默认 `0x87CEEB`，同样打印）
+2. `background(color=0x…);`（缺省时打印 `Scene::new` 的默认 `0x87CEEB`，同样打印）
 3. `camera(…);`——**总是存在**：`cgs_load_result` 无 camera 语句时合成默认相机
    （fov 50、aspect 16/9、position [0,0,5]），照实打印
 4. 灯行 ×N，按 `scene.lights` 发射序
@@ -225,10 +225,10 @@ material(color=0x…, roughness=…, metalness=…, emissive=0x…, opacity=…,
 
 `summary objects=<N> lights=<L> no_bounds=<U> bbox_lo=[…] bbox_hi=[…]`
 
-- `no_bounds` = `bounds_of(geom_to_camera(obj))` 为 None 的对象数（plane、无界 cylinder、
+- `no_bounds` = `GeometryParams::bounds(geom_to_camera(obj))` 为 None 的对象数（plane、无界 cylinder、
   circle——`bake.rs:474/476/539`）。
 - `bbox_*` = 有界对象世界 bbox 的并集；当 `N=0` 或全部对象无界时**省略两个 bbox 键**。
-- 语义完全锚定 `bounds_of`（CSG Difference 取**首子** bounds 等），与 `bake_cgs` 的
+- 语义完全锚定 `GeometryParams::bounds`（CSG Difference 取**首子** bounds 等），与 `bake_cgs` 的
   skip 判定同源。
 
 ## 6. 与 P4–P6 的关系
@@ -287,7 +287,9 @@ pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String>; /
 pub fn cgs_run(text: &str, asset_root: &str) -> CgsRun;                       // panic 镜像 cgs_load
 
 // scene_report.rs
-pub fn scene_report(scene: &Scene, camera: &PerspectiveCamera, tags: &TagRegistry) -> String;
+impl Scene {
+    pub fn report(&self, camera: &PerspectiveCamera, tags: &TagRegistry) -> String;
+}
 pub fn cgs_report(text: &str, asset_root: &str) -> Result<String, String>;     // run + report
 
 // cga-examples/src/bin/report_cgs.rs（新 CLI，stdout）

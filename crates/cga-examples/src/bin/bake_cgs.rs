@@ -1,9 +1,4 @@
-//! bake_cgs: CGS file -> triangle soup -> OBJ or GLB (world frame).
-//!
-//! usage: bake_cgs <file.cgs> [out.obj|out.glb] [step]
-//! Unbounded meshes (ground planes) are skipped with a warning.
-
-use cga_core::{bake, bounds_of, mesh_volume, save_obj, BakedMesh, ObjMesh};
+use cga_core::{save_obj, BakedMesh, ObjMesh};
 use cga_gpu::{geom_to_camera, GltfMeshIn};
 
 fn main() {
@@ -37,16 +32,15 @@ fn main() {
     let mut faces: Vec<[i32; 3]> = Vec::new();
     let mut skipped = 0u32;
     for m in &scene.objects {
-        // world-frame params, same resolution as the renderer uses for UVs
         let params = geom_to_camera(&m.geometry, &m.motor());
-        if bounds_of(&params).is_none() {
+        if params.bounds().is_none() {
             skipped += 1;
             continue;
         }
-        let b: BakedMesh = match bake(&params, step) {
+        let b: BakedMesh = match params.bake(step) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("bake: skip mesh ({e})");
+                eprintln!("bake: skip mesh({e})");
                 skipped += 1;
                 continue;
             }
@@ -57,7 +51,7 @@ fn main() {
             faces.push([f[0] + base, f[1] + base, f[2] + base]);
         }
     }
-    let v = mesh_volume(&verts, &faces).abs();
+    let v = BakedMesh::volume_of(&verts, &faces).abs();
     if out.ends_with(".glb") {
         cga_gpu::save_glb(
             &out,

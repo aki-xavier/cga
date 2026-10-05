@@ -2,15 +2,15 @@ use cga_core::*;
 use cga_gpu::*;
 
 fn main() {
-    let mut sc = scene(None);
+    let mut sc = Scene::new(None);
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0x888888),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x888888),
             roughness: 0.8,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -21,20 +21,20 @@ fn main() {
         motor: None,
     }));
 
-    let diff = Geometry::CsgGeometry(csg_geometry(
+    let diff = Geometry::CsgGeometry(CsgGeometry::new(
         CsgOp::Difference,
         vec![
-            Geometry::BoxGeometry(box_geometry(1.6, 1.6, 1.6)),
-            Geometry::SphereGeometry(sphere_geometry(0.55)),
+            Geometry::BoxGeometry(BoxGeometry::new(1.6, 1.6, 1.6)),
+            Geometry::SphereGeometry(SphereGeometry::new(0.55)),
         ],
     ));
-    sc.add_mesh(mesh(MeshParams {
+    sc.add_mesh(Mesh::new(MeshParams {
         geometry: diff,
-        material: standard_material(MaterialParams {
-            color: color_hex(0xC0392B),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xC0392B),
             roughness: 0.3,
             metalness: 0.1,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -45,20 +45,20 @@ fn main() {
         motor: None,
     }));
 
-    let inter = Geometry::CsgGeometry(csg_geometry(
+    let inter = Geometry::CsgGeometry(CsgGeometry::new(
         CsgOp::Intersection,
         vec![
-            Geometry::BoxGeometry(box_geometry(1.6, 1.6, 1.6)),
-            Geometry::SphereGeometry(sphere_geometry(1.0)),
+            Geometry::BoxGeometry(BoxGeometry::new(1.6, 1.6, 1.6)),
+            Geometry::SphereGeometry(SphereGeometry::new(1.0)),
         ],
     ));
-    sc.add_mesh(mesh(MeshParams {
+    sc.add_mesh(Mesh::new(MeshParams {
         geometry: inter,
-        material: standard_material(MaterialParams {
-            color: color_hex(0x2980B9),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x2980B9),
             roughness: 0.25,
             metalness: 0.2,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -69,20 +69,20 @@ fn main() {
         motor: None,
     }));
 
-    let un = Geometry::CsgGeometry(csg_geometry(
+    let un = Geometry::CsgGeometry(CsgGeometry::new(
         CsgOp::Union,
         vec![
-            Geometry::BoxGeometry(box_geometry(1.4, 1.4, 1.4)),
-            Geometry::SphereGeometry(sphere_geometry(0.9)),
+            Geometry::BoxGeometry(BoxGeometry::new(1.4, 1.4, 1.4)),
+            Geometry::SphereGeometry(SphereGeometry::new(0.9)),
         ],
     ));
-    sc.add_mesh(mesh(MeshParams {
+    sc.add_mesh(Mesh::new(MeshParams {
         geometry: un,
-        material: standard_material(MaterialParams {
-            color: color_hex(0x27AE60),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x27AE60),
             roughness: 0.35,
             metalness: 0.05,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -93,10 +93,14 @@ fn main() {
         motor: None,
     }));
 
-    sc.add_light(directional_light(color_hex(0xFFFFFF), 0.7, [0.5, 1.0, 0.4]));
-    sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.35));
+    sc.add_light(Light::directional(
+        Color::from_hex(0xFFFFFF),
+        0.7,
+        [0.5, 1.0, 0.4],
+    ));
+    sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.35));
 
-    let mut camera = perspective_camera(
+    let mut camera = PerspectiveCamera::new(
         45.0,
         4.0 / 3.0,
         0.1,
@@ -106,7 +110,7 @@ fn main() {
         [0.0, 1.0, 0.0],
     );
     camera.look_at([0.0, 0.7, 0.0], None);
-    let mut renderer = renderer(480, 360, 2, 3);
+    let mut renderer = Renderer::new(480, 360, 2, 3);
     let img = renderer.render(sc, camera);
 
     let out = "examples/csg";

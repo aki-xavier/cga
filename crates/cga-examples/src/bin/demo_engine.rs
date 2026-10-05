@@ -4,15 +4,15 @@ use cga_gpu::*;
 use std::f64::consts::PI;
 
 fn build_scene() -> Scene {
-    let mut sc = scene(None);
+    let mut sc = Scene::new(None);
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0xB0B0B0),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xB0B0B0),
             roughness: 0.7,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -23,13 +23,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::SphereGeometry(sphere_geometry(1.0)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0xC0392B),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xC0392B),
             roughness: 0.25,
             metalness: 0.25,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -40,13 +40,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::SphereGeometry(sphere_geometry(0.6)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0x2980B9),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x2980B9),
             roughness: 0.15,
             metalness: 0.35,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -57,13 +57,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::CylinderGeometry(cylinder_geometry(0.7, -1.0)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0xD4AC0D),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.7, -1.0)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xD4AC0D),
             roughness: 0.4,
             metalness: 0.3,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -74,13 +74,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::BoxGeometry(box_geometry(0.9, 0.9, 0.9)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0x27AE60),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::BoxGeometry(BoxGeometry::new(0.9, 0.9, 0.9)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x27AE60),
             roughness: 0.6,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -91,13 +91,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::CircleGeometry(circle_geometry(0.9)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0x8E44AD),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::CircleGeometry(CircleGeometry::new(0.9)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x8E44AD),
             roughness: 0.3,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -108,13 +108,13 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::SphereGeometry(sphere_geometry(0.8)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0xAAD4FF),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xAAD4FF),
             roughness: 0.05,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 0.08,
             ior: 1.5,
             absorption: 0.2,
@@ -124,18 +124,22 @@ fn build_scene() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_light(directional_light(
-        color_hex(0xFFFFFF),
+    sc.add_light(Light::directional(
+        Color::from_hex(0xFFFFFF),
         0.38,
         [0.4, 1.0, 0.35],
     ));
-    sc.add_light(point_light(color_hex(0xFFFFFF), 0.7, [0.0, 4.0, 3.5]));
-    sc.add_light(directional_light(
-        color_hex(0xFFFFFF),
+    sc.add_light(Light::point(
+        Color::from_hex(0xFFFFFF),
+        0.7,
+        [0.0, 4.0, 3.5],
+    ));
+    sc.add_light(Light::directional(
+        Color::from_hex(0xFFFFFF),
         0.18,
         [0.0, 0.35, 0.9],
     ));
-    sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.34));
+    sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.34));
     sc
 }
 
@@ -150,7 +154,7 @@ fn main() {
     let out_dir = "examples/engine";
 
     let sc = build_scene();
-    let mut camera = perspective_camera(
+    let mut camera = PerspectiveCamera::new(
         50.0,
         4.0 / 3.0,
         0.1,
@@ -160,8 +164,8 @@ fn main() {
         [0.0, 1.0, 0.0],
     );
     camera.look_at([0.0, 0.8, 0.0], None);
-    let controls = orbit_controls([0.0, 0.8, 0.0], 0.0, 0.42, 6.6);
-    let mut r = renderer(360, 270, 2, 3);
+    let controls = OrbitControls::new([0.0, 0.8, 0.0], 0.0, 0.42, 6.6);
+    let mut r = Renderer::new(360, 270, 2, 3);
 
     let mut gif_frames: Vec<Vec<u8>> = Vec::new();
     for i in 0..frames {

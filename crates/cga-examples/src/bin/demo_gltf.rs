@@ -30,14 +30,14 @@ fn main() {
     );
 
     let loaded = load_gltf(&format!("{out}/demo_gltf.glb")).unwrap();
-    let mut sc = scene(None);
-    sc.add_mesh(mesh(MeshParams {
+    let mut sc = Scene::new(None);
+    sc.add_mesh(Mesh::new(MeshParams {
         geometry: gltf_to_geometry(&loaded),
-        material: standard_material(MaterialParams {
-            color: color_hex(0xE67E22),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0xE67E22),
             roughness: 0.3,
             metalness: 0.15,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -47,13 +47,13 @@ fn main() {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_mesh(mesh(MeshParams {
-        geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
-        material: standard_material(MaterialParams {
-            color: color_hex(0x888888),
+    sc.add_mesh(Mesh::new(MeshParams {
+        geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+        material: Material::standard(MaterialParams {
+            color: Color::from_hex(0x888888),
             roughness: 0.8,
             metalness: 0.0,
-            emissive: color_hex(0x000000),
+            emissive: Color::from_hex(0x000000),
             opacity: 1.0,
             ior: 1.5,
             absorption: 0.0,
@@ -63,10 +63,14 @@ fn main() {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_light(directional_light(color_hex(0xFFFFFF), 0.7, [0.4, 1.0, 0.4]));
-    sc.add_light(ambient_light(color_hex(0xFFFFFF), 0.35));
+    sc.add_light(Light::directional(
+        Color::from_hex(0xFFFFFF),
+        0.7,
+        [0.4, 1.0, 0.4],
+    ));
+    sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.35));
 
-    let mut camera = perspective_camera(
+    let mut camera = PerspectiveCamera::new(
         40.0,
         4.0 / 3.0,
         0.1,
@@ -76,7 +80,7 @@ fn main() {
         [0.0, 1.0, 0.0],
     );
     camera.look_at([1.0, 1.0, 0.4], None);
-    let mut r = renderer(480, 360, 2, 3);
+    let mut r = Renderer::new(480, 360, 2, 3);
     let img = r.render(sc, camera);
 
     save_frame_png(&format!("{out}/demo_gltf.png"), &img);

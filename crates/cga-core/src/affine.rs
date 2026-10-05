@@ -1,5 +1,5 @@
 use crate::mesh_io::mat4_mul;
-use crate::motors::{mat3_mul, mat3_new, motor_from_matrix, Mat3};
+use crate::motors::{mat3_mul, mat3_new, Mat3};
 use crate::Multivector;
 
 pub fn mat3_transpose(m: Mat3) -> Mat3 {
@@ -41,19 +41,21 @@ pub fn mat3_to_mat4(l: Mat3) -> [f64; 16] {
     ]
 }
 
-pub fn affine_from_motor(m: Multivector, linear: Mat3) -> (Mat3, [f64; 3], [f64; 16]) {
-    let m4 = m.to_matrix();
-    let minv4 = m.reverse().to_matrix();
-    let linv = mat3_inv(linear);
-    let a_fwd = mat4_mul(m4, mat3_to_mat4(linear));
-    let a_inv = mat4_mul(mat3_to_mat4(linv), minv4);
-    let a_inv3 = mat3_new(
-        [a_inv[0], a_inv[1], a_inv[2]],
-        [a_inv[4], a_inv[5], a_inv[6]],
-        [a_inv[8], a_inv[9], a_inv[10]],
-    );
-    let t_inv = [a_inv[3], a_inv[7], a_inv[11]];
-    (a_inv3, t_inv, a_fwd)
+impl Multivector {
+    pub fn affine_from_motor(&self, linear: Mat3) -> (Mat3, [f64; 3], [f64; 16]) {
+        let m4 = self.to_matrix();
+        let minv4 = self.reverse().to_matrix();
+        let linv = mat3_inv(linear);
+        let a_fwd = mat4_mul(m4, mat3_to_mat4(linear));
+        let a_inv = mat4_mul(mat3_to_mat4(linv), minv4);
+        let a_inv3 = mat3_new(
+            [a_inv[0], a_inv[1], a_inv[2]],
+            [a_inv[4], a_inv[5], a_inv[6]],
+            [a_inv[8], a_inv[9], a_inv[10]],
+        );
+        let t_inv = [a_inv[3], a_inv[7], a_inv[11]];
+        (a_inv3, t_inv, a_fwd)
+    }
 }
 
 pub fn decompose_rigid(m4: [f64; 16]) -> (Multivector, Mat3) {
@@ -95,5 +97,5 @@ pub fn decompose_rigid(m4: [f64; 16]) -> (Multivector, Mat3) {
         q = mat3_mul(q, flip);
         lq = mat3_mul(flip, lq);
     }
-    (motor_from_matrix(q, t), lq)
+    (Multivector::from_matrix(q, t), lq)
 }

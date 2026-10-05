@@ -1,7 +1,6 @@
 use cga_core::{
-    affine_from_motor, e1, e2, e3, mat3_new, mat3_transpose, motor_identity, point,
-    sphere_from_dual, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry, GeometryParams,
-    Mat3, Multivector, TrimeshParams,
+    mat3_new, mat3_transpose, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry,
+    GeometryParams, Mat3, Multivector, TrimeshParams,
 };
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -138,22 +137,6 @@ pub(crate) fn csg_contains(p: &CsgParams, pos: &Array) -> Array {
     acc
 }
 
-/// P1 —— **交点间区间分类**，取代固定 δ 探针。
-///
-/// 排序后的交叉点把射线切成 k+1 个区间：`I_0=(0,t_0)`、`I_j=(t_{j-1},t_j)`、
-/// `I_k=(t_{k-1},∞)`。每个区间取一个**严格内部**的采样点求 `csg_contains`：
-/// 表面只出现在相邻区间成员关系不同的交叉点上——采样点与任何边界的距离由构造
-/// 保证 > 0，因此**不需要 δ**，也就不再有"特征尺寸 < δ 就整块消失"的失效模式。
-///
-/// **退化区间（宽度 ≤ [`crate::tol`] 阈值，即相切/重根/重复原语给出的重合交点）
-/// 沿用前一区间的采样点**，于是它的成员关系恒等于前一区间：
-/// - 相切的一对重合交点：两侧成员关系相同 → 抵消，切点不会被当成表面；
-/// - 两个孩子给出**同一个面**（重复原语）的重合交点：翻转在下一个区间才出现，
-///   仍然命中该面（"作废"式处理会把这种合法交点也抵消掉——已由
-///   `test_cyclide_csg_combines` 回归）。
-///
-/// 交叉点还须"远离相机"（`t > tol(t)`，约 `1e-6`）才可成为命中，这是从精度导出的
-/// 近平面，旧实现写死 `1e-6`。见 `docs/freeform-robust-boolean.md` §3.1–§3.3。
 fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (ts, ns, _) = csg_crossings(p, o, d);
     let b = ts.shape()[0];
@@ -161,18 +144,16 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     debug_assert!(k > 0, "csg needs >= 1 crossing column");
     let k1 = (k + 1) as i32;
 
-    // 1) 只保留相机前方的交点，再排序（inf 自动沉底）
     let ahead = ck(ck(ts.is_finite()).logical_and(s_gt(&ts, tol::T_MIN)));
     let tf = ck(ops::select(&ahead, &ts, &inf_like(&ts)));
     let order = ck(ops::argsort_axis(&tf, 1));
     let tf = ck(tf.take_along_axis(&order, 1));
     let ns_s = ck(ns.take_along_axis(ck(order.expand_dims(2)), 1));
 
-    // 2) 区间端点 a_j = t_{j-1}、b_j = t_j（末列 b_k = inf 作哨兵 → k+1 个区间）
-    let mut va: Vec<i32> = vec![0]; // a_0 未用（I_0 恒取射线原点）
+    let mut va: Vec<i32> = vec![0];
     va.extend(0..k as i32);
     let mut vb: Vec<i32> = (0..k as i32).collect();
-    vb.push(k as i32 - 1); // b_k 先占位，随后覆写成 inf
+    vb.push(k as i32 - 1);
     let ja = ck(ops::broadcast_to(
         Array::from_slice(&va, &[1, k1]),
         &[b, k1],
@@ -191,10 +172,6 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     ));
     bc = ck(ops::select(&last, &inf_like(&bc), &bc));
 
-    // 3) 各区间的**自备**采样点与可信判据（全向量化）
-    //    I_j：两端有限且宽度 > 退化阈值 → 中点；
-    //    尾区间（a 有限、b=inf）→ 2(a+1)：其后已无任何边界，任取一点都在同一区间；
-    //    其余（重合交点 / 填充列）→ 不可信，下一步继承。
     let a_fin = ck(a.is_finite());
     let b_fin = ck(bc.is_finite());
     let both = ck(a_fin.logical_and(&b_fin));
@@ -204,28 +181,25 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
         &ck(ck(a.add(&bc)).multiply(fs(0.5))),
         &ck(ops::zeros_like(&a)),
     ));
-    let tail_s = ck(ck(a.add(fs(1.0))).multiply(fs(2.0))); // 2(t+1) > t
+    let tail_s = ck(ck(a.add(fs(1.0))).multiply(fs(2.0)));
     let own_val = ck(ops::select(&tail, &tail_s, &mid));
     let gap = ck(bc.subtract(&a));
     let wide = ck(both.logical_and(s_gt(&ck(gap.subtract(&tol::tol_arr(&a))), 0.0)));
     let own = ck(wide.logical_or(&tail));
 
-    // 4) 顺序继承：不可信区间沿用前一区间的采样点（依赖链，逐列 [b,1] select）
     let mut s_cols: Vec<Array> = Vec::with_capacity(k + 1);
-    s_cols.push(ck(ops::zeros::<f32>(&[b, 1]))); // I_0 = 射线原点 t = 0
+    s_cols.push(ck(ops::zeros::<f32>(&[b, 1])));
     for j in 1..=k {
         let prev = s_cols[j - 1].clone();
         let own_j = ck(col(&own, j as i32).reshape(&[b, 1]));
         let val_j = ck(col(&own_val, j as i32).reshape(&[b, 1]));
         s_cols.push(ck(ops::select(&own_j, &val_j, &prev)));
     }
-    let s = ck(ops::concatenate(&s_cols, 1)); // [b, k+1]
+    let s = ck(ops::concatenate(&s_cols, 1));
 
-    // 5) k+1 个区间的成员关系（一次求值；旧实现要 2k 个探针）
     let pos = ck(ck(o.expand_dims(1)).add(ck(ck(s.expand_dims(2)).multiply(ck(d.expand_dims(1))))));
     let mem = csg_contains(p, &pos);
 
-    // 6) 翻转 = 相邻区间成员关系不同，且交叉点离相机足够远（派生的近平面）
     let ga = ck(ops::broadcast_to(
         Array::from_slice(&(0..k as i32).collect::<Vec<_>>(), &[1, k as i32]),
         &[b, k as i32],
@@ -287,14 +261,14 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
     match g {
         Geometry::SphereGeometry(g) => {
             let s = m.apply(&g.blade);
-            let (c, r) = sphere_from_dual(&s);
+            let (c, r) = s.to_sphere();
             GeometryParams::SphereParams(cga_core::SphereParams {
                 c,
                 r,
                 axes: [
-                    vec3_unit(m.apply(&e1()).euclidean_vector()),
-                    vec3_unit(m.apply(&e2()).euclidean_vector()),
-                    vec3_unit(m.apply(&e3()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e1()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e2()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
                 ],
             })
         }
@@ -306,30 +280,30 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
             })
         }
         Geometry::CylinderGeometry(g) => GeometryParams::CylinderParams(cga_core::CylinderParams {
-            q: m.apply(&point(0.0, 0.0, 0.0)).coords(),
-            u: vec3_unit(m.apply(&e3()).euclidean_vector()),
+            q: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
+            u: vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
             r: g.radius,
             h: g.half,
         }),
         Geometry::BoxGeometry(g) => {
             let hf = g.half;
             GeometryParams::BoxParams(cga_core::BoxParams {
-                c: m.apply(&point(0.0, 0.0, 0.0)).coords(),
+                c: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
                 axes: [
-                    vec3_unit(m.apply(&e1()).euclidean_vector()),
-                    vec3_unit(m.apply(&e2()).euclidean_vector()),
-                    vec3_unit(m.apply(&e3()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e1()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e2()).euclidean_vector()),
+                    vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
                 ],
                 half: hf,
             })
         }
         Geometry::CircleGeometry(g) => GeometryParams::CircleParams(cga_core::CircleParams {
-            c: m.apply(&point(0.0, 0.0, 0.0)).coords(),
-            n: vec3_unit(m.apply(&e3()).euclidean_vector()),
+            c: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
+            n: vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
             r: g.radius,
         }),
         Geometry::ConeGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(*m, identity3());
+            let (ai, ti, af) = m.affine_from_motor(identity3());
             GeometryParams::ConeParams(cga_core::ConeParams {
                 a_inv3: ai,
                 t_inv: ti,
@@ -339,7 +313,7 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
             })
         }
         Geometry::TorusGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(*m, identity3());
+            let (ai, ti, af) = m.affine_from_motor(identity3());
             GeometryParams::TorusParams(cga_core::TorusParams {
                 a_inv3: ai,
                 t_inv: ti,
@@ -352,7 +326,7 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
         Geometry::EllipsoidGeometry(g) => {
             let rr = g.radii;
             let diag = mat3_new([rr[0], 0.0, 0.0], [0.0, rr[1], 0.0], [0.0, 0.0, rr[2]]);
-            let (ai, ti, af) = affine_from_motor(*m, diag);
+            let (ai, ti, af) = m.affine_from_motor(diag);
             GeometryParams::EllipsoidParams(cga_core::EllipsoidParams {
                 a_inv3: ai,
                 t_inv: ti,
@@ -360,7 +334,7 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
             })
         }
         Geometry::CyclideGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(*m, identity3());
+            let (ai, ti, af) = m.affine_from_motor(identity3());
             let sh = g.shift;
             GeometryParams::CyclideParams(cga_core::CyclideParams {
                 a_inv3: ai,
@@ -374,7 +348,7 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
             })
         }
         Geometry::TrimeshGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(*m, identity3());
+            let (ai, ti, af) = m.affine_from_motor(identity3());
             let glo = g.lo;
             let ghi = g.hi;
             GeometryParams::TrimeshParams(TrimeshParams {
@@ -404,9 +378,9 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
 }
 
 pub fn affine_to_camera(g: &AffineGeometry, m: &Multivector) -> AffineParams {
-    let ip = geom_to_camera(&g.inner[0], &motor_identity());
+    let ip = geom_to_camera(&g.inner[0], &Multivector::identity());
     let full = m.gp(&g.motor);
-    let (ai, ti, af) = affine_from_motor(full, g.linear);
+    let (ai, ti, af) = full.affine_from_motor(g.linear);
     AffineParams {
         inner: Box::new(ip),
         a_inv3: ai,
@@ -498,8 +472,8 @@ pub(crate) fn tri_mlx(p: &TrimeshParams) -> (Array, Array, Array, Array) {
 mod tests {
     use super::*;
     use cga_core::{
-        affine_geometry, box_geometry, cone_geometry, csg_geometry, decompose_rigid, extrude,
-        motor_rotor, translator, trimesh_geometry,
+        decompose_rigid, extrude, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry,
+        Multivector, TrimeshGeometry,
     };
 
     fn tf_ray(x: f64, y: f64, z: f64) -> Array {
@@ -537,19 +511,23 @@ mod tests {
 
     #[test]
     fn test_moved_cone_contains() {
-        let g = Geometry::ConeGeometry(cone_geometry(1.0, 2.0));
+        let g = Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0));
 
         assert_eq!(
             tf_contains(
                 &g,
-                &translator([1.0, 0.0, 0.0]),
+                &Multivector::translator([1.0, 0.0, 0.0]),
                 &[[1.2, 0.0, 0.0], [1.6, 0.0, 0.0]]
             ),
             [true, false]
         );
 
         assert_eq!(
-            tf_contains(&g, &motor_identity(), &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+            tf_contains(
+                &g,
+                &Multivector::identity(),
+                &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]
+            ),
             [true, false]
         );
     }
@@ -557,35 +535,39 @@ mod tests {
     #[test]
     fn test_moved_mesh_contains() {
         let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
-        let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
 
         assert_eq!(
             tf_contains(
                 &g,
-                &translator([5.0, 0.0, 0.0]),
+                &Multivector::translator([5.0, 0.0, 0.0]),
                 &[[5.5, 0.4, 0.5], [5.5, 1.5, 0.5]]
             ),
             [true, false]
         );
         assert_eq!(
-            tf_contains(&g, &motor_identity(), &[[0.5, 0.4, 0.5], [1.5, 0.5, 0.5]]),
+            tf_contains(
+                &g,
+                &Multivector::identity(),
+                &[[0.5, 0.4, 0.5], [1.5, 0.5, 0.5]]
+            ),
             [true, false]
         );
     }
 
     #[test]
     fn test_csg_moved_cone_contains() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Union,
             vec![
-                Geometry::ConeGeometry(cone_geometry(1.0, 2.0)),
-                Geometry::ConeGeometry(cone_geometry(1.0, 2.0)),
+                Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0)),
+                Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0)),
             ],
         ));
         assert_eq!(
             tf_contains(
                 &g,
-                &translator([1.0, 0.0, 0.0]),
+                &Multivector::translator([1.0, 0.0, 0.0]),
                 &[[1.2, 0.0, 0.0], [1.6, 0.0, 0.0]]
             ),
             [true, false]
@@ -595,17 +577,17 @@ mod tests {
     #[test]
     fn test_csg_moved_mesh_contains() {
         let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Union,
             vec![
-                Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces)),
-                Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces)),
+                Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+                Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
             ],
         ));
         assert_eq!(
             tf_contains(
                 &g,
-                &translator([5.0, 0.0, 0.0]),
+                &Multivector::translator([5.0, 0.0, 0.0]),
                 &[[5.5, 0.4, 0.5], [5.5, 1.5, 0.5]]
             ),
             [true, false]
@@ -614,8 +596,8 @@ mod tests {
 
     #[test]
     fn test_rotated_box_normal() {
-        let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
-        let m = motor_rotor([1.0, 0.0, 0.0], std::f64::consts::PI / 6.0);
+        let g = Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0));
+        let m = Multivector::rotor([1.0, 0.0, 0.0], std::f64::consts::PI / 6.0);
         let (t, n, hit) = tf_hit(&g, &m, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(hit);
         assert!((f64::from(t) - 4.4226).abs() < 1e-3);
@@ -626,8 +608,13 @@ mod tests {
 
     #[test]
     fn test_box_inside_exit_normal() {
-        let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
-        let (t, n, hit) = tf_hit(&g, &motor_identity(), [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        let g = Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0));
+        let (t, n, hit) = tf_hit(
+            &g,
+            &Multivector::identity(),
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        );
         assert!(hit);
         assert!((f64::from(t) - 0.5).abs() < 1e-3);
         assert!((f64::from(n[0]) - 1.0).abs() < 1e-2);
@@ -637,8 +624,13 @@ mod tests {
 
     #[test]
     fn test_box_entry_normal_unchanged() {
-        let g = Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0));
-        let (t, n, hit) = tf_hit(&g, &motor_identity(), [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
+        let g = Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0));
+        let (t, n, hit) = tf_hit(
+            &g,
+            &Multivector::identity(),
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, -1.0],
+        );
         assert!(hit);
         assert!((f64::from(t) - 4.5).abs() < 1e-3);
         assert!(f64::from(n[0]).abs() < 1e-2);
@@ -651,7 +643,7 @@ mod tests {
     }
 
     fn em_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
-        let p = geom_to_camera(g, &motor_identity());
+        let p = geom_to_camera(g, &Multivector::identity());
         let (t, n, mask) =
             crate::geom_intersect(&p, &em_ray(o[0], o[1], o[2]), &em_ray(d[0], d[1], d[2]));
         n.eval().unwrap();
@@ -666,7 +658,7 @@ mod tests {
     }
 
     fn em_contains(g: &Geometry, pts: &[[f64; 3]]) -> Vec<bool> {
-        let p = geom_to_camera(g, &motor_identity());
+        let p = geom_to_camera(g, &Multivector::identity());
         let mut flat: Vec<f32> = Vec::with_capacity(pts.len() * 3);
         for q in pts {
             flat.push(q[0] as f32);
@@ -681,8 +673,8 @@ mod tests {
 
     #[test]
     fn test_affine_scaled_sphere() {
-        let g = Geometry::AffineGeometry(affine_geometry(
-            Geometry::SphereGeometry(cga_core::sphere_geometry(1.0)),
+        let g = Geometry::AffineGeometry(AffineGeometry::new(
+            Geometry::SphereGeometry(cga_core::SphereGeometry::new(1.0)),
             mat3_new([2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
         ));
         let (t, n, m) = em_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -697,7 +689,8 @@ mod tests {
 
     #[test]
     fn test_affine_decompose_rigid_roundtrip() {
-        let m = translator([1.0, 2.0, 3.0]).gp(&motor_rotor([0.0, 1.0, 0.0], 0.7));
+        let m =
+            Multivector::translator([1.0, 2.0, 3.0]).gp(&Multivector::rotor([0.0, 1.0, 0.0], 0.7));
         let (motor2, lin) = decompose_rigid(m.to_matrix());
         let mut err = 0.0f64;
         for (i, row) in lin.iter().enumerate() {
@@ -718,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_cone_side_ray() {
-        let g = Geometry::ConeGeometry(cone_geometry(1.0, 2.0));
+        let g = Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0));
         let (t, _, m) = em_hit(&g, [5.0, 0.0, -0.5], [-1.0, 0.0, 0.0]);
         assert!(m);
         assert!((f64::from(t) - 4.25).abs() < 1e-4);
@@ -726,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_cone_contains() {
-        let g = Geometry::ConeGeometry(cone_geometry(1.0, 2.0));
+        let g = Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0));
         assert_eq!(
             em_contains(&g, &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]),
             [true, false]
@@ -735,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_torus_rays() {
-        let g = Geometry::TorusGeometry(cga_core::torus_geometry(1.0, 0.3));
+        let g = Geometry::TorusGeometry(cga_core::TorusGeometry::new(1.0, 0.3));
         let (_, _, m) = em_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(!m);
         let (t2, n2, m2) = em_hit(&g, [1.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -748,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_torus_contains() {
-        let g = Geometry::TorusGeometry(cga_core::torus_geometry(1.0, 0.3));
+        let g = Geometry::TorusGeometry(cga_core::TorusGeometry::new(1.0, 0.3));
         assert_eq!(
             em_contains(&g, &[[1.0, 0.0, 0.1], [0.0, 0.0, 0.0]]),
             [true, false]
@@ -757,7 +750,11 @@ mod tests {
 
     #[test]
     fn test_tube_rays() {
-        let g = Geometry::TorusGeometry(cga_core::tube_geometry(1.0, 0.3, std::f64::consts::PI));
+        let g = Geometry::TorusGeometry(cga_core::TorusGeometry::tube(
+            1.0,
+            0.3,
+            std::f64::consts::PI,
+        ));
         for (x, y) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
             let (t, _, m) = em_hit(&g, [x, y, 5.0], [0.0, 0.0, -1.0]);
             assert!(m);
@@ -769,7 +766,11 @@ mod tests {
 
     #[test]
     fn test_tube_contains() {
-        let g = Geometry::TorusGeometry(cga_core::tube_geometry(1.0, 0.3, std::f64::consts::PI));
+        let g = Geometry::TorusGeometry(cga_core::TorusGeometry::tube(
+            1.0,
+            0.3,
+            std::f64::consts::PI,
+        ));
         assert_eq!(
             em_contains(&g, &[[0.0, 1.0, 0.1], [0.0, -1.0, 0.1], [1.0, 0.0, 0.1]]),
             [true, false, true]
@@ -778,7 +779,7 @@ mod tests {
 
     #[test]
     fn test_ellipsoid_is_scaled_sphere() {
-        let g = Geometry::EllipsoidGeometry(cga_core::ellipsoid_geometry(2.0, 1.0, 1.0));
+        let g = Geometry::EllipsoidGeometry(cga_core::EllipsoidGeometry::new(2.0, 1.0, 1.0));
         let (t, _, m) = em_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
         assert!((f64::from(t) - 4.0).abs() < 1e-4);
@@ -810,7 +811,7 @@ mod tests {
             ],
             1.5,
         );
-        let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
         let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
         assert!((f64::from(t) - 3.5).abs() < 1e-5);
@@ -832,7 +833,7 @@ mod tests {
             &[0.0, 1.0],
         );
         assert_eq!(verts.len(), 8);
-        let g = Geometry::TrimeshGeometry(trimesh_geometry(&verts, &faces));
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
         let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
         assert!((f64::from(t) - 4.0).abs() < 1e-4);

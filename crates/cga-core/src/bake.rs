@@ -1,131 +1,114 @@
-//! Mesh bake: `GeometryParams` implicit field -> triangle soup.
-//!
-//! Pure CPU `f64`, no GPU/MLX: portable to Linux/CI and to ForgeCAD's
-//! `cad-kernel`. Field sign convention mirrors the GPU `*_contains`
-//! kernels (`field < 0` == inside). Polygonization is marching tetrahedra
-//! (Kuhn-Freudenthal split: tiny fixed tables, no crack-prone
-//! disambiguation); per-triangle winding is fixed by numerical gradient so
-//! normals always point outward.
-//!
-//! Limits (same as the renderer, stated honestly): tangent/degenerate CSG
-//! configurations inherit the crossings/contains sampling semantics;
-//! thin features below `step` are missed; trimesh fields are O(F) per eval.
-
 use crate::{
-    affine_from_motor, mat3_new, motor_identity, sphere_from_dual, AffineParams, BoxParams,
-    ConeParams, CsgOp, CyclideParams, CylinderParams, EllipsoidParams, Geometry, GeometryParams,
-    PlaneParams, SphereParams, TorusParams, TrimeshParams,
+    mat3_new, AffineParams, BoxParams, ConeParams, CsgOp, CyclideParams, CylinderParams,
+    EllipsoidParams, Geometry, GeometryParams, Multivector, PlaneParams, SphereParams, TorusParams,
+    TrimeshParams,
 };
 
-/// Resolve `Geometry` to world-frame params under the identity motor.
-/// Test/CLI helper; the renderer path uses `geom_to_camera` with the real motor.
-pub fn identity_params(g: &Geometry) -> GeometryParams {
-    let id = motor_identity();
-    let eye: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    let eye3 = mat3_new(eye[0], eye[1], eye[2]);
-    match g {
-        Geometry::SphereGeometry(g) => {
-            let (c, r) = sphere_from_dual(&g.blade);
-            GeometryParams::SphereParams(SphereParams { c, r, axes: eye })
-        }
-        Geometry::PlaneGeometry(g) => GeometryParams::PlaneParams(PlaneParams {
-            n: g.blade.euclidean_vector(),
-            d: g.blade.einf_coeff(),
-        }),
-        Geometry::CylinderGeometry(g) => GeometryParams::CylinderParams(CylinderParams {
-            q: [0.0; 3],
-            u: [0.0, 0.0, 1.0],
-            r: g.radius,
-            h: g.half,
-        }),
-        Geometry::BoxGeometry(g) => GeometryParams::BoxParams(BoxParams {
-            c: [0.0; 3],
-            axes: eye,
-            half: g.half,
-        }),
-        Geometry::CircleGeometry(g) => GeometryParams::CircleParams(crate::CircleParams {
-            c: [0.0; 3],
-            n: [0.0, 0.0, 1.0],
-            r: g.radius,
-        }),
-        Geometry::ConeGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(id, eye3);
-            GeometryParams::ConeParams(ConeParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
+impl Geometry {
+    pub fn identity_params(&self) -> GeometryParams {
+        let id = Multivector::identity();
+        let eye: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let eye3 = mat3_new(eye[0], eye[1], eye[2]);
+        match self {
+            Geometry::SphereGeometry(g) => {
+                let (c, r) = g.blade.to_sphere();
+                GeometryParams::SphereParams(SphereParams { c, r, axes: eye })
+            }
+            Geometry::PlaneGeometry(g) => GeometryParams::PlaneParams(PlaneParams {
+                n: g.blade.euclidean_vector(),
+                d: g.blade.einf_coeff(),
+            }),
+            Geometry::CylinderGeometry(g) => GeometryParams::CylinderParams(CylinderParams {
+                q: [0.0; 3],
+                u: [0.0, 0.0, 1.0],
                 r: g.radius,
-                h: g.height,
-            })
-        }
-        Geometry::TorusGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(id, eye3);
-            GeometryParams::TorusParams(TorusParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                major: g.major,
-                minor: g.minor,
-                arc: g.arc,
-            })
-        }
-        Geometry::EllipsoidGeometry(g) => {
-            let rr = g.radii;
-            let diag = mat3_new([rr[0], 0.0, 0.0], [0.0, rr[1], 0.0], [0.0, 0.0, rr[2]]);
-            let (ai, ti, af) = affine_from_motor(id, diag);
-            GeometryParams::EllipsoidParams(EllipsoidParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-            })
-        }
-        Geometry::CyclideGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(id, eye3);
-            GeometryParams::CyclideParams(CyclideParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                a: g.a,
-                b: g.b,
-                d: g.d,
-                c: (g.a * g.a - g.b * g.b).sqrt(),
-                shift: g.shift,
-            })
-        }
-        Geometry::TrimeshGeometry(g) => {
-            let (ai, ti, af) = affine_from_motor(id, eye3);
-            GeometryParams::TrimeshParams(TrimeshParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                v0: g.v0.clone(),
-                e1: g.e1.clone(),
-                e2: g.e2.clone(),
-                nrm: g.nrm.clone(),
-                lo: g.lo,
-                hi: g.hi,
-            })
-        }
-        Geometry::CsgGeometry(g) => GeometryParams::CsgParams(crate::CsgParams {
-            op: g.op,
-            children: g.children.iter().map(identity_params).collect(),
-        }),
-        Geometry::AffineGeometry(g) => {
-            let inner = identity_params(&g.inner[0]);
-            let (ai, ti, af) = affine_from_motor(g.motor, g.linear);
-            GeometryParams::AffineParams(AffineParams {
-                inner: Box::new(inner),
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-            })
+                h: g.half,
+            }),
+            Geometry::BoxGeometry(g) => GeometryParams::BoxParams(BoxParams {
+                c: [0.0; 3],
+                axes: eye,
+                half: g.half,
+            }),
+            Geometry::CircleGeometry(g) => GeometryParams::CircleParams(crate::CircleParams {
+                c: [0.0; 3],
+                n: [0.0, 0.0, 1.0],
+                r: g.radius,
+            }),
+            Geometry::ConeGeometry(g) => {
+                let (ai, ti, af) = id.affine_from_motor(eye3);
+                GeometryParams::ConeParams(ConeParams {
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                    r: g.radius,
+                    h: g.height,
+                })
+            }
+            Geometry::TorusGeometry(g) => {
+                let (ai, ti, af) = id.affine_from_motor(eye3);
+                GeometryParams::TorusParams(TorusParams {
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                    major: g.major,
+                    minor: g.minor,
+                    arc: g.arc,
+                })
+            }
+            Geometry::EllipsoidGeometry(g) => {
+                let rr = g.radii;
+                let diag = mat3_new([rr[0], 0.0, 0.0], [0.0, rr[1], 0.0], [0.0, 0.0, rr[2]]);
+                let (ai, ti, af) = id.affine_from_motor(diag);
+                GeometryParams::EllipsoidParams(EllipsoidParams {
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                })
+            }
+            Geometry::CyclideGeometry(g) => {
+                let (ai, ti, af) = id.affine_from_motor(eye3);
+                GeometryParams::CyclideParams(CyclideParams {
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                    a: g.a,
+                    b: g.b,
+                    d: g.d,
+                    c: (g.a * g.a - g.b * g.b).sqrt(),
+                    shift: g.shift,
+                })
+            }
+            Geometry::TrimeshGeometry(g) => {
+                let (ai, ti, af) = id.affine_from_motor(eye3);
+                GeometryParams::TrimeshParams(TrimeshParams {
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                    v0: g.v0.clone(),
+                    e1: g.e1.clone(),
+                    e2: g.e2.clone(),
+                    nrm: g.nrm.clone(),
+                    lo: g.lo,
+                    hi: g.hi,
+                })
+            }
+            Geometry::CsgGeometry(g) => GeometryParams::CsgParams(crate::CsgParams {
+                op: g.op,
+                children: g.children.iter().map(|c| c.identity_params()).collect(),
+            }),
+            Geometry::AffineGeometry(g) => {
+                let inner = g.inner[0].identity_params();
+                let (ai, ti, af) = g.motor.affine_from_motor(g.linear);
+                GeometryParams::AffineParams(AffineParams {
+                    inner: Box::new(inner),
+                    a_inv3: ai,
+                    t_inv: ti,
+                    a_fwd: af,
+                })
+            }
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// scalar field: negative inside
-// ---------------------------------------------------------------------------
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -135,8 +118,6 @@ fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-/// World -> local through `(a_inv3, t_inv)`, mirroring
-/// `affine_point_to_local`: `loc[j] = a_inv3[j] . p + t_inv[j]`.
 fn to_local(a_inv3: [[f64; 3]; 3], t_inv: [f64; 3], p: [f64; 3]) -> [f64; 3] {
     [
         a_inv3[0][0] * p[0] + a_inv3[0][1] * p[1] + a_inv3[0][2] * p[2] + t_inv[0],
@@ -159,7 +140,7 @@ fn cylinder_field(p: CylinderParams, x: [f64; 3]) -> f64 {
     let rad = sub(rel, [p.u[0] * s, p.u[1] * s, p.u[2] * s]);
     let f = dot(rad, rad) - p.r * p.r;
     if p.h < 0.0 {
-        return f; // infinite cylinder
+        return f;
     }
     f.max(s.abs() - p.h)
 }
@@ -171,7 +152,6 @@ fn box_field(p: BoxParams, x: [f64; 3]) -> f64 {
     f
 }
 
-/// Canonical cone: apex at z=+h/2, base disc at z=-h/2 with radius r.
 fn cone_field(p: ConeParams, x: [f64; 3]) -> f64 {
     let l = to_local(p.a_inv3, p.t_inv, x);
     let s = l[2] - p.h / 2.0;
@@ -209,8 +189,6 @@ fn cyclide_field(p: CyclideParams, x: [f64; 3]) -> f64 {
     (rho + bb).powi(2) - 4.0 * (x0 * p.a - p.c * p.d).powi(2) - 4.0 * p.b * p.b * y0 * y0
 }
 
-// --- scalar Moller-Trumbore + point-triangle distance (local frame) ---
-
 fn mt_hit(a: [f64; 3], e1: [f64; 3], e2: [f64; 3], o: [f64; 3], d: [f64; 3]) -> Option<f64> {
     let pvec = [
         d[1] * e2[2] - d[2] * e2[1],
@@ -240,7 +218,6 @@ fn mt_hit(a: [f64; 3], e1: [f64; 3], e2: [f64; 3], o: [f64; 3], d: [f64; 3]) -> 
 }
 
 fn pt_tri_dist2(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
-    // Ericson 5.1.5 closest point, squared distance.
     let ab = sub(b, a);
     let ac = sub(c, a);
     let ap = sub(p, a);
@@ -298,9 +275,6 @@ fn pt_tri_dist2(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
 
 fn trimesh_field(p: &TrimeshParams, x: [f64; 3]) -> f64 {
     let l = to_local(p.a_inv3, p.t_inv, x);
-    // Fixed near-irrational direction: parity rays along an axis can graze a
-    // shared triangle edge (count twice) and misclassify; any generic
-    // direction makes that measure-zero for axis-aligned test geometry.
     let d = [0.7241, 0.4413, 0.5306];
     let mut count = 0u32;
     let mut best = f64::INFINITY;
@@ -327,7 +301,7 @@ fn trimesh_field(p: &TrimeshParams, x: [f64; 3]) -> f64 {
 }
 
 fn affine_field(p: &AffineParams, x: [f64; 3]) -> f64 {
-    field(&p.inner, to_local(p.a_inv3, p.t_inv, x))
+    p.inner.field(to_local(p.a_inv3, p.t_inv, x))
 }
 
 fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
@@ -335,7 +309,7 @@ fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
         CsgOp::Union => {
             let mut f = f64::INFINITY;
             for c in children {
-                let v = field(c, x);
+                let v = c.field(x);
                 if v < f {
                     f = v;
                 }
@@ -345,7 +319,7 @@ fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
         CsgOp::Intersection => {
             let mut f = f64::NEG_INFINITY;
             for c in children {
-                let v = field(c, x);
+                let v = c.field(x);
                 if v > f {
                     f = v;
                 }
@@ -353,10 +327,9 @@ fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
             f
         }
         CsgOp::Difference => {
-            // first minus union-of-rest (mirrors GPU csg_contains)
-            let mut f = field(&children[0], x);
+            let mut f = children[0].field(x);
             for c in &children[1..] {
-                let v = -field(c, x);
+                let v = -c.field(x);
                 if v > f {
                     f = v;
                 }
@@ -366,28 +339,24 @@ fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
     }
 }
 
-/// Signed implicit field: `< 0` inside. Panics on non-solids (circle),
-/// mirroring the GPU kernels.
-pub fn field(params: &GeometryParams, x: [f64; 3]) -> f64 {
-    match params {
-        GeometryParams::SphereParams(p) => sphere_field(*p, x),
-        GeometryParams::PlaneParams(p) => plane_field(*p, x),
-        GeometryParams::CylinderParams(p) => cylinder_field(*p, x),
-        GeometryParams::BoxParams(p) => box_field(*p, x),
-        GeometryParams::ConeParams(p) => cone_field(*p, x),
-        GeometryParams::EllipsoidParams(p) => ellipsoid_field(*p, x),
-        GeometryParams::TorusParams(p) => torus_field(*p, x),
-        GeometryParams::CyclideParams(p) => cyclide_field(*p, x),
-        GeometryParams::TrimeshParams(p) => trimesh_field(p, x),
-        GeometryParams::AffineParams(p) => affine_field(p, x),
-        GeometryParams::CsgParams(p) => csg_field(p.op, &p.children, x),
-        GeometryParams::CircleParams(_) => panic!("circle is not a solid (no field)"),
+impl GeometryParams {
+    pub fn field(&self, x: [f64; 3]) -> f64 {
+        match self {
+            GeometryParams::SphereParams(p) => sphere_field(*p, x),
+            GeometryParams::PlaneParams(p) => plane_field(*p, x),
+            GeometryParams::CylinderParams(p) => cylinder_field(*p, x),
+            GeometryParams::BoxParams(p) => box_field(*p, x),
+            GeometryParams::ConeParams(p) => cone_field(*p, x),
+            GeometryParams::EllipsoidParams(p) => ellipsoid_field(*p, x),
+            GeometryParams::TorusParams(p) => torus_field(*p, x),
+            GeometryParams::CyclideParams(p) => cyclide_field(*p, x),
+            GeometryParams::TrimeshParams(p) => trimesh_field(p, x),
+            GeometryParams::AffineParams(p) => affine_field(p, x),
+            GeometryParams::CsgParams(p) => csg_field(p.op, &p.children, x),
+            GeometryParams::CircleParams(_) => panic!("circle is not a solid (no field)"),
+        }
     }
 }
-
-// ---------------------------------------------------------------------------
-// bounds (world frame), mirroring GPU geom_bounds
-// ---------------------------------------------------------------------------
 
 fn apply_fwd(a_fwd: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
     [
@@ -464,85 +433,84 @@ fn intersect_bounds(list: &[Option<[[f64; 3]; 2]>]) -> Option<[[f64; 3]; 2]> {
     out
 }
 
-/// World-space AABB, or `None` when unbounded (plane / infinite cylinder).
-pub fn bounds_of(params: &GeometryParams) -> Option<[[f64; 3]; 2]> {
-    match params {
-        GeometryParams::SphereParams(p) => Some([
-            [p.c[0] - p.r, p.c[1] - p.r, p.c[2] - p.r],
-            [p.c[0] + p.r, p.c[1] + p.r, p.c[2] + p.r],
-        ]),
-        GeometryParams::PlaneParams(_) => None,
-        GeometryParams::CylinderParams(p) => {
-            if p.h < 0.0 {
-                return None;
-            }
-            let mut lo = [0.0; 3];
-            let mut hi = [0.0; 3];
-            for i in 0..3 {
-                let e = p.u[i].abs() * p.h + p.r;
-                lo[i] = p.q[i] - e;
-                hi[i] = p.q[i] + e;
-            }
-            Some([lo, hi])
-        }
-        GeometryParams::BoxParams(p) => {
-            let mut lo = [0.0; 3];
-            let mut hi = [0.0; 3];
-            for i in 0..3 {
-                let mut e = 0.0;
-                for j in 0..3 {
-                    e += p.axes[j][i].abs() * p.half[j];
+impl GeometryParams {
+    pub fn bounds(&self) -> Option<[[f64; 3]; 2]> {
+        match self {
+            GeometryParams::SphereParams(p) => Some([
+                [p.c[0] - p.r, p.c[1] - p.r, p.c[2] - p.r],
+                [p.c[0] + p.r, p.c[1] + p.r, p.c[2] + p.r],
+            ]),
+            GeometryParams::PlaneParams(_) => None,
+            GeometryParams::CylinderParams(p) => {
+                if p.h < 0.0 {
+                    return None;
                 }
-                lo[i] = p.c[i] - e;
-                hi[i] = p.c[i] + e;
+                let mut lo = [0.0; 3];
+                let mut hi = [0.0; 3];
+                for i in 0..3 {
+                    let e = p.u[i].abs() * p.h + p.r;
+                    lo[i] = p.q[i] - e;
+                    hi[i] = p.q[i] + e;
+                }
+                Some([lo, hi])
             }
-            Some([lo, hi])
-        }
-        GeometryParams::ConeParams(p) => Some(corners_bounds(
-            [-p.r, -p.r, -p.h / 2.0],
-            [p.r, p.r, p.h / 2.0],
-            &p.a_fwd,
-        )),
-        GeometryParams::TorusParams(p) => {
-            let e = p.major + p.minor;
-            Some(corners_bounds(
-                [-e, -e, -p.minor],
-                [e, e, p.minor],
+            GeometryParams::BoxParams(p) => {
+                let mut lo = [0.0; 3];
+                let mut hi = [0.0; 3];
+                for i in 0..3 {
+                    let mut e = 0.0;
+                    for j in 0..3 {
+                        e += p.axes[j][i].abs() * p.half[j];
+                    }
+                    lo[i] = p.c[i] - e;
+                    hi[i] = p.c[i] + e;
+                }
+                Some([lo, hi])
+            }
+            GeometryParams::ConeParams(p) => Some(corners_bounds(
+                [-p.r, -p.r, -p.h / 2.0],
+                [p.r, p.r, p.h / 2.0],
                 &p.a_fwd,
-            ))
-        }
-        GeometryParams::EllipsoidParams(p) => Some(corners_bounds([-1.0; 3], [1.0; 3], &p.a_fwd)),
-        GeometryParams::CyclideParams(p) => {
-            let r = p.d + p.c;
-            Some(corners_bounds(
-                [p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r],
-                [p.shift[0] + p.a + r, p.shift[1] + p.b + r, p.shift[2] + r],
-                &p.a_fwd,
-            ))
-        }
-        GeometryParams::TrimeshParams(p) => Some(corners_bounds(p.lo, p.hi, &p.a_fwd)),
-        GeometryParams::CsgParams(p) => {
-            let bs: Vec<_> = p.children.iter().map(bounds_of).collect();
-            if p.op == CsgOp::Difference {
-                return bs.into_iter().next().unwrap_or(None);
+            )),
+            GeometryParams::TorusParams(p) => {
+                let e = p.major + p.minor;
+                Some(corners_bounds(
+                    [-e, -e, -p.minor],
+                    [e, e, p.minor],
+                    &p.a_fwd,
+                ))
             }
-            if p.op == CsgOp::Union {
-                union_bounds(&bs)
-            } else {
-                intersect_bounds(&bs)
+            GeometryParams::EllipsoidParams(p) => {
+                Some(corners_bounds([-1.0; 3], [1.0; 3], &p.a_fwd))
             }
+            GeometryParams::CyclideParams(p) => {
+                let r = p.d + p.c;
+                Some(corners_bounds(
+                    [p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r],
+                    [p.shift[0] + p.a + r, p.shift[1] + p.b + r, p.shift[2] + r],
+                    &p.a_fwd,
+                ))
+            }
+            GeometryParams::TrimeshParams(p) => Some(corners_bounds(p.lo, p.hi, &p.a_fwd)),
+            GeometryParams::CsgParams(p) => {
+                let bs: Vec<_> = p.children.iter().map(|c| c.bounds()).collect();
+                if p.op == CsgOp::Difference {
+                    return bs.into_iter().next().unwrap_or(None);
+                }
+                if p.op == CsgOp::Union {
+                    union_bounds(&bs)
+                } else {
+                    intersect_bounds(&bs)
+                }
+            }
+            GeometryParams::AffineParams(p) => {
+                let b = p.inner.bounds()?;
+                Some(corners_bounds(b[0], b[1], &p.a_fwd))
+            }
+            GeometryParams::CircleParams(_) => None,
         }
-        GeometryParams::AffineParams(p) => {
-            let b = bounds_of(&p.inner)?;
-            Some(corners_bounds(b[0], b[1], &p.a_fwd))
-        }
-        GeometryParams::CircleParams(_) => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// marching tetrahedra
-// ---------------------------------------------------------------------------
 
 const CORN: [[usize; 3]; 8] = [
     [0, 0, 0],
@@ -555,7 +523,6 @@ const CORN: [[usize; 3]; 8] = [
     [0, 1, 1],
 ];
 
-/// Kuhn-Freudenthal split along the 0-6 diagonal.
 const TETS: [[usize; 4]; 6] = [
     [0, 1, 2, 6],
     [0, 1, 5, 6],
@@ -579,9 +546,9 @@ fn lerp_pt(a: [f64; 3], va: f64, b: [f64; 3], vb: f64) -> [f64; 3] {
 fn grad(params: &GeometryParams, x: [f64; 3]) -> [f64; 3] {
     let e = 1e-6;
     [
-        (field(params, [x[0] + e, x[1], x[2]]) - field(params, [x[0] - e, x[1], x[2]])) / (2.0 * e),
-        (field(params, [x[0], x[1] + e, x[2]]) - field(params, [x[0], x[1] - e, x[2]])) / (2.0 * e),
-        (field(params, [x[0], x[1], x[2] + e]) - field(params, [x[0], x[1], x[2] - e])) / (2.0 * e),
+        (params.field([x[0] + e, x[1], x[2]]) - params.field([x[0] - e, x[1], x[2]])) / (2.0 * e),
+        (params.field([x[0], x[1] + e, x[2]]) - params.field([x[0], x[1] - e, x[2]])) / (2.0 * e),
+        (params.field([x[0], x[1], x[2] + e]) - params.field([x[0], x[1], x[2] - e])) / (2.0 * e),
     ]
 }
 
@@ -627,7 +594,6 @@ fn polygonize_tet(
     if n_in == 0 || n_in == 4 {
         return;
     }
-    // crossing point per tet edge, None when no sign change
     let mut cross: [Option<[f64; 3]>; 6] = [None; 6];
     for (e, &[i, j]) in TET_EDGES.iter().enumerate() {
         if inside[i] != inside[j] {
@@ -637,7 +603,7 @@ fn polygonize_tet(
     let x = |e: usize| cross[e].unwrap();
     if n_in == 1 {
         let k = inside.iter().position(|&b| b).unwrap();
-        // the 3 edges incident to k
+
         let mut es = Vec::new();
         for (e, &[i, j]) in TET_EDGES.iter().enumerate() {
             if i == k || j == k {
@@ -655,7 +621,6 @@ fn polygonize_tet(
         }
         emit_tri(verts, faces, params, x(es[0]), x(es[1]), x(es[2]));
     } else {
-        // 2 inside (a,b), 2 outside (o1,o2): quad -> 2 tris
         let mut ins = Vec::new();
         let mut outs = Vec::new();
         for (k, &b) in inside.iter().enumerate() {
@@ -680,10 +645,6 @@ fn polygonize_tet(
     }
 }
 
-// ---------------------------------------------------------------------------
-// public bake API
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Default)]
 pub struct BakedMesh {
     pub vertices: Vec<[f64; 3]>,
@@ -700,161 +661,166 @@ impl BakedMesh {
     }
 }
 
-/// Signed volume (outward winding assumed). Useful for bake sanity checks.
-pub fn mesh_volume(verts: &[[f64; 3]], faces: &[[i32; 3]]) -> f64 {
-    let mut v = 0.0;
-    for f in faces {
-        let a = verts[f[0] as usize];
-        let b = verts[f[1] as usize];
-        let c = verts[f[2] as usize];
-        v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
-            + a[2] * (b[0] * c[1] - b[1] * c[0]);
+impl BakedMesh {
+    pub fn volume_of(verts: &[[f64; 3]], faces: &[[i32; 3]]) -> f64 {
+        let mut v = 0.0;
+        for f in faces {
+            let a = verts[f[0] as usize];
+            let b = verts[f[1] as usize];
+            let c = verts[f[2] as usize];
+            v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]);
+        }
+        v / 6.0
     }
-    v / 6.0
+
+    pub fn volume(&self) -> f64 {
+        Self::volume_of(&self.vertices, &self.faces)
+    }
 }
 
 pub const MAX_BAKE_NODES: usize = 6_000_000;
 
-/// Bake world-frame `params` into a triangle soup at `step` resolution.
-/// Unbounded params (plane / infinite cylinder) and non-solids (circle) error.
-pub fn bake(params: &GeometryParams, step: f64) -> Result<BakedMesh, String> {
-    if !(step > 0.0) || !step.is_finite() {
-        return Err(format!("bake: bad step {step}"));
-    }
-    match params {
-        GeometryParams::CircleParams(_) => return Err("bake: circle is not a solid".into()),
-        _ => {}
-    }
-    let [lo, hi] = bounds_of(params).ok_or("bake: unbounded geometry (plane/infinite)")?;
-    let nx = ((hi[0] - lo[0]) / step).ceil().max(1.0) as usize;
-    let ny = ((hi[1] - lo[1]) / step).ceil().max(1.0) as usize;
-    let nz = ((hi[2] - lo[2]) / step).ceil().max(1.0) as usize;
-    let nodes = (nx + 1).saturating_mul(ny + 1).saturating_mul(nz + 1);
-    if nodes > MAX_BAKE_NODES {
-        return Err(format!(
+impl GeometryParams {
+    pub fn bake(&self, step: f64) -> Result<BakedMesh, String> {
+        if !(step > 0.0) || !step.is_finite() {
+            return Err(format!("bake: bad step {step}"));
+        }
+        match self {
+            GeometryParams::CircleParams(_) => return Err("bake: circle is not a solid".into()),
+            _ => {}
+        }
+        let [lo, hi] = self
+            .bounds()
+            .ok_or("bake: unbounded geometry (plane/infinite)")?;
+        let nx = ((hi[0] - lo[0]) / step).ceil().max(1.0) as usize;
+        let ny = ((hi[1] - lo[1]) / step).ceil().max(1.0) as usize;
+        let nz = ((hi[2] - lo[2]) / step).ceil().max(1.0) as usize;
+        let nodes = (nx + 1).saturating_mul(ny + 1).saturating_mul(nz + 1);
+        if nodes > MAX_BAKE_NODES {
+            return Err(format!(
             "bake: grid {nx}x{ny}x{nz} ({nodes} nodes) exceeds limit {MAX_BAKE_NODES}; raise step"
         ));
-    }
-    let dx = (hi[0] - lo[0]) / nx as f64;
-    let dy = (hi[1] - lo[1]) / ny as f64;
-    let dz = (hi[2] - lo[2]) / nz as f64;
-    let at = |i: usize, j: usize, k: usize| {
-        [
-            lo[0] + dx * i as f64,
-            lo[1] + dy * j as f64,
-            lo[2] + dz * k as f64,
-        ]
-    };
-    let mut vals = vec![0.0f64; nodes];
-    for k in 0..=nz {
-        for j in 0..=ny {
-            for i in 0..=nx {
-                vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = field(params, at(i, j, k));
-            }
         }
-    }
-    let val = |i: usize, j: usize, k: usize| vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i];
-    let mut mesh = BakedMesh::default();
-    for k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                let mut cp = [[0.0; 3]; 8];
-                let mut cv = [0.0; 8];
-                for (c, &[ox, oy, oz]) in CORN.iter().enumerate() {
-                    let (ii, jj, kk) = (i + ox, j + oy, k + oz);
-                    cp[c] = at(ii, jj, kk);
-                    cv[c] = val(ii, jj, kk);
-                }
-                for tet in &TETS {
-                    let p = [cp[tet[0]], cp[tet[1]], cp[tet[2]], cp[tet[3]]];
-                    let v = [cv[tet[0]], cv[tet[1]], cv[tet[2]], cv[tet[3]]];
-                    polygonize_tet(&mut mesh.vertices, &mut mesh.faces, params, p, v);
+        let dx = (hi[0] - lo[0]) / nx as f64;
+        let dy = (hi[1] - lo[1]) / ny as f64;
+        let dz = (hi[2] - lo[2]) / nz as f64;
+        let at = |i: usize, j: usize, k: usize| {
+            [
+                lo[0] + dx * i as f64,
+                lo[1] + dy * j as f64,
+                lo[2] + dz * k as f64,
+            ]
+        };
+        let mut vals = vec![0.0f64; nodes];
+        for k in 0..=nz {
+            for j in 0..=ny {
+                for i in 0..=nx {
+                    vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = self.field(at(i, j, k));
                 }
             }
         }
+        let val = |i: usize, j: usize, k: usize| vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i];
+        let mut mesh = BakedMesh::default();
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let mut cp = [[0.0; 3]; 8];
+                    let mut cv = [0.0; 8];
+                    for (c, &[ox, oy, oz]) in CORN.iter().enumerate() {
+                        let (ii, jj, kk) = (i + ox, j + oy, k + oz);
+                        cp[c] = at(ii, jj, kk);
+                        cv[c] = val(ii, jj, kk);
+                    }
+                    for tet in &TETS {
+                        let p = [cp[tet[0]], cp[tet[1]], cp[tet[2]], cp[tet[3]]];
+                        let v = [cv[tet[0]], cv[tet[1]], cv[tet[2]], cv[tet[3]]];
+                        polygonize_tet(&mut mesh.vertices, &mut mesh.faces, self, p, v);
+                    }
+                }
+            }
+        }
+        Ok(mesh)
     }
-    Ok(mesh)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        box_geometry, cone_geometry, csg_geometry, cylinder_geometry, ellipsoid_geometry,
-        sphere_geometry, torus_geometry, trimesh_geometry, CsgOp, Geometry,
+        BoxGeometry, ConeGeometry, CsgGeometry, CsgOp, CylinderGeometry, EllipsoidGeometry,
+        Geometry, SphereGeometry, TorusGeometry, TrimeshGeometry,
     };
 
     fn world(g: &Geometry) -> GeometryParams {
-        // identity motor: local == world; mirrors geom_to_camera for rigid parts
-        crate::identity_params(g)
+        g.identity_params()
     }
 
     #[test]
     fn sphere_volume() {
-        let p = world(&Geometry::SphereGeometry(sphere_geometry(1.0)));
-        let m = bake(&p, 0.08).unwrap();
+        let p = world(&Geometry::SphereGeometry(SphereGeometry::new(1.0)));
+        let m = p.bake(0.08).unwrap();
         assert!(m.triangle_count() > 1000);
-        let v = mesh_volume(&m.vertices, &m.faces).abs();
+        let v = m.volume().abs();
         assert!((v - 4.18879).abs() < 4.18879 * 0.08, "V={v}");
     }
 
     #[test]
     fn box_volume() {
-        let p = world(&Geometry::BoxGeometry(box_geometry(2.0, 2.0, 2.0)));
-        let m = bake(&p, 0.1).unwrap();
-        let v = mesh_volume(&m.vertices, &m.faces).abs();
+        let p = world(&Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0)));
+        let m = p.bake(0.1).unwrap();
+        let v = m.volume().abs();
         assert!((v - 8.0).abs() < 8.0 * 0.05, "V={v}");
     }
 
     #[test]
     fn difference_removes_volume() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Difference,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
             ],
         ));
         let p = world(&g);
-        let m = bake(&p, 0.08).unwrap();
-        let v = mesh_volume(&m.vertices, &m.faces).abs();
-        // sphere minus centered 1^3 box: 4.19 - 1 = 3.19, tolerance for MC facets
+        let m = p.bake(0.08).unwrap();
+        let v = m.volume().abs();
+
         assert!((v - 3.18879).abs() < 0.35, "V={v}");
         assert!(v < 4.18879);
     }
 
     #[test]
     fn torus_and_cone_bake() {
-        let t = world(&Geometry::TorusGeometry(torus_geometry(1.0, 0.3)));
-        let mt = bake(&t, 0.08).unwrap();
+        let t = world(&Geometry::TorusGeometry(TorusGeometry::new(1.0, 0.3)));
+        let mt = t.bake(0.08).unwrap();
         assert!(mt.triangle_count() > 500);
-        let c = world(&Geometry::ConeGeometry(cone_geometry(0.5, 1.0)));
-        let mc = bake(&c, 0.06).unwrap();
-        let v = mesh_volume(&mc.vertices, &mc.faces).abs();
-        // (1/3)πr²h
+        let c = world(&Geometry::ConeGeometry(ConeGeometry::new(0.5, 1.0)));
+        let mc = c.bake(0.06).unwrap();
+        let v = mc.volume().abs();
+
         assert!((v - 0.261799).abs() < 0.05, "V={v}");
     }
 
     #[test]
     fn cylinder_and_ellipsoid_bake() {
-        let cy = world(&Geometry::CylinderGeometry(cylinder_geometry(0.5, 2.0)));
-        let m = bake(&cy, 0.06).unwrap();
-        let v = mesh_volume(&m.vertices, &m.faces).abs();
+        let cy = world(&Geometry::CylinderGeometry(CylinderGeometry::new(0.5, 2.0)));
+        let m = cy.bake(0.06).unwrap();
+        let v = m.volume().abs();
         assert!(
             (v - std::f64::consts::PI * 0.25 * 2.0).abs() < 0.15,
             "V={v}"
         );
-        let el = world(&Geometry::EllipsoidGeometry(ellipsoid_geometry(
+        let el = world(&Geometry::EllipsoidGeometry(EllipsoidGeometry::new(
             1.0, 0.5, 0.5,
         )));
-        let me = bake(&el, 0.06).unwrap();
-        let ve = mesh_volume(&me.vertices, &me.faces).abs();
+        let me = el.bake(0.06).unwrap();
+        let ve = me.volume().abs();
         assert!((ve - 4.18879 * 0.25).abs() < 0.2, "V={ve}");
     }
 
     #[test]
     fn trimesh_parity_bake() {
-        // unit cube as 12 triangles
         let v = [
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -879,24 +845,24 @@ mod tests {
             [3, 7, 4],
             [3, 4, 0],
         ];
-        let g = Geometry::TrimeshGeometry(trimesh_geometry(&v, &f));
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f));
         let p = world(&g);
-        assert!(field(&p, [0.5, 0.5, 0.5]) < 0.0);
-        assert!(field(&p, [2.0, 0.5, 0.5]) > 0.0);
-        let m = bake(&p, 0.1).unwrap();
-        let vv = mesh_volume(&m.vertices, &m.faces).abs();
+        assert!(p.field([0.5, 0.5, 0.5]) < 0.0);
+        assert!(p.field([2.0, 0.5, 0.5]) > 0.0);
+        let m = p.bake(0.1).unwrap();
+        let vv = m.volume().abs();
         assert!((vv - 1.0).abs() < 0.12, "V={vv}");
     }
 
     #[test]
     fn unbounded_and_nonsolid_error() {
-        let pl = world(&Geometry::PlaneGeometry(crate::plane_geometry(
+        let pl = world(&Geometry::PlaneGeometry(crate::PlaneGeometry::new(
             [0.0, 1.0, 0.0],
             0.0,
         )));
-        assert!(bounds_of(&pl).is_none());
-        assert!(bake(&pl, 0.1).is_err());
-        let ci = world(&Geometry::CircleGeometry(crate::circle_geometry(1.0)));
-        assert!(bake(&ci, 0.1).is_err());
+        assert!(pl.bounds().is_none());
+        assert!(pl.bake(0.1).is_err());
+        let ci = world(&Geometry::CircleGeometry(crate::CircleGeometry::new(1.0)));
+        assert!(ci.bake(0.1).is_err());
     }
 }

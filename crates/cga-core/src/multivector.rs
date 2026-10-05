@@ -6,59 +6,61 @@ pub struct Multivector {
     pub values: [f64; 32],
 }
 
-pub fn mv_zero() -> Multivector {
-    Multivector {
-        values: [0.0; num_components],
+impl Multivector {
+    pub fn zero() -> Multivector {
+        Multivector {
+            values: [0.0; num_components],
+        }
     }
-}
 
-pub fn mv_scalar(s: f64) -> Multivector {
-    let mut m = mv_zero();
-    m.values[0] = s;
-    m
-}
-
-pub fn mv_vector(v1: f64, v2: f64, v3: f64, v0: f64, ve: f64) -> Multivector {
-    let mut m = mv_zero();
-    m.values[1] = v1;
-    m.values[2] = v2;
-    m.values[3] = v3;
-    m.values[4] = v0;
-    m.values[5] = ve;
-    m
-}
-
-pub fn mv_bivector(components: [f64; 10]) -> Multivector {
-    let mut m = mv_zero();
-    for i in 0..10 {
-        m.values[grade_indices[grade_start[2] + i]] = components[i];
+    pub fn scalar(s: f64) -> Multivector {
+        let mut m = Self::zero();
+        m.values[0] = s;
+        m
     }
-    m
-}
 
-pub fn e1() -> Multivector {
-    mv_vector(1.0, 0.0, 0.0, 0.0, 0.0)
-}
+    pub fn vector(v1: f64, v2: f64, v3: f64, v0: f64, ve: f64) -> Multivector {
+        let mut m = Self::zero();
+        m.values[1] = v1;
+        m.values[2] = v2;
+        m.values[3] = v3;
+        m.values[4] = v0;
+        m.values[5] = ve;
+        m
+    }
 
-pub fn e2() -> Multivector {
-    mv_vector(0.0, 1.0, 0.0, 0.0, 0.0)
-}
+    pub fn bivector(components: [f64; 10]) -> Multivector {
+        let mut m = Self::zero();
+        for i in 0..10 {
+            m.values[grade_indices[grade_start[2] + i]] = components[i];
+        }
+        m
+    }
 
-pub fn e3() -> Multivector {
-    mv_vector(0.0, 0.0, 1.0, 0.0, 0.0)
-}
+    pub fn e1() -> Multivector {
+        Self::vector(1.0, 0.0, 0.0, 0.0, 0.0)
+    }
 
-pub fn e0() -> Multivector {
-    mv_vector(0.0, 0.0, 0.0, 1.0, 0.0)
-}
+    pub fn e2() -> Multivector {
+        Self::vector(0.0, 1.0, 0.0, 0.0, 0.0)
+    }
 
-pub fn einf() -> Multivector {
-    mv_vector(0.0, 0.0, 0.0, 0.0, 1.0)
+    pub fn e3() -> Multivector {
+        Self::vector(0.0, 0.0, 1.0, 0.0, 0.0)
+    }
+
+    pub fn e0() -> Multivector {
+        Self::vector(0.0, 0.0, 0.0, 1.0, 0.0)
+    }
+
+    pub fn einf() -> Multivector {
+        Self::vector(0.0, 0.0, 0.0, 0.0, 1.0)
+    }
 }
 
 impl Multivector {
     pub fn grade(&self, g: usize) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for &idx in &grade_indices[grade_start[g]..grade_start[g + 1]] {
             res.values[idx] = self.values[idx];
         }
@@ -107,7 +109,6 @@ impl Multivector {
         [self.values[1] / w, self.values[2] / w, self.values[3] / w]
     }
 
-    // 为什么: 这里判断的是系数近似全零，不是 CGA null 性质——conformal point 本身就是 null 向量但分量不全为零。
     pub fn is_zero(&self) -> bool {
         for v in self.values {
             if v.abs() > 1e-10 {
@@ -129,7 +130,7 @@ impl Multivector {
     }
 
     pub fn add(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             res.values[i] = self.values[i] + o.values[i];
         }
@@ -137,7 +138,7 @@ impl Multivector {
     }
 
     pub fn sub(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             res.values[i] = self.values[i] - o.values[i];
         }
@@ -145,7 +146,7 @@ impl Multivector {
     }
 
     pub fn mul_scalar(&self, s: f64) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             res.values[i] = self.values[i] * s;
         }
@@ -153,7 +154,7 @@ impl Multivector {
     }
 
     pub fn div_scalar(&self, s: f64) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             res.values[i] = self.values[i] / s;
         }
@@ -161,14 +162,13 @@ impl Multivector {
     }
 
     pub fn neg(&self) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             res.values[i] = -self.values[i];
         }
         res
     }
 
-    // 为什么: 近似相等不传递，所以 Multivector 故意不实现 PartialEq；需要比较时显式调用，atol=1e-6。
     pub fn approx_eq(&self, o: &Multivector) -> bool {
         self.values
             .iter()
@@ -181,7 +181,7 @@ impl Multivector {
     }
 
     pub fn gp(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for i in 0..num_components {
             let a = self.values[i];
             if a == 0.0 {
@@ -198,9 +198,8 @@ impl Multivector {
         res
     }
 
-    // 为什么: Hestenes fat-dot 内积（匹配 clifford 的 `|`），只对 r,s≥1 求和以避免与左/右收缩混淆。
     pub fn ip(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for ga in 1..num_grades {
             let a_g = self.grade(ga);
             if a_g.is_zero() {
@@ -218,9 +217,8 @@ impl Multivector {
         res
     }
 
-    // 为什么: 外积 = 各阶 wedge 之和；grade 自然相加，便于按 grade 拆分 blade。
     pub fn op(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for ga in 0..num_grades {
             let a_g = self.grade(ga);
             if a_g.is_zero() {
@@ -239,7 +237,7 @@ impl Multivector {
     }
 
     pub fn reverse(&self) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for (r, (&v, &m)) in res
             .values
             .iter_mut()
@@ -251,7 +249,7 @@ impl Multivector {
     }
 
     pub fn grade_involution(&self) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for (r, (&v, &m)) in res
             .values
             .iter_mut()
@@ -266,22 +264,19 @@ impl Multivector {
         self.reverse().grade_involution()
     }
 
-    // 为什么: 左乘 I⁻¹ 即 Hodge 对偶；在 null 基底下 I²=-1，所以 I⁻¹=-I，无需显式求逆。
     pub fn dual(&self) -> Multivector {
-        let mut i_inv = mv_zero();
+        let mut i_inv = Multivector::zero();
         i_inv.values[31] = -1.0;
         self.gp(&i_inv)
     }
 
-    // 为什么: dual∘dual = -id，所以 undual 就是再取一次 dual（即 -dual）。
     pub fn undual(&self) -> Multivector {
         self.dual().neg()
     }
 
-    // 为什么: 几何求交用对偶的外积（regressive product）；当双对偶 wedge 为零（包含/平行 blade）时退化为子空间线性交点，对直接形式 blade（点/线/面）精确；非 blade 输入 panic。
     pub fn meet(&self, o: &Multivector) -> Multivector {
         if self.is_zero() || o.is_zero() {
-            return mv_zero();
+            return Multivector::zero();
         }
         let ga = self.blade_grade();
         let gb = o.blade_grade();
@@ -289,7 +284,7 @@ impl Multivector {
             panic!("meet: arguments must be blades");
         }
         if ga == 0 || gb == 0 {
-            return mv_zero();
+            return Multivector::zero();
         }
         let w = self.dual().op(&o.dual());
         if !w.is_zero() {
@@ -302,12 +297,11 @@ impl Multivector {
         merged.extend(nb);
         let c = nullspace(&merged);
         if c.is_empty() {
-            return mv_zero();
+            return Multivector::zero();
         }
         wedge_rows(&c)
     }
 
-    // 为什么: 求张成 self 与 o 的最小 blade；scalar/零 输入退化为另一 blade，非 blade 输入 panic。
     pub fn join(&self, o: &Multivector) -> Multivector {
         if self.is_zero() {
             return *o;
@@ -339,13 +333,13 @@ impl Multivector {
     pub fn normalized(&self) -> Multivector {
         let n = self.norm();
         if n < 1e-12 {
-            return mv_zero();
+            return Multivector::zero();
         }
         self.div_scalar(n)
     }
 
     pub fn bulk(&self) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for idx in [0, 1, 2, 3, 6, 7, 10, 16] {
             res.values[idx] = self.values[idx];
         }
@@ -370,7 +364,6 @@ impl Multivector {
         g
     }
 
-    // 为什么: 公式 A⁻¹ = rev(A) / (A·rev(A))₀；只对 invertible blade/versor 成立——A·rev(A) 非 scalar 时 A 不可逆，会 panic。
     pub fn inverse(&self) -> Multivector {
         let prod = self.gp(&self.reverse());
         let s = prod.values[0];
@@ -381,7 +374,7 @@ impl Multivector {
     }
 
     pub fn lc(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for ga in 1..num_grades {
             let a_g = self.grade(ga);
             if a_g.is_zero() {
@@ -399,7 +392,7 @@ impl Multivector {
     }
 
     pub fn rc(&self, o: &Multivector) -> Multivector {
-        let mut res = mv_zero();
+        let mut res = Multivector::zero();
         for ga in 1..num_grades {
             let a_g = self.grade(ga);
             if a_g.is_zero() {
@@ -432,13 +425,13 @@ impl Multivector {
         self.sub(&self.proj(o))
     }
 
-    // 为什么: 用 versor v' = -n·v·n 做镜像；n 取归一法向，对向量和 blade 均成立（versor 共轭保持 grade）。
     pub fn reflect(&self, normal: [f64; 3]) -> Multivector {
         let len2 = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
         if len2 < 1e-18 {
             panic!("reflect: zero normal");
         }
-        let n = mv_vector(normal[0], normal[1], normal[2], 0.0, 0.0).div_scalar(len2.sqrt());
+        let n =
+            Multivector::vector(normal[0], normal[1], normal[2], 0.0, 0.0).div_scalar(len2.sqrt());
         n.gp(self).gp(&n).neg()
     }
 }
@@ -563,9 +556,9 @@ fn nullspace(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
 }
 
 fn wedge_rows(rows: &[Vec<f64>]) -> Multivector {
-    let mut res = mv_scalar(1.0);
+    let mut res = Multivector::scalar(1.0);
     for row in rows {
-        res = res.op(&mv_vector(row[0], row[1], row[2], row[3], row[4]));
+        res = res.op(&Multivector::vector(row[0], row[1], row[2], row[3], row[4]));
     }
     res
 }
@@ -581,14 +574,14 @@ mod tests {
 
     #[test]
     fn test_gp_basis() {
-        let e1v = e1();
-        let e2v = e2();
-        let e3v = e3();
-        let e0v = e0();
-        let eiv = einf();
-        assert!(e1v.gp(&e1v).approx_eq(&mv_scalar(1.0)));
-        assert!(e2v.gp(&e2v).approx_eq(&mv_scalar(1.0)));
-        assert!(e3v.gp(&e3v).approx_eq(&mv_scalar(1.0)));
+        let e1v = Multivector::e1();
+        let e2v = Multivector::e2();
+        let e3v = Multivector::e3();
+        let e0v = Multivector::e0();
+        let eiv = Multivector::einf();
+        assert!(e1v.gp(&e1v).approx_eq(&Multivector::scalar(1.0)));
+        assert!(e2v.gp(&e2v).approx_eq(&Multivector::scalar(1.0)));
+        assert!(e3v.gp(&e3v).approx_eq(&Multivector::scalar(1.0)));
         assert!(e0v.gp(&e0v).is_zero());
         assert!(eiv.gp(&eiv).is_zero());
         assert!(e0v.gp(&eiv).scalar_part() == -1.0);
@@ -597,206 +590,324 @@ mod tests {
 
     #[test]
     fn test_null_point() {
-        let p = mv_vector(1.0, 2.0, 3.0, 1.0, 7.0);
+        let p = Multivector::vector(1.0, 2.0, 3.0, 1.0, 7.0);
         assert!(p.gp(&p).scalar_part() == 0.0);
         assert_eq!(p.coords(), [1.0, 2.0, 3.0]);
     }
 
     #[test]
     fn test_dual_involution() {
-        let p = mv_vector(1.0, 2.0, 3.0, 1.0, 7.0);
+        let p = Multivector::vector(1.0, 2.0, 3.0, 1.0, 7.0);
         assert!(p.dual().dual().approx_eq(&p.neg()));
         assert!(p.undual().approx_eq(&p.dual().neg()));
     }
 
     #[test]
     fn test_reverse() {
-        let b = e1().op(&e2());
+        let b = Multivector::e1().op(&Multivector::e2());
         assert!(b.reverse().approx_eq(&b.neg()));
 
-        assert!(mv_scalar(3.0).reverse().approx_eq(&mv_scalar(3.0)));
+        assert!(Multivector::scalar(3.0)
+            .reverse()
+            .approx_eq(&Multivector::scalar(3.0)));
     }
 
     fn tb12() -> Multivector {
-        e1().op(&e2())
+        Multivector::e1().op(&Multivector::e2())
     }
 
     fn tb13() -> Multivector {
-        e1().op(&e3())
+        Multivector::e1().op(&Multivector::e3())
     }
 
     fn tb23() -> Multivector {
-        e2().op(&e3())
+        Multivector::e2().op(&Multivector::e3())
     }
 
     #[test]
     fn test_blade_join() {
-        assert!(e1().join(&e2()).approx_eq(&tb12()));
+        assert!(Multivector::e1()
+            .join(&Multivector::e2())
+            .approx_eq(&tb12()));
 
-        assert!(e1().join(&tb12()).approx_eq(&tb12()));
-
-        assert!(tb12()
-            .join(&e0().op(&einf()))
-            .approx_eq(&e1().op(&e2()).op(&e0()).op(&einf())));
-
-        assert!(tb12().join(&tb23()).approx_eq(&e1().op(&e2()).op(&e3())));
+        assert!(Multivector::e1().join(&tb12()).approx_eq(&tb12()));
 
         assert!(tb12()
-            .join(&e1().op(&e3()).op(&e0()))
-            .approx_eq(&e1().op(&e2()).op(&e3()).op(&e0())));
+            .join(&Multivector::e0().op(&Multivector::einf()))
+            .approx_eq(
+                &Multivector::e1()
+                    .op(&Multivector::e2())
+                    .op(&Multivector::e0())
+                    .op(&Multivector::einf())
+            ));
 
-        assert!(e2().join(&e2().mul_scalar(-3.0)).approx_eq(&e2()));
+        assert!(tb12().join(&tb23()).approx_eq(
+            &Multivector::e1()
+                .op(&Multivector::e2())
+                .op(&Multivector::e3())
+        ));
 
-        assert!(mv_scalar(2.0).join(&e1()).approx_eq(&e1()));
-        assert!(mv_zero().join(&e1()).approx_eq(&e1()));
+        assert!(tb12()
+            .join(
+                &Multivector::e1()
+                    .op(&Multivector::e3())
+                    .op(&Multivector::e0())
+            )
+            .approx_eq(
+                &Multivector::e1()
+                    .op(&Multivector::e2())
+                    .op(&Multivector::e3())
+                    .op(&Multivector::e0())
+            ));
+
+        assert!(Multivector::e2()
+            .join(&Multivector::e2().mul_scalar(-3.0))
+            .approx_eq(&Multivector::e2()));
+
+        assert!(Multivector::scalar(2.0)
+            .join(&Multivector::e1())
+            .approx_eq(&Multivector::e1()));
+        assert!(Multivector::zero()
+            .join(&Multivector::e1())
+            .approx_eq(&Multivector::e1()));
     }
 
     #[test]
     fn test_blade_meet() {
-        assert!(e1().meet(&tb12()).approx_eq(&e1()));
+        assert!(Multivector::e1()
+            .meet(&tb12())
+            .approx_eq(&Multivector::e1()));
         assert!(tb12().meet(&tb12()).approx_eq(&tb12()));
-        assert!(e1().meet(&mv_scalar(3.0)).approx_eq(&mv_zero()));
+        assert!(Multivector::e1()
+            .meet(&Multivector::scalar(3.0))
+            .approx_eq(&Multivector::zero()));
 
-        assert!(e1().meet(&e2()).approx_eq(&mv_zero()));
-        assert!(e1().meet(&e0().op(&einf())).approx_eq(&mv_zero()));
+        assert!(Multivector::e1()
+            .meet(&Multivector::e2())
+            .approx_eq(&Multivector::zero()));
+        assert!(Multivector::e1()
+            .meet(&Multivector::e0().op(&Multivector::einf()))
+            .approx_eq(&Multivector::zero()));
 
-        assert!(tb12().meet(&tb13()).approx_eq(&e1()));
-        assert!(tb12().meet(&tb23()).approx_eq(&e2()));
+        assert!(tb12().meet(&tb13()).approx_eq(&Multivector::e1()));
+        assert!(tb12().meet(&tb23()).approx_eq(&Multivector::e2()));
 
-        assert!(tb12().meet(&e1().op(&e3()).op(&e0())).approx_eq(&e1()));
+        assert!(tb12()
+            .meet(
+                &Multivector::e1()
+                    .op(&Multivector::e3())
+                    .op(&Multivector::e0())
+            )
+            .approx_eq(&Multivector::e1()));
 
-        assert!(tb12().meet(&tb13().mul_scalar(-2.0)).approx_eq(&e1()));
+        assert!(tb12()
+            .meet(&tb13().mul_scalar(-2.0))
+            .approx_eq(&Multivector::e1()));
 
-        let mut whole = mv_zero();
+        let mut whole = Multivector::zero();
         whole.values[31] = 1.0;
         assert!(whole.meet(&tb12()).approx_eq(&tb12().neg()));
     }
 
     #[test]
     fn test_dual_hodge() {
-        let expected = e2().op(&e3()).op(&e0()).op(&einf()).neg();
-        assert!(e1().dual().approx_eq(&expected));
+        let expected = Multivector::e2()
+            .op(&Multivector::e3())
+            .op(&Multivector::e0())
+            .op(&Multivector::einf())
+            .neg();
+        assert!(Multivector::e1().dual().approx_eq(&expected));
 
-        let p = point(1.0, 2.0, 3.0);
+        let p = Multivector::point(1.0, 2.0, 3.0);
         assert!(p.dual().dual().approx_eq(&p.neg()));
     }
 
     #[test]
     fn test_blade_inverse() {
         assert!(tb12().inverse().approx_eq(&tb12().neg()));
-        let v = mv_vector(1.0, 2.0, 3.0, 0.0, 0.0);
-        assert!(v.gp(&v.inverse()).approx_eq(&mv_scalar(1.0)));
-        let r = motor_rotor([0.0, 0.0, 1.0], 0.7);
-        assert!(r.gp(&r.inverse()).approx_eq(&mv_scalar(1.0)));
+        let v = Multivector::vector(1.0, 2.0, 3.0, 0.0, 0.0);
+        assert!(v.gp(&v.inverse()).approx_eq(&Multivector::scalar(1.0)));
+        let r = Multivector::rotor([0.0, 0.0, 1.0], 0.7);
+        assert!(r.gp(&r.inverse()).approx_eq(&Multivector::scalar(1.0)));
         assert!(r.inverse().approx_eq(&r.reverse()));
     }
 
     #[test]
     fn test_blade_proj_rej() {
         let plane = tb12();
-        let v = mv_vector(1.0, 2.0, 3.0, 0.0, 0.0);
+        let v = Multivector::vector(1.0, 2.0, 3.0, 0.0, 0.0);
         assert!(v
             .proj(&plane)
-            .approx_eq(&mv_vector(1.0, 2.0, 0.0, 0.0, 0.0)));
-        assert!(v.rej(&plane).approx_eq(&mv_vector(0.0, 0.0, 3.0, 0.0, 0.0)));
+            .approx_eq(&Multivector::vector(1.0, 2.0, 0.0, 0.0, 0.0)));
+        assert!(v
+            .rej(&plane)
+            .approx_eq(&Multivector::vector(0.0, 0.0, 3.0, 0.0, 0.0)));
         assert!(v.proj(&plane).add(&v.rej(&plane)).approx_eq(&v));
-        assert!(mv_vector(1.0, 2.0, 3.0, 0.0, 0.0)
-            .proj(&e1())
-            .approx_eq(&mv_vector(1.0, 0.0, 0.0, 0.0, 0.0)));
+        assert!(Multivector::vector(1.0, 2.0, 3.0, 0.0, 0.0)
+            .proj(&Multivector::e1())
+            .approx_eq(&Multivector::vector(1.0, 0.0, 0.0, 0.0, 0.0)));
     }
 
     #[test]
     fn test_blade_reflect() {
-        let v = mv_vector(1.0, 2.0, 3.0, 0.0, 0.0);
+        let v = Multivector::vector(1.0, 2.0, 3.0, 0.0, 0.0);
         assert!(v
             .reflect([0.0, 0.0, 1.0])
-            .approx_eq(&mv_vector(1.0, 2.0, -3.0, 0.0, 0.0)));
+            .approx_eq(&Multivector::vector(1.0, 2.0, -3.0, 0.0, 0.0)));
 
         assert!(v
             .reflect([0.0, 0.0, 2.0])
-            .approx_eq(&mv_vector(1.0, 2.0, -3.0, 0.0, 0.0)));
-        assert!(e3().reflect([0.0, 0.0, 1.0]).approx_eq(&e3().neg()));
+            .approx_eq(&Multivector::vector(1.0, 2.0, -3.0, 0.0, 0.0)));
+        assert!(Multivector::e3()
+            .reflect([0.0, 0.0, 1.0])
+            .approx_eq(&Multivector::e3().neg()));
     }
 
     #[test]
     fn test_blade_contractions() {
-        assert!(e1().lc(&tb12()).approx_eq(&e2()));
-        assert!(tb12().lc(&e1()).approx_eq(&mv_zero()));
-        assert!(tb12().rc(&e1()).approx_eq(&e2().neg()));
-        assert!(e1().rc(&tb12()).approx_eq(&mv_zero()));
-        assert!(e1().commutator(&e2()).approx_eq(&tb12()));
-        assert!(e1().commutator(&e1()).approx_eq(&mv_zero()));
-        assert!(e1().anticommutator(&e2()).approx_eq(&mv_zero()));
+        assert!(Multivector::e1().lc(&tb12()).approx_eq(&Multivector::e2()));
+        assert!(tb12()
+            .lc(&Multivector::e1())
+            .approx_eq(&Multivector::zero()));
+        assert!(tb12()
+            .rc(&Multivector::e1())
+            .approx_eq(&Multivector::e2().neg()));
+        assert!(Multivector::e1()
+            .rc(&tb12())
+            .approx_eq(&Multivector::zero()));
+        assert!(Multivector::e1()
+            .commutator(&Multivector::e2())
+            .approx_eq(&tb12()));
+        assert!(Multivector::e1()
+            .commutator(&Multivector::e1())
+            .approx_eq(&Multivector::zero()));
+        assert!(Multivector::e1()
+            .anticommutator(&Multivector::e2())
+            .approx_eq(&Multivector::zero()));
     }
 
     #[test]
     fn test_point_null_and_dist() {
-        let p1 = point(0.0, 0.0, 0.0);
+        let p1 = Multivector::point(0.0, 0.0, 0.0);
         assert!(close(p1.gp(&p1).values[0], 0.0, 1e-4));
-        assert!(close(point_dist(&p1, &point(3.0, 4.0, 0.0)), 5.0, 1e-4));
+        assert!(close(
+            p1.point_dist(&Multivector::point(3.0, 4.0, 0.0)),
+            5.0,
+            1e-4
+        ));
     }
 
     #[test]
     fn test_line_incidence() {
-        let l = line(&point(0.0, 0.0, 0.0), &point(1.0, 0.0, 0.0));
-        assert!(close(point(2.0, 0.0, 0.0).op(&l).vmax(), 0.0, 1e-4));
-        assert!(point(0.0, 1.0, 0.0).op(&l).vmax() > 1e-3);
+        let l = Multivector::line(
+            &Multivector::point(0.0, 0.0, 0.0),
+            &Multivector::point(1.0, 0.0, 0.0),
+        );
+        assert!(close(
+            Multivector::point(2.0, 0.0, 0.0).op(&l).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(Multivector::point(0.0, 1.0, 0.0).op(&l).vmax() > 1e-3);
     }
 
     #[test]
     fn test_plane_incidence() {
-        let pi = plane([0.0, 0.0, 1.0], 2.0);
-        assert!(close(point(0.3, -0.7, 2.0).ip(&pi).vmax(), 0.0, 1e-4));
-        assert!(point(0.0, 0.0, 0.0).ip(&pi).vmax() > 1e-3);
+        let pi = Multivector::plane([0.0, 0.0, 1.0], 2.0);
+        assert!(close(
+            Multivector::point(0.3, -0.7, 2.0).ip(&pi).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(Multivector::point(0.0, 0.0, 0.0).ip(&pi).vmax() > 1e-3);
     }
 
     #[test]
     fn test_sphere_incidence() {
-        let s = sphere([1.0, 2.0, 3.0], 2.0);
-        assert!(close(point(3.0, 2.0, 3.0).ip(&s).vmax(), 0.0, 1e-4));
-        assert!(point(0.0, 0.0, 0.0).ip(&s).vmax() > 1e-3);
+        let s = Multivector::sphere([1.0, 2.0, 3.0], 2.0);
+        assert!(close(
+            Multivector::point(3.0, 2.0, 3.0).ip(&s).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(Multivector::point(0.0, 0.0, 0.0).ip(&s).vmax() > 1e-3);
     }
 
     #[test]
     fn test_circle_incidence() {
-        let c = circle([0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 1.0]);
-        assert!(close(point(0.0, 1.0, 0.0).ip(&c).vmax(), 0.0, 1e-4));
-        assert!(point(0.0, 0.0, 1.0).ip(&c).vmax() > 1e-3);
-        let cnu = circle([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 2.0]);
-        assert!(close(point(3.0, 2.0, 3.0).ip(&cnu).vmax(), 0.0, 1e-4));
+        let c = Multivector::circle([0.0, 0.0, 0.0], 1.0, [0.0, 0.0, 1.0]);
+        assert!(close(
+            Multivector::point(0.0, 1.0, 0.0).ip(&c).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(Multivector::point(0.0, 0.0, 1.0).ip(&c).vmax() > 1e-3);
+        let cnu = Multivector::circle([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 2.0]);
+        assert!(close(
+            Multivector::point(3.0, 2.0, 3.0).ip(&cnu).vmax(),
+            0.0,
+            1e-4
+        ));
     }
 
     #[test]
     fn test_distances() {
-        let pi = plane([0.0, 0.0, 1.0], 2.0);
-        let s = sphere([1.0, 2.0, 3.0], 2.0);
-        assert!(close(plane_dist(&pi, &point(0.0, 0.0, 5.0)), 3.0, 1e-4));
-        assert!(close(sphere_dist(&s, &point(3.0, 2.0, 3.0)), 0.0, 1e-4));
-        assert!(sphere_dist(&s, &point(5.0, 2.0, 3.0)) > 0.0);
-        assert!(sphere_dist(&s, &point(1.0, 2.0, 3.0)) < 0.0);
+        let pi = Multivector::plane([0.0, 0.0, 1.0], 2.0);
+        let s = Multivector::sphere([1.0, 2.0, 3.0], 2.0);
+        assert!(close(
+            pi.plane_dist(&Multivector::point(0.0, 0.0, 5.0)),
+            3.0,
+            1e-4
+        ));
+        assert!(close(
+            s.sphere_dist(&Multivector::point(3.0, 2.0, 3.0)),
+            0.0,
+            1e-4
+        ));
+        assert!(s.sphere_dist(&Multivector::point(5.0, 2.0, 3.0)) > 0.0);
+        assert!(s.sphere_dist(&Multivector::point(1.0, 2.0, 3.0)) < 0.0);
     }
 
     #[test]
     fn test_meet_plane_plane() {
-        let pi = plane([0.0, 0.0, 1.0], 2.0);
-        let pi2 = plane([0.0, 1.0, 0.0], 1.0);
+        let pi = Multivector::plane([0.0, 0.0, 1.0], 2.0);
+        let pi2 = Multivector::plane([0.0, 1.0, 0.0], 1.0);
         let lm = pi.dual().meet(&pi2.dual());
-        assert!(close(point(0.0, 1.0, 2.0).op(&lm).vmax(), 0.0, 1e-4));
-        assert!(close(point(5.0, 1.0, 2.0).op(&lm).vmax(), 0.0, 1e-4));
+        assert!(close(
+            Multivector::point(0.0, 1.0, 2.0).op(&lm).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(close(
+            Multivector::point(5.0, 1.0, 2.0).op(&lm).vmax(),
+            0.0,
+            1e-4
+        ));
     }
 
     #[test]
     fn test_meet_line_sphere() {
-        let lz = line(&point(0.0, 0.0, -2.0), &point(0.0, 0.0, 2.0));
-        let ppm = lz.meet(&sphere([0.0, 0.0, 0.0], 1.0).dual());
-        assert!(close(point(0.0, 0.0, 1.0).op(&ppm).vmax(), 0.0, 1e-4));
-        assert!(close(point(0.0, 0.0, -1.0).op(&ppm).vmax(), 0.0, 1e-4));
+        let lz = Multivector::line(
+            &Multivector::point(0.0, 0.0, -2.0),
+            &Multivector::point(0.0, 0.0, 2.0),
+        );
+        let ppm = lz.meet(&Multivector::sphere([0.0, 0.0, 0.0], 1.0).dual());
+        assert!(close(
+            Multivector::point(0.0, 0.0, 1.0).op(&ppm).vmax(),
+            0.0,
+            1e-4
+        ));
+        assert!(close(
+            Multivector::point(0.0, 0.0, -1.0).op(&ppm).vmax(),
+            0.0,
+            1e-4
+        ));
     }
 
     #[test]
     fn test_far_from_origin_dist() {
         assert!(close(
-            point_dist(&point(1000.0, 0.0, 0.0), &point(1001.0, 0.0, 0.0)),
+            Multivector::point(1000.0, 0.0, 0.0).point_dist(&Multivector::point(1001.0, 0.0, 0.0)),
             1.0,
             1e-2
         ));
@@ -804,20 +915,38 @@ mod tests {
 
     #[test]
     fn test_cylinder_distances() {
-        let cy = cylinder([0.0, 0.0, 2.0], [0.0, 1.0, 0.0], 1.0);
-        assert!(close(cylinder_dist(&cy, &point(1.0, 5.0, 2.0)), 0.0, 1e-4));
-        assert!(close(cylinder_dist(&cy, &point(0.2, 0.0, 2.0)), -0.8, 1e-4));
-        assert!(close(cylinder_dist(&cy, &point(3.0, -2.0, 2.0)), 2.0, 1e-4));
-        assert!(close(cylinder_dist(&cy, &point(-1.0, 5.0, 2.0)), 0.0, 1e-4));
+        let cy = Cylinder::new([0.0, 0.0, 2.0], [0.0, 1.0, 0.0], 1.0);
+        assert!(close(
+            cy.dist(&Multivector::point(1.0, 5.0, 2.0)),
+            0.0,
+            1e-4
+        ));
+        assert!(close(
+            cy.dist(&Multivector::point(0.2, 0.0, 2.0)),
+            -0.8,
+            1e-4
+        ));
+        assert!(close(
+            cy.dist(&Multivector::point(3.0, -2.0, 2.0)),
+            2.0,
+            1e-4
+        ));
+        assert!(close(
+            cy.dist(&Multivector::point(-1.0, 5.0, 2.0)),
+            0.0,
+            1e-4
+        ));
     }
 
     #[test]
     fn test_from_dual_after_motor() {
-        let s_cam = translator([1.0, 2.0, 3.0]).apply(&sphere([0.0, 0.0, 0.0], 0.5));
-        let (c, rho) = sphere_from_dual(&s_cam);
+        let s_cam = Multivector::translator([1.0, 2.0, 3.0])
+            .apply(&Multivector::sphere([0.0, 0.0, 0.0], 0.5));
+        let (c, rho) = s_cam.to_sphere();
         assert!(close(c[0], 1.0, 1e-4) && close(c[1], 2.0, 1e-4) && close(c[2], 3.0, 1e-4));
         assert!(close(rho, 0.5, 1e-4));
-        let pi_cam = translator([1.0, 2.0, 3.0]).apply(&plane([0.0, 1.0, 0.0], 0.0));
+        let pi_cam = Multivector::translator([1.0, 2.0, 3.0])
+            .apply(&Multivector::plane([0.0, 1.0, 0.0], 0.0));
         assert!(close(pi_cam.einf_coeff(), 2.0, 1e-4));
     }
 }

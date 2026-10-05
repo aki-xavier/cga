@@ -396,12 +396,12 @@ pub fn geom_contains(p: &GeometryParams, pos: &Array) -> Array {
 mod tests {
     use super::*;
     use cga_core::{
-        box_geometry, csg_geometry, ellipsoid_geometry, motor_identity, plane_geometry,
-        sphere_geometry, CsgOp, Geometry,
+        BoxGeometry, CsgGeometry, CsgOp, EllipsoidGeometry, Geometry, Multivector, PlaneGeometry,
+        SphereGeometry,
     };
 
     fn csg_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, bool) {
-        let p = crate::geom_to_camera(g, &motor_identity());
+        let p = crate::geom_to_camera(g, &Multivector::identity());
         let oa = Array::from_slice(&[o[0] as f32, o[1] as f32, o[2] as f32], &[1, 3]);
         let da = Array::from_slice(&[d[0] as f32, d[1] as f32, d[2] as f32], &[1, 3]);
         let (t, _, mask) = crate::geom_intersect(&p, &oa, &da);
@@ -411,7 +411,7 @@ mod tests {
     }
 
     fn cc_contains(g: &Geometry, pts: &[[f64; 3]]) -> Vec<bool> {
-        let p = crate::geom_to_camera(g, &motor_identity());
+        let p = crate::geom_to_camera(g, &Multivector::identity());
         let mut flat: Vec<f32> = Vec::with_capacity(pts.len() * 3);
         for q in pts {
             flat.push(q[0] as f32);
@@ -426,11 +426,11 @@ mod tests {
 
     #[test]
     fn test_csg_difference() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Difference,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
             ],
         ));
         let (t, m) = csg_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -440,11 +440,11 @@ mod tests {
 
     #[test]
     fn test_csg_intersection() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Intersection,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
             ],
         ));
         let (t, m) = csg_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -454,11 +454,11 @@ mod tests {
 
     #[test]
     fn test_csg_halfspace() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Intersection,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
             ],
         ));
         let (t, m) = csg_hit(&g, [0.0, 5.0, 0.0], [0.0, -1.0, 0.0]);
@@ -468,18 +468,18 @@ mod tests {
 
     #[test]
     fn test_csg_nested() {
-        let inner = Geometry::CsgGeometry(csg_geometry(
+        let inner = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Difference,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::BoxGeometry(box_geometry(1.0, 1.0, 1.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
             ],
         ));
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Intersection,
             vec![
                 inner,
-                Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
+                Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
             ],
         ));
         let (t, m) = csg_hit(&g, [0.0, -0.2, 5.0], [0.0, 0.0, -1.0]);
@@ -489,11 +489,11 @@ mod tests {
 
     #[test]
     fn test_csg_union_scaled() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Union,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::EllipsoidGeometry(ellipsoid_geometry(1.0, 1.0, 3.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::EllipsoidGeometry(EllipsoidGeometry::new(1.0, 1.0, 3.0)),
             ],
         ));
         let (t, m) = csg_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
@@ -503,11 +503,11 @@ mod tests {
 
     #[test]
     fn test_csg_union_contains() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Union,
             vec![
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
-                Geometry::BoxGeometry(box_geometry(4.0, 4.0, 4.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(4.0, 4.0, 4.0)),
             ],
         ));
 
@@ -519,11 +519,11 @@ mod tests {
 
     #[test]
     fn test_csg_difference_contains() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Difference,
             vec![
-                Geometry::BoxGeometry(box_geometry(4.0, 4.0, 4.0)),
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(4.0, 4.0, 4.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
             ],
         ));
 
@@ -535,11 +535,11 @@ mod tests {
 
     #[test]
     fn test_csg_intersection_contains() {
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Intersection,
             vec![
-                Geometry::BoxGeometry(box_geometry(4.0, 4.0, 4.0)),
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(4.0, 4.0, 4.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
             ],
         ));
 
@@ -551,19 +551,19 @@ mod tests {
 
     #[test]
     fn test_csg_nested_contains() {
-        let inner = Geometry::CsgGeometry(csg_geometry(
+        let inner = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Difference,
             vec![
-                Geometry::BoxGeometry(box_geometry(4.0, 4.0, 4.0)),
-                Geometry::SphereGeometry(sphere_geometry(1.0)),
+                Geometry::BoxGeometry(BoxGeometry::new(4.0, 4.0, 4.0)),
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
             ],
         ));
 
-        let g = Geometry::CsgGeometry(csg_geometry(
+        let g = Geometry::CsgGeometry(CsgGeometry::new(
             CsgOp::Intersection,
             vec![
                 inner,
-                Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
+                Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
             ],
         ));
         assert_eq!(

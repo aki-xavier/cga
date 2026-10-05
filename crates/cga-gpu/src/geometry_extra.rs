@@ -616,10 +616,7 @@ pub fn cyclide_uv(p: CyclideParams, pos: &Array, _n: &Array) -> Array {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cga_core::{
-        csg_geometry, cyclide_geometry, dupin_cyclide, from_torus_inversion, motor_identity, point,
-        sphere_from_dual, CsgOp, DupinCyclide, Geometry,
-    };
+    use cga_core::{CsgGeometry, CsgOp, CyclideGeometry, DupinCyclide, Geometry, Multivector};
 
     const CGA_A: f64 = 1.0;
     const CGA_B: f64 = 0.98;
@@ -643,7 +640,7 @@ mod tests {
     }
 
     fn cga_cy() -> DupinCyclide {
-        dupin_cyclide(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0])
+        DupinCyclide::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0])
     }
 
     fn mod2pi(x: f64) -> f64 {
@@ -657,7 +654,7 @@ mod tests {
     }
 
     fn cyc_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, bool) {
-        let p = crate::geom_to_camera(g, &motor_identity());
+        let p = crate::geom_to_camera(g, &Multivector::identity());
         let oa = ray3(o[0], o[1], o[2]);
         let da = ray3(d[0], d[1], d[2]);
         let (t, _, mask) = crate::geom_intersect(&p, &oa, &da);
@@ -684,10 +681,13 @@ mod tests {
     fn test_cyclide_kind() {
         assert_eq!(cga_cy().kind(), "ring");
         assert_eq!(
-            dupin_cyclide(1.0, 0.6, 1.5, [0.0, 0.0, 0.0]).kind(),
+            DupinCyclide::new(1.0, 0.6, 1.5, [0.0, 0.0, 0.0]).kind(),
             "spindle"
         );
-        assert_eq!(dupin_cyclide(1.0, 0.6, 0.3, [0.0, 0.0, 0.0]).kind(), "horn");
+        assert_eq!(
+            DupinCyclide::new(1.0, 0.6, 0.3, [0.0, 0.0, 0.0]).kind(),
+            "horn"
+        );
     }
 
     #[test]
@@ -704,7 +704,7 @@ mod tests {
     fn test_cyclide_generator_sphere_is_blade() {
         let cy = cga_cy();
         let s = cy.generator_sphere(0.7);
-        let (ctr, r) = sphere_from_dual(&s);
+        let (ctr, r) = s.to_sphere();
         let sp = cy.spine(0.7);
         let rad = cy.radius(0.7);
         assert!((ctr[0] - sp[0]).abs() < 1e-5);
@@ -717,8 +717,8 @@ mod tests {
     fn test_cyclide_focal_spheres_are_blades() {
         let cy = cga_cy();
         let (s1, s2) = cy.focal_spheres();
-        let (c1, r1) = sphere_from_dual(&s1);
-        let (c2, r2) = sphere_from_dual(&s2);
+        let (c1, r1) = s1.to_sphere();
+        let (c2, r2) = s2.to_sphere();
         assert!((c1[0] - cga_c()).abs() < 1e-5);
         assert!(c1[1].abs() < 1e-5);
         assert!(c1[2].abs() < 1e-5);
@@ -757,7 +757,13 @@ mod tests {
                 center[2] + radius * (e1v[2] * t.cos() + e2v[2] * t.sin()),
             ];
             assert!(cy.implicit(p[0], p[1], p[2]).abs() < 1e-8);
-            assert!(point(p[0], p[1], p[2]).ip(&cc).scalar_part().abs() < 1e-6);
+            assert!(
+                Multivector::point(p[0], p[1], p[2])
+                    .ip(&cc)
+                    .scalar_part()
+                    .abs()
+                    < 1e-6
+            );
         }
     }
 
@@ -774,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_cyclide_from_torus_inversion() {
-        let cy = from_torus_inversion(2.0, 0.5, 1.0);
+        let cy = DupinCyclide::from_torus_inversion(2.0, 0.5, 1.0);
         assert_eq!(cy.kind(), "ring");
         let r_maj = 2.0;
         let r_min = 0.5;
@@ -794,7 +800,7 @@ mod tests {
     fn test_cyclide_inversion_versor() {
         let cy = cga_cy();
         for p in [[2.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-0.5, 0.25, 1.5]] {
-            let q = cy.invert_point(&point(p[0], p[1], p[2]));
+            let q = cy.invert_point(&Multivector::point(p[0], p[1], p[2]));
             let r2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
             let c = q.coords();
             assert!((c[0] - p[0] / r2).abs() < 1e-6);
@@ -805,7 +811,8 @@ mod tests {
 
     #[test]
     fn test_cyclide_ray_hits_implicit() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
         let (t, m) = cyc_hit(&g, [3.0, 0.0, 0.0], [-1.0, 0.0, 0.0]);
         assert!(m);
         let cy = cga_cy();
@@ -814,8 +821,9 @@ mod tests {
 
     #[test]
     fn test_cyclide_axis_ray_four_crossings() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &motor_identity());
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
         let (ts, _, valid) = crate::geom_crossings(&p, &ray3(3.0, 0.0, 0.0), &ray3(-1.0, 0.0, 0.0));
         valid.eval().unwrap();
         let v = valid.as_slice::<bool>().to_vec();
@@ -837,15 +845,17 @@ mod tests {
 
     #[test]
     fn test_cyclide_center_hole_ray_misses() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
         let (_, m) = cyc_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(!m);
     }
 
     #[test]
     fn test_cyclide_contains() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &motor_identity());
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
         let pos = Array::from_slice(&[1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0], &[3, 3]);
         let got = crate::geom_contains(&p, &pos);
         got.eval().unwrap();
@@ -854,8 +864,9 @@ mod tests {
 
     #[test]
     fn test_cyclide_shift() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [1.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &motor_identity());
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [1.0, 0.0, 0.0]));
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
         let pos = Array::from_slice(&[2.0f32, 0.0, 0.0, 1.0, 0.0, 0.0], &[2, 3]);
         let got = crate::geom_contains(&p, &pos);
         got.eval().unwrap();
@@ -864,8 +875,9 @@ mod tests {
 
     #[test]
     fn test_cyclide_bounds_contain_surface() {
-        let g = Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &motor_identity());
+        let g =
+            Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
         let b = crate::geom_bounds(&p).expect("no bounds");
         let bmin = b[0];
         let bmax = b[1];
@@ -885,11 +897,21 @@ mod tests {
 
     #[test]
     fn test_cyclide_csg_combines() {
-        let csg = csg_geometry(
+        let csg = CsgGeometry::new(
             CsgOp::Union,
             vec![
-                Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0])),
-                Geometry::CyclideGeometry(cyclide_geometry(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0])),
+                Geometry::CyclideGeometry(CyclideGeometry::new(
+                    CGA_A,
+                    CGA_B,
+                    CGA_D,
+                    [0.0, 0.0, 0.0],
+                )),
+                Geometry::CyclideGeometry(CyclideGeometry::new(
+                    CGA_A,
+                    CGA_B,
+                    CGA_D,
+                    [0.0, 0.0, 0.0],
+                )),
             ],
         );
         let (t, m) = cyc_hit(

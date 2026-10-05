@@ -1,10 +1,12 @@
+<!-- markdownlint-disable MD033 -->
+<!-- markdownlint-configure-file {"MD013": false} -->
 # cga — 共形几何代数 (Conformal Geometric Algebra)
 
 5D CGA 核心 + three.js 风格渲染引擎 + MLX/Metal GPU 批量光线追踪。**纯 Rust**，GPU 侧走 [`mlx-rs`](https://github.com/oxideai/mlx-rs)（Apple MLX 的 Rust 绑定，Metal 后端）。
 
 把欧氏 3D 嵌入共形空间（基 `{e1, e2, e3, e0, e∞}`），点 / 线 / 面 / 圆 / 球与刚体运动 (motor) 统一为代数元素：**场景里每个对象都是一个 CGA blade，相机是一次 versor 共轭，渲染就是对 blade 的 GPU 批量求交。**
 
-<p align="center"><img src="examples/engine/orbit.gif" width="580"></p>
+<p align="center"><img src="examples/engine/orbit.gif" width="580" alt="demo_engine 轨道动画"></p>
 <p align="center"><sub><code>demo_engine</code> 轨道动画 — 地面 / 红·蓝球 / 金柱 / 绿盒 / 紫圆盘 / 折射玻璃球 · 平行光+点光+环境光 · 硬阴影 · aa=2 超采样</sub></p>
 
 ## 渲染画廊
@@ -14,21 +16,21 @@ CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cg
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/orbit.png" width="440"><br>
+      <img src="examples/cgs/examples_cgs/orbit.png" width="440" alt="orbit.cgs 渲染图"><br>
       <sub><b>orbit.cgs</b> — 折射玻璃球 + 反射/漫反射多材质，测试金样场景</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/grid.png" width="440"><br>
+      <img src="examples/cgs/examples_cgs/grid.png" width="440" alt="grid.cgs 3×3 球阵"><br>
       <sub><b>grid.cgs</b> — <code>module</code> + <code>for</code> 的 3×3 球阵</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/building.png" width="440"><br>
+      <img src="examples/cgs/examples_cgs/building.png" width="440" alt="building.cgs 砖纹建筑"><br>
       <sub><b>building.cgs</b> — CSG 开真窗洞 + <code>map=</code> 砖纹</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/mechanical.png" width="440"><br>
+      <img src="examples/cgs/examples_cgs/mechanical.png" width="440" alt="mechanical.cgs 机械件"><br>
       <sub><b>mechanical.cgs</b> — 节圆阵列真钻孔 + 沉头锥孔 + 环面垫圈 + 齿阵列</sub>
     </td>
   </tr>
@@ -36,7 +38,7 @@ CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cg
 
 | 互操作 | 运动学 |
 | --- | --- |
-| <img src="examples/helmet/demo_helmet.png" width="360"><br><sub>glTF <code>DamagedHelmet.glb</code> 载入渲染</sub><br><img src="examples/gltf/demo_gltf.png" width="360"><br><sub>extrude L 形 → 存 <code>.glb</code> → 重载 → 渲染</sub> | <img src="examples/kinematics/kinematics.gif" width="360"><br><sub><code>demo_kinematics</code> — 齿轮副（16:8 → −1:2）· 曲柄滑块 · 螺旋 <code>M(s)=M₀·exp(s·log(M₀⁻¹M₁))</code>，全 Motor 直写</sub> |
+| <img src="examples/helmet/demo_helmet.png" width="360" alt="DamagedHelmet glTF 载入渲染"><br><sub>glTF <code>DamagedHelmet.glb</code> 载入渲染</sub><br><img src="examples/gltf/demo_gltf.png" width="360" alt="extrude L 形 glTF 往返渲染"><br><sub>extrude L 形 → 存 <code>.glb</code> → 重载 → 渲染</sub> | <img src="examples/kinematics/kinematics.gif" width="360" alt="demo_kinematics 运动学动画"><br><sub><code>demo_kinematics</code> — 齿轮副（16:8 → −1:2）· 曲柄滑块 · 螺旋 <code>M(s)=M₀·exp(s·log(M₀⁻¹M₁))</code>，全 Motor 直写</sub> |
 
 ## 架构
 
@@ -127,7 +129,7 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 
 **三个直接后果：**
 
-| <img src="examples/advantage/advantage_a.png" width="300"><br>① 无多边形 | <img src="examples/advantage/advantage_b.png" width="300"><br>② 无限几何 | <img src="examples/advantage/advantage_c.png" width="300"><br>③ 变换同构 |
+| <img src="examples/advantage/advantage_a.png" width="300" alt="无多边形对比图"><br>① 无多边形 | <img src="examples/advantage/advantage_b.png" width="300" alt="无限几何对比图"><br>② 无限几何 | <img src="examples/advantage/advantage_c.png" width="300" alt="变换同构对比图"><br>③ 变换同构 |
 | --- | --- | --- |
 | 球/圆柱无多边形，渲染质量不随相机距离恶化 | 无限平面、无限圆柱是代数对象自身属性，无需裁剪（b 图圆柱直抵地平线） | motor 与 blade 同类对象，无矩阵–四元数–轴角换算层 |
 
@@ -166,8 +168,8 @@ let out = cga_gpu::render_cgs_png(&text, ".", 640, 480, 2)?;
 std::fs::write("preview.png", out.png)?;
 
 // 网格烘焙：CSG → 三角网格（纯 CPU f64）
-let m = cga_core::bake(&world_params, 0.1)?;
-let v = cga_core::mesh_volume(&m.vertices, &m.faces);
+let m = world_params.bake(0.1)?;
+let v = m.volume();
 ```
 
 ## 场景代码
@@ -176,33 +178,33 @@ let v = cga_core::mesh_volume(&m.vertices, &m.faces);
 use cga_core::*;
 use cga_gpu::*;
 
-let mut scene = scene(None);
-scene.add_mesh(mesh(MeshParams {
-    geometry: Geometry::PlaneGeometry(plane_geometry([0.0, 1.0, 0.0], 0.0)),
-    material: standard_material(MaterialParams {
-        color: color_hex(0xB0B0B0), roughness: 0.7, metalness: 0.0,
-        emissive: color_hex(0x000000), opacity: 1.0, ior: 1.5, absorption: 0.0,
+let mut scene = Scene::new(None);
+scene.add_mesh(Mesh::new(MeshParams {
+    geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+    material: Material::standard(MaterialParams {
+        color: Color::from_hex(0xB0B0B0), roughness: 0.7, metalness: 0.0,
+        emissive: Color::from_hex(0x000000), opacity: 1.0, ior: 1.5, absorption: 0.0,
     }),
     position: [0.0, 0.0, 0.0], rotation_axis: [0.0, 0.0, 1.0],
     rotation_angle: 0.0, motor: None,
 }));                                          // 地面: 对偶平面 blade (y=0)
-scene.add_mesh(mesh(MeshParams {
-    geometry: Geometry::SphereGeometry(sphere_geometry(1.0)),
-    material: standard_material(MaterialParams {
-        color: color_hex(0xC0392B), roughness: 0.25, metalness: 0.25,
-        emissive: color_hex(0x000000), opacity: 1.0, ior: 1.5, absorption: 0.0,
+scene.add_mesh(Mesh::new(MeshParams {
+    geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+    material: Material::standard(MaterialParams {
+        color: Color::from_hex(0xC0392B), roughness: 0.25, metalness: 0.25,
+        emissive: Color::from_hex(0x000000), opacity: 1.0, ior: 1.5, absorption: 0.0,
     }),
     position: [0.0, 1.0, 0.0], rotation_axis: [0.0, 0.0, 1.0],
     rotation_angle: 0.0, motor: None,
 }));                                          // 球: 对偶球 blade, 半径即尺寸
-scene.add_light(directional_light(color_hex(0xFFFFFF), 0.38, [0.4, 1.0, 0.35]));
-scene.add_light(ambient_light(color_hex(0xFFFFFF), 0.34));
+scene.add_light(Light::directional(Color::from_hex(0xFFFFFF), 0.38, [0.4, 1.0, 0.35]));
+scene.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.34));
 
-let mut camera = perspective_camera(50.0, 4.0 / 3.0, 0.1, 100.0,
+let mut camera = PerspectiveCamera::new(50.0, 4.0 / 3.0, 0.1, 100.0,
     [0.0, 2.4, 6.2], [0.0, 0.8, 0.0], [0.0, 1.0, 0.0]);
 camera.look_at([0.0, 0.8, 0.0], None);
 
-let mut renderer = renderer(360, 270, 2, 3);
+let mut renderer = Renderer::new(360, 270, 2, 3);
 let img = renderer.render(scene, camera);       // (H, W, 4) uint8 RGBA
 save_frame_png("out.png", &img);
 ```
@@ -215,8 +217,8 @@ save_frame_png("out.png", &img);
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="examples/stereo/left.png" width="440"><br><sub>左图 <code>left.png</code></sub></td>
-    <td align="center" width="50%"><img src="examples/stereo/right.png" width="440"><br><sub>右图 <code>right.png</code>（仅 x 向基线位移）</sub></td>
+    <td align="center" width="50%"><img src="examples/stereo/left.png" width="440" alt="双目左图"><br><sub>左图 <code>left.png</code></sub></td>
+    <td align="center" width="50%"><img src="examples/stereo/right.png" width="440" alt="双目右图"><br><sub>右图 <code>right.png</code>（仅 x 向基线位移）</sub></td>
   </tr>
 </table>
 

@@ -1,10 +1,3 @@
-//! report_cgs: CGS file -> Scene Report on stdout (`docs/scene-report.md`).
-//!
-//! usage: report_cgs <file.cgs>
-//! Report generation itself is a total function; load errors and I/O failures
-//! go to stderr with exit(1) — a CLI choice, not part of the language error
-//! contract.
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {

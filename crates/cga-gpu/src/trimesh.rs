@@ -95,14 +95,14 @@ pub fn trimesh_uv(_p: &TrimeshParams, pos: &Array, _n: &Array) -> Array {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cga_core::{motor_identity, translator, trimesh_geometry, Geometry};
+    use cga_core::{Geometry, Multivector, TrimeshGeometry};
 
     fn tm_ray(x: f64, y: f64, z: f64) -> Array {
         Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
     }
 
     fn tm_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
-        let p = crate::geom_to_camera(g, &motor_identity());
+        let p = crate::geom_to_camera(g, &Multivector::identity());
         let (t, n, mask) =
             crate::geom_intersect(&p, &tm_ray(o[0], o[1], o[2]), &tm_ray(d[0], d[1], d[2]));
         t.eval().unwrap();
@@ -117,7 +117,7 @@ mod tests {
     }
 
     fn tm_triangle() -> Geometry {
-        Geometry::TrimeshGeometry(trimesh_geometry(
+        Geometry::TrimeshGeometry(TrimeshGeometry::new(
             &[[0.0, 0.0, 1.0], [2.0, 0.0, 1.0], [0.0, 2.0, 1.0]],
             &[[0, 1, 2]],
         ))
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_trimesh_nearest_of_two() {
-        let g = Geometry::TrimeshGeometry(trimesh_geometry(
+        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(
             &[
                 [0.0, 0.0, 1.0],
                 [2.0, 0.0, 1.0],
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_trimesh_translated_by_motor() {
         let g = tm_triangle();
-        let p = crate::geom_to_camera(&g, &translator([0.0, 0.0, 2.0]));
+        let p = crate::geom_to_camera(&g, &Multivector::translator([0.0, 0.0, 2.0]));
         let (t, _, mask) = crate::geom_intersect(
             &p,
             &tm_ray(2.0 / 3.0, 2.0 / 3.0, 5.0),
