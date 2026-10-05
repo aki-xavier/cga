@@ -16,6 +16,23 @@ struct Args {
     /// Samples per pixel (anti-aliasing)
     #[arg(default_value_t = 2)]
     aa: i32,
+    /// Pose override, repeatable: --set name=value
+    #[arg(long = "set", value_name = "NAME=VALUE")]
+    set: Vec<String>,
+}
+
+fn parse_pose(set: &[String]) -> Vec<(String, f64)> {
+    set.iter()
+        .map(|s| {
+            let (n, v) = s
+                .split_once('=')
+                .unwrap_or_else(|| panic!("--set expects NAME=VALUE, got {s}"));
+            let x: f64 = v
+                .parse()
+                .unwrap_or_else(|_| panic!("--set bad value in {s}"));
+            (n.to_string(), x)
+        })
+        .collect()
 }
 
 fn main() {
@@ -33,7 +50,9 @@ fn main() {
         Some(i) => &src[..i],
         None => src.as_str(),
     };
-    let (sc, mut cam) = cgs_load(&text, asset_root);
+    let (sc, mut cam) = cgs_pose(&text, asset_root, &parse_pose(&args.set))
+        .map(|r| (r.scene, r.camera))
+        .unwrap_or_else(|e| panic!("{e}"));
     cam.aspect = f64::from(w) / f64::from(h);
     let mut r = Renderer::new(w, h, aa, 3);
     let img = r.render(sc, cam);

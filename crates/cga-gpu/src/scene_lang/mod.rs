@@ -909,6 +909,17 @@ pub fn cgs_run(text: &str, asset_root: &str) -> CgsRun {
     }
 }
 
+/// Evaluate a CGS scene with pose overrides (docs/cgs-articulation.md P4).
+/// An override takes effect at the assignment point for a scope variable, or
+/// at the `joint` statement for a 1-DOF joint whose `q` is omitted.
+pub fn cgs_pose(
+    text: &str,
+    asset_root: &str,
+    overrides: &[(String, f64)],
+) -> Result<CgsRun, String> {
+    cgs_run_result_pose(text, asset_root, overrides)
+}
+
 pub(crate) fn csg_op_name(op: CsgOp) -> &'static str {
     match op {
         CsgOp::Union => "union",
@@ -2788,6 +2799,128 @@ mod tests {
                  joint(\"f\", type=\"prismatic\") sphere(r=0.02);"
             ),
             "CGS line 3: cam driven joint needs limit="
+        );
+    }
+
+    #[test]
+    fn test_p1_1_joint_rpy() {
+        use cga_core::transform_point;
+        // rpy=[0,0,pi/2] at [1,0,0]：关节系先平移再偏航 pi/2；点 [1,0,0] → [1,1,0]。
+        let k =
+            kin_of("joint(\"j\", type=\"revolute\", at=[1,0,0], rpy=[0,0,pi/2]) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [1.0, 0.0, 0.0]);
+        assert!(
+            (p[0] - 1.0).abs() < 1e-9 && (p[1] - 1.0).abs() < 1e-9,
+            "rpy: {p:?}"
+        );
+        assert_eq!(k.joints[0].rpy, [0.0, 0.0, std::f64::consts::FRAC_PI_2]);
+
+        // rpy 全零 ≡ 缺省（逐字节同报告）。
+        let ra =
+            crate::cgs_report("joint(\"j\", type=\"revolute\", q=0.3) sphere(r=0.1);", "").unwrap();
+        let rb = crate::cgs_report(
+            "joint(\"j\", type=\"revolute\", q=0.3, rpy=[0,0,0]) sphere(r=0.1);",
+            "",
+        )
+        .unwrap();
+        assert_eq!(ra, rb, "rpy=0 必须与缺省逐字节一致");
+
+        // rpy 非零进报告。
+        assert!(
+            rb.contains("q=0.3") && !rb.contains("rpy="),
+            "零 rpy 不进报告: {rb}"
+        );
+        let rc = crate::cgs_report(
+            "joint(\"j\", type=\"revolute\", q=0.3, rpy=[0,0,1.570796]) sphere(r=0.1);",
+            "",
+        )
+        .unwrap();
+        assert!(rc.contains("rpy=[0,0,1.570796]"), "{rc}");
+
+        // 元数错误。
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"fixed\", rpy=[0,0]) sphere(r=1);"),
+            "CGS line 1: joint.rpy must be [roll, pitch, yaw]"
+        );
+
+        // URDF 约定核验：rpy=[roll,0,0] 是绕 x 的 roll（固定轴）。
+        let k = kin_of("joint(\"j\", type=\"revolute\", rpy=[pi/2,0,0]) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [0.0, 1.0, 0.0]);
+        assert!((p[2] - 1.0).abs() < 1e-9, "roll 应把 y 转到 z: {p:?}");
+    }
+
+    #[test]
+    fn test_p4_pose_variable_override() {
+        let src = "theta = 0.5;\njoint(\"j\", type=\"revolute\", q=theta) sphere(r=0.1);";
+        let k = cgs_pose(src, "", &[("theta".to_string(), 1.0)])
+            .unwrap()
+            .kinematics;
+        assert!(
+            (k.joints[0].q[0] - 1.0).abs() < 1e-12,
+            "覆盖后 q=1: {}",
+            k.joints[0].q[0]
+        );
+        let rep = crate::cgs_report_pose(src, "", &[("theta".to_string(), 1.0)]).unwrap();
+        assert!(rep.contains("pose theta=1"), "{rep}");
+        assert!(rep.contains("q=1"), "{rep}");
+        // 无覆盖时报告无 pose 行。
+        let r0 = crate::cgs_report(src, "").unwrap();
+        assert!(!r0.contains("pose "), "{r0}");
+    }
+
+    #[test]
+    fn test_p4_pose_joint_override_and_gear_chain() {
+        // 关节级覆盖：q 省略时由 pose 提供；gear 链随动。
+        let src = "joint(\"a\", type=\"revolute\") sphere(r=0.1);\n\
+                   gear(\"a\", \"b\", ratio=-0.5);\n\
+                   joint(\"b\", type=\"prismatic\", axis=[0,0,1]) box(s=[0.1,0.1,0.1]);";
+        let k = cgs_pose(src, "", &[("a".to_string(), 0.8)])
+            .unwrap()
+            .kinematics;
+        assert!(
+            (k.joints[0].q[0] - 0.8).abs() < 1e-12,
+            "覆盖 a: {}",
+            k.joints[0].q[0]
+        );
+        assert!(
+            (k.joints[1].q[0] + 0.4).abs() < 1e-12,
+            "gear 随动：q_b = -0.5*0.8 = -0.4: {}",
+            k.joints[1].q[0]
+        );
+        // driven 关节禁止覆盖。
+        assert_eq!(
+            cgs_pose(src, "", &[("b".to_string(), 0.1)]).unwrap_err(),
+            "CGS line 3: joint b is driven by gear, q must be omitted"
+        );
+        // 覆盖 + 字面 q 并存报错。
+        assert_eq!(
+            cgs_pose(
+                "joint(\"j\", type=\"revolute\", q=0.3) sphere(r=0.1);",
+                "",
+                &[("j".to_string(), 0.5)]
+            )
+            .unwrap_err(),
+            "CGS line 1: joint j has a pose override, q must be omitted"
+        );
+        // 多 DOF 关节不可覆盖。
+        assert_eq!(
+            cgs_pose(
+                "joint(\"j\", type=\"spherical\") sphere(r=0.1);",
+                "",
+                &[("j".to_string(), 0.5)]
+            )
+            .unwrap_err(),
+            "CGS line 1: pose override needs a 1-DOF joint, got spherical"
+        );
+        // 覆盖过 limit。
+        assert_eq!(
+            cgs_pose(
+                "joint(\"j\", type=\"revolute\", limit=[-1,1]) sphere(r=0.1);",
+                "",
+                &[("j".to_string(), 2.0)]
+            )
+            .unwrap_err(),
+            "CGS line 1: joint j q=2.0 outside limit [-1.0, 1.0]"
         );
     }
 }

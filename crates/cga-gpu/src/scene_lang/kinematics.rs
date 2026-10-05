@@ -71,11 +71,14 @@ pub struct JointDef {
     pub kind: JointKind,
     pub axis: [f64; 3],
     pub at: [f64; 3],
+    pub rpy: [f64; 3],
     pub q: Vec<f64>,
     pub pitch: Option<f64>,
     pub limit: Option<[f64; 2]>,
     pub parent: Option<String>,
-    /// World transform of the child frame: ctx · T(at) · M(q).
+    /// Scene mesh indices emitted by this joint's body (link geometry).
+    pub meshes: Vec<usize>,
+    /// World transform of the child frame: ctx · T(at) · R(rpy) · M(q).
     pub world: [f64; 16],
 }
 
@@ -120,6 +123,22 @@ pub struct Kinematics {
     pub joints: Vec<JointDef>,
     pub gears: Vec<GearRel>,
     pub cams: Vec<CamSolved>,
+    /// Pose overrides that took effect (sorted by name), for the report.
+    pub pose: Vec<(String, f64)>,
+}
+
+/// URDF fixed-axis roll-pitch-yaw: R = Rz(yaw)·Ry(pitch)·Rx(roll).
+pub(crate) fn rpy4(rpy: [f64; 3]) -> [f64; 16] {
+    if rpy == [0.0, 0.0, 0.0] {
+        return mat4_identity();
+    }
+    mat4_mul(
+        Multivector::rotor([0.0, 0.0, 1.0], rpy[2]).to_matrix(),
+        mat4_mul(
+            Multivector::rotor([0.0, 1.0, 0.0], rpy[1]).to_matrix(),
+            Multivector::rotor([1.0, 0.0, 0.0], rpy[0]).to_matrix(),
+        ),
+    )
 }
 
 fn v3_add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

@@ -19,6 +19,7 @@ pub struct SceneLoader {
     kin: Kinematics,
     joint_stack: Vec<String>,
     driven_by: HashMap<String, Driven>,
+    pose: HashMap<String, f64>,
 }
 impl SceneLoader {
     fn peek(&self) -> CgsToken {
@@ -950,6 +951,18 @@ impl SceneLoader {
         if kind == JointKind::Helical && pitch.is_none() {
             return Err(format!("CGS line {line}: helical joint needs pitch="));
         }
+        let rpy: [f64; 3] = match kw.get("rpy") {
+            Some(v) => {
+                let l = flatten_val(v, line)?;
+                if l.len() != 3 {
+                    return Err(format!(
+                        "CGS line {line}: joint.rpy must be [roll, pitch, yaw]"
+                    ));
+                }
+                [l[0], l[1], l[2]]
+            }
+            None => [0.0, 0.0, 0.0],
+        };
         let driven = self.driven_by.remove(&name);
         let q = self.joint_q(
             &name,
@@ -977,17 +990,20 @@ impl SceneLoader {
             }
         }
         let m = joint_motion(&kind, axis, &q, pitch.unwrap_or(0.0));
-        let world = mat4_mul(mat4_mul(ctx, translate4(at)), m);
+        let frame = mat4_mul(translate4(at), rpy4(rpy));
+        let world = mat4_mul(mat4_mul(ctx, frame), m);
         let parent = self.joint_stack.last().cloned();
         self.kin.joints.push(JointDef {
             name: name.clone(),
             kind,
             axis,
             at,
+            rpy,
             q,
             pitch,
             limit,
             parent,
+            meshes: Vec::new(),
             world,
         });
         self.joint_stack.push(name);
@@ -1012,7 +1028,7 @@ impl SceneLoader {
     ) -> Result<Vec<f64>, String> {
         match driven {
             Some(Driven::Gear(rel)) => {
-                if q_raw.is_some() {
+                if q_raw.is_some() || self.pose.contains_key(name) {
                     return Err(format!(
                         "CGS line {line}: joint {name} is driven by gear, q must be omitted"
                     ));
@@ -1033,7 +1049,7 @@ impl SceneLoader {
                 Ok(vec![rel.ratio * dq + rel.offset])
             }
             Some(Driven::Cam(rel)) => {
-                if q_raw.is_some() {
+                if q_raw.is_some() || self.pose.contains_key(name) {
                     return Err(format!(
                         "CGS line {line}: joint {name} is driven by cam, q must be omitted"
                     ));
@@ -1079,6 +1095,20 @@ impl SceneLoader {
                         return Err(format!("CGS line {line}: fixed joint takes no q"));
                     }
                     return Ok(Vec::new());
+                }
+                if self.pose.contains_key(name) {
+                    if q_raw.is_some() {
+                        return Err(format!(
+                            "CGS line {line}: joint {name} has a pose override, q must be omitted"
+                        ));
+                    }
+                    if !kind.is_1dof() {
+                        return Err(format!(
+                            "CGS line {line}: pose override needs a 1-DOF joint, got {}",
+                            kind.name()
+                        ));
+                    }
+                    return Ok(vec![self.pose[name]]);
                 }
                 match q_raw {
                     None => Ok(vec![0.0; arity]),
@@ -1575,7 +1605,11 @@ impl SceneLoader {
             if self.peek1().kind == TokenKind::Assign {
                 self.take();
                 self.take();
-                let v = self.expr(scope, 1)?;
+                let mut v = self.expr(scope, 1)?;
+                // Pose override: takes effect at the assignment point.
+                if let Some(&o) = self.pose.get(name) {
+                    v = CgsValue::Num(o);
+                }
                 self.expect(TokenKind::Semi)?;
                 if name == "background" {
                     let c = cgs_num(&v, t.line, "background")?;
@@ -2228,6 +2262,15 @@ impl SceneLoader {
         Ok(merged)
     }
 
+    fn record_joint_mesh(&mut self) {
+        if let Some(jname) = self.joint_stack.last().cloned() {
+            let idx = self.scene.objects.len() - 1;
+            if let Some(j) = self.kin.joints.iter_mut().rev().find(|j| j.name == jname) {
+                j.meshes.push(idx);
+            }
+        }
+    }
+
     fn add_geometry(
         &mut self,
         geo: Geometry,
@@ -2253,6 +2296,7 @@ impl SceneLoader {
             rotation_angle: 0.0,
             motor: Some(motor),
         }));
+        self.record_joint_mesh();
         Ok(())
     }
 
@@ -2315,6 +2359,7 @@ impl SceneLoader {
             rotation_angle: 0.0,
             motor: Some(Multivector::identity()),
         }));
+        self.record_joint_mesh();
         Ok(())
     }
 
@@ -2659,6 +2704,14 @@ impl SceneLoader {
 }
 
 pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
+    cgs_run_result_pose(text, asset_root, &[])
+}
+
+pub fn cgs_run_result_pose(
+    text: &str,
+    asset_root: &str,
+    pose: &[(String, f64)],
+) -> Result<CgsRun, String> {
     let toks = cgs_lex(text)?;
     let mut l = SceneLoader {
         toks,
@@ -2676,6 +2729,7 @@ pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
         kin: Kinematics::default(),
         joint_stack: Vec::new(),
         driven_by: HashMap::new(),
+        pose: pose.iter().cloned().collect(),
     };
     let mut root_scope: HashMap<String, CgsValue> = HashMap::new();
     root_scope.insert("pi".to_string(), CgsValue::Num(std::f64::consts::PI));
@@ -2712,10 +2766,14 @@ pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
             (name, v)
         })
         .collect();
+    let mut kin = l.kin;
+    let mut ps: Vec<(String, f64)> = pose.to_vec();
+    ps.sort_by(|a, b| a.0.cmp(&b.0));
+    kin.pose = ps;
     Ok(CgsRun {
         scene: l.scene,
         camera: cam,
         tags,
-        kinematics: l.kin,
+        kinematics: kin,
     })
 }

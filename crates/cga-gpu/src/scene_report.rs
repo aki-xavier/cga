@@ -5,7 +5,8 @@ use crate::geom_kernels::geom_to_camera;
 use crate::scene::{Mesh, PerspectiveCamera, Scene};
 use crate::scene_graph::{vec3_unit, Color};
 use crate::scene_lang::{
-    cgs_run_result, csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry,
+    cgs_run_result, cgs_run_result_pose, csg_op_name, JointDef, Kinematics, TagInstance,
+    TagRegistry,
 };
 use crate::shading::{Light, LightKind, Material, MaterialKind};
 
@@ -273,6 +274,9 @@ fn fmt_joint(i: usize, j: &JointDef) -> String {
         fmt_vec3(j.axis),
         fmt_vec3(j.at)
     );
+    if j.rpy != [0.0, 0.0, 0.0] {
+        s.push_str(&format!(" rpy={}", fmt_vec3(j.rpy)));
+    }
     if let Some(p) = j.pitch {
         s.push_str(&format!(" pitch={}", fmt_num(p)));
     }
@@ -361,6 +365,9 @@ impl Scene {
                 fmt_num(c.q)
             ));
         }
+        for (name, v) in &kin.pose {
+            out.push_str(&format!("pose {}={}\n", escape_name(name), fmt_num(*v)));
+        }
         let mut summary = format!(
             "summary objects={} lights={} no_bounds={}",
             self.objects.len(),
@@ -390,6 +397,15 @@ impl Scene {
 
 pub fn cgs_report(text: &str, asset_root: &str) -> Result<String, String> {
     let run = cgs_run_result(text, asset_root)?;
+    Ok(run.scene.report(&run.camera, &run.tags, &run.kinematics))
+}
+
+pub fn cgs_report_pose(
+    text: &str,
+    asset_root: &str,
+    pose: &[(String, f64)],
+) -> Result<String, String> {
+    let run = cgs_run_result_pose(text, asset_root, pose)?;
     Ok(run.scene.report(&run.camera, &run.tags, &run.kinematics))
 }
 

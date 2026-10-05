@@ -10,6 +10,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 gltf = "1"
 
 inari = { version = "2.0.0", default-features = false }
+urdf-rs = "0.10.0"
 
 [lints]
 workspace = true

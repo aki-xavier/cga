@@ -61,5 +61,8 @@ pub mod certify;
 
 pub(crate) mod fallback;
 
+pub mod urdf;
+pub use urdf::*;
+
 #[cfg(test)]
 mod degenerate;

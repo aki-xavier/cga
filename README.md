@@ -86,7 +86,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 250 tests pass.
+   Result: all 260 tests pass.
 
 2. Render the smoke scene:
 
@@ -167,9 +167,11 @@ Statement dispatch is single-pass. The order is: **assignment first** (variables
 | **v3 P4** | Postfix method chains | `g.at([1,0,0]).rot([0,1,0], 45)` ≡ `rot(at(g, [1,0,0]), [0,1,0], 45)`. The receiver is inserted as the first argument. Pure desugaring. Error text is inherited verbatim. Recognized as an expression statement in statement position. |
 | **v3 P5** | Set selection `instances()` | `instances("hole") → List[Geom]`. `len` counts. `for` iterates. `if` filters. `center/lo/hi` aggregate. No SELECT/FROM/WHERE surface syntax is introduced. |
 | **v3 P6** | Inequality constraints | Equation bodies `== / <= / >= / < / >` enter the same GN least squares. Equality residual `u−v`. Inequality hinge `max(0, u−v)`: residual and gradient are 0 when satisfied; it only clips the feasible region. `!=` is rejected. Infeasibility still reports `did not converge` explicitly. |
-| **Joints P1** | Kinematic pair declarations | `joint("n", type=…, axis=…, at=…, q=…, limit=…)` — 8 types: revolute/continuous/prismatic/helical/cylindrical/spherical/planar/fixed. Child content poses as `ctx·T(at)·M(q)` with motors. Nested joints form the parent tree. Report emits one `joint` line per joint. |
+| **Joints P1** | Kinematic pair declarations | `joint("n", type=…, axis=…, at=…, rpy=…, q=…, limit=…)` — 8 types: revolute/continuous/prismatic/helical/cylindrical/spherical/planar/fixed. Child content poses as `ctx·T(at)·R(rpy)·M(q)` with motors. Nested joints form the parent tree. Report emits one `joint` line per joint. |
 | **Joints P2** | Gear coupling | `gear("driver", "driven", ratio=…, offset=…)` ≡ URDF `mimic` + ratio: `q_driven = ratio·q_driver + offset`. Driver first, driven later with q omitted (single-pass). 1-DOF joints only. |
 | **Joints P3** | Cam contact solving | `cam("driver", "driven", driver_profile=…, driven_profile=…)` solves the driven q so the profiles touch without penetration. Profiles: `circle`/`plane` blades, planar mechanisms only. No contact or multiple contacts are explicit errors. |
+| **Pose P4** | Pose overrides | `cgs_pose(text, root, overrides)` / `--set name=value`: variable overrides apply at the assignment point; joint overrides drive 1-DOF joints with q omitted. gear/cam chains re-derive. Report emits `pose name=value` lines. |
+| **URDF P5/P6** | URDF interop | `cgs_to_urdf` / `urdf_to_cgs` (urdf-rs). origin xyz/rpy ↔ `at`/`rpy` 1:1. gear ↔ `mimic`. helical/cylindrical/spherical decompose into 1-DOF series joints. Non-primitive link geometry bakes to watertight OBJ. `floating` is rejected explicitly. |
 | **Report** | Execution result text | `cgs_report(text, asset_root)` / `report_cgs` CLI: scene-level background/camera/light lines + one `object <i> …` line per object + `bounds` + geometry parameter tree + tag registry + joint/gear/cam lines + `summary`. Numbers normalized to six digits. Frames uniquified. Error contract **+0 lines**. |
 
 The gallery scene `assembly.cgs` (32 lines, `examples/cgs/assembly.cgs`) exercises every v2/v3 feature together: `constrain` solves hole positions → `drill` cuts through → `face` face centers mount posts → `instances` counts and erects the top beam.
@@ -356,6 +358,7 @@ crates/
     texture / image_io / shading / mesh_raster     textures, PNG, CPU raster compositing
     mesh_io_gltf            glTF/GLB read/write
     scene_lang / scene_report / cgs_gen / headless CGS language, report, generation, headless rendering
+    urdf                    URDF export/import (cgs_to_urdf / urdf_to_cgs, urdf-rs)
     renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction)
   cga-examples/             demo CLIs (src/bin/*.rs)
 examples/                   .cgs scenes (incl. primitives/affine/assembly/freeform) + assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
@@ -374,14 +377,14 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `demo_lang` | `examples/lang/{generated_flange.cgs, demo_lang.png, report.txt}` (generate → headless render → report) |
 | `demo_gltf` | `examples/gltf/demo_gltf.{glb,png}` |
 | `demo_helmet` | `examples/helmet/demo_helmet.png` |
-| `render_cgs <file.cgs> [out.png] [w h aa]` | CGS → PNG |
+| `render_cgs <file.cgs> [out.png] [w h aa] [--set name=value]` | CGS → PNG |
 | `bake_cgs <file.cgs> [out.obj\|out.glb] [step]` | CGS → triangle mesh (unbounded planes are skipped automatically) |
-| `report_cgs <file.cgs>` | CGS → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
+| `report_cgs <file.cgs> [--set name=value]` | CGS → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |
 
 ## Quality
 
-- `make test`: **all 250 tests pass** (cga-core 61 + cga-gpu 189, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, all CGS phases (v2 relational queries, drill face references, constrain solving, statement-boundary error contract; v3 P4–P6 goldens; joints P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving), scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/baked volume/CGS error contract), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
+- `make test`: **all 260 tests pass** (cga-core 61 + cga-gpu 199, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, all CGS phases (v2 relational queries, drill face references, constrain solving, statement-boundary error contract; v3 P4–P6 goldens; joints P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/baked volume/CGS error contract), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg goldens have **RMSE = 0**.
 
 ## License
