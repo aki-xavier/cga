@@ -962,6 +962,12 @@ fn validate_geometry_params(
                 return Err(format!("CGS line {line}: plane.n must not be zero"));
             }
         }
+        "torus" => {
+            let arc = cgs_arg_num(args, "arc");
+            if !(arc > 0.0) || arc > std::f64::consts::TAU {
+                return Err(format!("CGS line {line}: torus.arc must be in (0, 2*pi]"));
+            }
+        }
         "cyclide" => {
             let a = cgs_arg_num(args, "a");
             let b = cgs_arg_num(args, "b");
@@ -1126,6 +1132,9 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
         }
         "cylinder" => {
             m.insert("h".to_string(), CgsValue::Num(-1.0));
+        }
+        "torus" => {
+            m.insert("arc".to_string(), CgsValue::Num(std::f64::consts::TAU));
         }
         "bezier" => {
             m.insert("thickness".to_string(), CgsValue::Num(0.0));
@@ -2433,5 +2442,43 @@ mod tests {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"),
         );
         assert_eq!(sc.objects.len(), 3);
+    }
+
+    #[test]
+    fn test_cgs_torus_arc() {
+        // 省略 arc（或恰为 2π）→ 整环，行为与既有 torus 逐位一致
+        for src in [
+            "torus(R=1, r=0.3);",
+            "torus(R=1, r=0.3, arc=6.283185307179586);",
+        ] {
+            let (sc, _) = cgs_load(src, "");
+            let Geometry::TorusGeometry(t) = &sc.objects[0].geometry else {
+                panic!("expected torus")
+            };
+            assert_eq!(t.arc, std::f64::consts::TAU, "{src}");
+        }
+        // arc < 2π → 部分弧环管（tube）
+        for src in [
+            "torus(R=1, r=0.3, arc=4.2);",
+            "t = torus(R=1, r=0.3, arc=4.2); show(t);",
+            "torus(R=1, r=0.3, arc=4.2).at([0, 1, 0]);",
+        ] {
+            let (sc, _) = cgs_load(src, "");
+            let Geometry::TorusGeometry(t) = &sc.objects[0].geometry else {
+                panic!("expected torus")
+            };
+            assert_eq!(t.arc, 4.2, "{src}");
+        }
+        // 错误组
+        for src in [
+            "torus(R=1, r=0.3, arc=0);",
+            "torus(R=1, r=0.3, arc=-1);",
+            "torus(R=1, r=0.3, arc=7);",
+        ] {
+            let e = v2_err(src);
+            assert_eq!(e, "CGS line 1: torus.arc must be in (0, 2*pi]", "{src}");
+        }
+        let e = v2_err("torus(1, 0.3, 4.2);");
+        assert_eq!(e, "CGS line 1: torus too many positional args");
     }
 }

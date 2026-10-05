@@ -2069,7 +2069,19 @@ impl SceneLoader {
                     line,
                     "torus.r",
                 )?;
-                Ok(Geometry::TorusGeometry(TorusGeometry::new(r1, r2)))
+                let arc = cgs_num(
+                    &args
+                        .get("arc")
+                        .cloned()
+                        .unwrap_or(CgsValue::Num(std::f64::consts::TAU)),
+                    line,
+                    "torus.arc",
+                )?;
+                if arc >= std::f64::consts::TAU {
+                    Ok(Geometry::TorusGeometry(TorusGeometry::new(r1, r2)))
+                } else {
+                    Ok(Geometry::TorusGeometry(TorusGeometry::tube(r1, r2, arc)))
+                }
             }
             "cyclide" => {
                 let a = cgs_num(

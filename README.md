@@ -37,7 +37,7 @@ CGS 场景语言（`examples/cgs/*.cgs`）的八张输出，全部由 `render_cg
   <tr>
     <td align="center" width="50%">
       <img src="examples/cgs/examples_cgs/primitives.png" width="440" alt="primitives.cgs 图元全家福"><br>
-      <sub><b>primitives.cgs</b> — 图元全家福：sphere·box·cylinder·cone（blade）+ torus·ellipsoid·cyclide·circle（射线逆变换）</sub>
+      <sub><b>primitives.cgs</b> — 图元全家福：sphere·box·cylinder·cone（blade）+ torus·tube·ellipsoid·cyclide·circle（射线逆变换）</sub>
     </td>
     <td align="center" width="50%">
       <img src="examples/cgs/examples_cgs/affine.png" width="440" alt="affine.cgs 仿射扩展"><br>
@@ -72,7 +72,7 @@ CGS 场景语言（`examples/cgs/*.cgs`）的八张输出，全部由 `render_cg
 要求 Rust stable（1.8x+）、macOS Apple Silicon。`mlx-rs` 首次构建会编译 MLX C++ 核心（一次性，之后走缓存）：
 
 ```bash
-make test     # cargo test --workspace（235 个测试全过）
+make test     # cargo test --workspace（236 个测试全过）
 make run      # 渲染 smoke 场景 → render_smoke.png
 make fmt      # cargo fmt --all
 ```
@@ -101,7 +101,7 @@ camera(fov=50, position=[0, 2.4, 6.2], target=[0, 0.8, 0]);
 cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs orbit.png 640 480 2
 ```
 
-- **修饰符** `translate/rotate/scale/mirror/material` 作用于紧随语句或 `{}` 块，可嵌套；图元 `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/bezier/extrude/loft/mesh`（`bezier(points=16个[x,y,z], thickness=0, div=8)`：`thickness=0` 为渲染面，`>0` 为水密厚壳、可进 CSG/烘焙）。
+- **修饰符** `translate/rotate/scale/mirror/material` 作用于紧随语句或 `{}` 块，可嵌套；图元 `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/bezier/extrude/loft/mesh`（`bezier(points=16个[x,y,z], thickness=0, div=8)`：`thickness=0` 为渲染面，`>0` 为水密厚壳、可进 CSG/烘焙；`torus(R, r, arc=2π)`：`arc<2π` 为部分弧环管 tube）。
 - **语言能力** 变量/表达式/数学函数、`for+range`、`module`、`if-else`、`echo`、CSG `union/difference/intersection`；完整语法见 `crates/cga-gpu/src/scene_lang.rs` 文件头。
 - **列表取分量** `comp(list, i)`（不支持 `a[i]` 索引）。
 
@@ -159,7 +159,7 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 
 ![CSG 布尔并排：并 / 差 / 交](examples/csg/demo_csg.png)
 
-**新图元** — cone（凸体区间裁剪）/ torus（Durand–Kerner 解四次；`TorusGeometry::tube` 可画部分圆弧管）/ ellipsoid（= 仿射缩放球）/ cyclide（Dupin cyclide 四次曲面）。四者非 CGA blade，经射线逆变换接入（图：画廊 `primitives.cgs`）。
+**新图元** — cone（凸体区间裁剪）/ torus（Durand–Kerner 解四次；`arc<2π` 即部分弧环管 tube，CGS 与 Rust API 同源）/ ellipsoid（= 仿射缩放球）/ cyclide（Dupin cyclide 四次曲面）。四者非 CGA blade，经射线逆变换接入（图：画廊 `primitives.cgs`）。
 
 **仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解为 motor·linear，`rotate` 与 `scale/mirror` 任意嵌套顺序均正确（图：画廊 `affine.cgs` 的镜像对——偏心孔与角标球随体翻转）。
 
@@ -342,7 +342,7 @@ docs/                       架构图、机器人图、cgs-v2/v3、scene-report�
 
 ## 质量
 
-- `make test`：**235 个测试全过**（cga-core 62 + cga-gpu 173，无 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作（绕数分类：开网格、整体反向、分块一致性）/ CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 + Bézier 补丁叶（求值/弦高界/水密壳/CSG/烘焙体积/CGS 错误契约）/ 烘焙体积与水密拓扑（边界边/非流形边/欧拉示性数）金样。
+- `make test`：**236 个测试全过**（cga-core 62 + cga-gpu 174，无 `#[ignore]`）——代数恒等式 / 图元关联判据 / versor·exp-log 往返 / 抗锯齿 / 引擎渲染定量 / CSG / 仿射 / 新图元 / cyclide / 网格互操作（绕数分类：开网格、整体反向、分块一致性）/ CGS 全阶段（v2 关联查询、drill 面引用、constrain 求解、语句边界错误契约；v3 P4–P6 金样）/ Scene Report / 自由曲面退化用例库 + 区间分类 + 可证明求根 + Bézier 补丁叶（求值/弦高界/水密壳/CSG/烘焙体积/CGS 错误契约）/ 烘焙体积与水密拓扑（边界边/非流形边/欧拉示性数）金样。
 - 渲染金样写入 `artifacts/tests/`（gitignored），sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg 金样 **RMSE = 0**。
 
 ## License
