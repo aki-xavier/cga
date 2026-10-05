@@ -86,7 +86,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 242 tests pass.
+   Result: all 250 tests pass.
 
 2. Render the smoke scene:
 
@@ -143,7 +143,7 @@ Rules:
 
 Error text is deterministic line-by-line text. An LLM can assert it directly.
 
-Statement dispatch is single-pass. The order is: **assignment first** (variables may shadow keywords; `echo = 5;` is legal) → `module/for/if/echo/show/tag/drill/var/constrain` → CSG → statement modifiers → attribute statements → primitives. `background = 0x2B3138;` is equivalent to `background(color=0x2B3138);`.
+Statement dispatch is single-pass. The order is: **assignment first** (variables may shadow keywords; `echo = 5;` is legal) → `module/for/if/echo/show/tag/drill/var/constrain/joint/gear/cam` → CSG → statement modifiers → attribute statements → primitives. `background = 0x2B3138;` is equivalent to `background(color=0x2B3138);`.
 
 | Misuse | Canonical error text |
 | --- | --- |
@@ -167,7 +167,10 @@ Statement dispatch is single-pass. The order is: **assignment first** (variables
 | **v3 P4** | Postfix method chains | `g.at([1,0,0]).rot([0,1,0], 45)` ≡ `rot(at(g, [1,0,0]), [0,1,0], 45)`. The receiver is inserted as the first argument. Pure desugaring. Error text is inherited verbatim. Recognized as an expression statement in statement position. |
 | **v3 P5** | Set selection `instances()` | `instances("hole") → List[Geom]`. `len` counts. `for` iterates. `if` filters. `center/lo/hi` aggregate. No SELECT/FROM/WHERE surface syntax is introduced. |
 | **v3 P6** | Inequality constraints | Equation bodies `== / <= / >= / < / >` enter the same GN least squares. Equality residual `u−v`. Inequality hinge `max(0, u−v)`: residual and gradient are 0 when satisfied; it only clips the feasible region. `!=` is rejected. Infeasibility still reports `did not converge` explicitly. |
-| **Report** | Execution result text | `cgs_report(text, asset_root)` / `report_cgs` CLI: scene-level background/camera/light lines + one `object <i> …` line per object + `bounds` + geometry parameter tree + tag registry + `summary`. Numbers normalized to six digits. Frames uniquified. Error contract **+0 lines**. |
+| **Joints P1** | Kinematic pair declarations | `joint("n", type=…, axis=…, at=…, q=…, limit=…)` — 8 types: revolute/continuous/prismatic/helical/cylindrical/spherical/planar/fixed. Child content poses as `ctx·T(at)·M(q)` with motors. Nested joints form the parent tree. Report emits one `joint` line per joint. |
+| **Joints P2** | Gear coupling | `gear("driver", "driven", ratio=…, offset=…)` ≡ URDF `mimic` + ratio: `q_driven = ratio·q_driver + offset`. Driver first, driven later with q omitted (single-pass). 1-DOF joints only. |
+| **Joints P3** | Cam contact solving | `cam("driver", "driven", driver_profile=…, driven_profile=…)` solves the driven q so the profiles touch without penetration. Profiles: `circle`/`plane` blades, planar mechanisms only. No contact or multiple contacts are explicit errors. |
+| **Report** | Execution result text | `cgs_report(text, asset_root)` / `report_cgs` CLI: scene-level background/camera/light lines + one `object <i> …` line per object + `bounds` + geometry parameter tree + tag registry + joint/gear/cam lines + `summary`. Numbers normalized to six digits. Frames uniquified. Error contract **+0 lines**. |
 
 The gallery scene `assembly.cgs` (32 lines, `examples/cgs/assembly.cgs`) exercises every v2/v3 feature together: `constrain` solves hole positions → `drill` cuts through → `face` face centers mount posts → `instances` counts and erects the top beam.
 
@@ -378,7 +381,7 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 
 ## Quality
 
-- `make test`: **all 242 tests pass** (cga-core 61 + cga-gpu 181, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, all CGS phases (v2 relational queries, drill face references, constrain solving, statement-boundary error contract; v3 P4–P6 goldens), scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/baked volume/CGS error contract), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
+- `make test`: **all 250 tests pass** (cga-core 61 + cga-gpu 189, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, all CGS phases (v2 relational queries, drill face references, constrain solving, statement-boundary error contract; v3 P4–P6 goldens; joints P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving), scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/baked volume/CGS error contract), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg goldens have **RMSE = 0**.
 
 ## License

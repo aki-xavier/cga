@@ -4,7 +4,9 @@ use std::f64::consts::PI;
 use crate::geom_kernels::geom_to_camera;
 use crate::scene::{Mesh, PerspectiveCamera, Scene};
 use crate::scene_graph::{vec3_unit, Color};
-use crate::scene_lang::{cgs_run_result, csg_op_name, TagInstance, TagRegistry};
+use crate::scene_lang::{
+    cgs_run_result, csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry,
+};
 use crate::shading::{Light, LightKind, Material, MaterialKind};
 
 fn fmt_num(v: f64) -> String {
@@ -252,8 +254,41 @@ fn fmt_instance(name: &str, j: usize, inst: &TagInstance) -> String {
     format!("tag \"{}\" {j} {prefix}{geom};", escape_name(name))
 }
 
+fn fmt_joint(i: usize, j: &JointDef) -> String {
+    let parent = match &j.parent {
+        Some(p) => format!("\"{}\"", escape_name(p)),
+        None => "none".to_string(),
+    };
+    let q = if j.q.len() == 1 {
+        fmt_num(j.q[0])
+    } else {
+        let parts: Vec<String> = j.q.iter().map(|x| fmt_num(*x)).collect();
+        format!("[{}]", parts.join(","))
+    };
+    let mut s = format!(
+        "joint {i} \"{}\" type={} parent={} axis={} at={} q={q}",
+        escape_name(&j.name),
+        j.kind.name(),
+        parent,
+        fmt_vec3(j.axis),
+        fmt_vec3(j.at)
+    );
+    if let Some(p) = j.pitch {
+        s.push_str(&format!(" pitch={}", fmt_num(p)));
+    }
+    if let Some([lo, hi]) = j.limit {
+        s.push_str(&format!(" limit=[{},{}]", fmt_num(lo), fmt_num(hi)));
+    }
+    s
+}
+
 impl Scene {
-    pub fn report(&self, camera: &PerspectiveCamera, tags: &TagRegistry) -> String {
+    pub fn report(
+        &self,
+        camera: &PerspectiveCamera,
+        tags: &TagRegistry,
+        kin: &Kinematics,
+    ) -> String {
         let mut out = String::new();
         out.push_str("scene version=1\n");
         out.push_str(&format!(
@@ -305,12 +340,41 @@ impl Scene {
                 out.push('\n');
             }
         }
+        for (i, j) in kin.joints.iter().enumerate() {
+            out.push_str(&fmt_joint(i, j));
+            out.push('\n');
+        }
+        for (i, g) in kin.gears.iter().enumerate() {
+            out.push_str(&format!(
+                "gear {i} driver=\"{}\" driven=\"{}\" ratio={} offset={}\n",
+                escape_name(&g.driver),
+                escape_name(&g.driven),
+                fmt_num(g.ratio),
+                fmt_num(g.offset)
+            ));
+        }
+        for (i, c) in kin.cams.iter().enumerate() {
+            out.push_str(&format!(
+                "cam {i} driver=\"{}\" driven=\"{}\" q={}\n",
+                escape_name(&c.driver),
+                escape_name(&c.driven),
+                fmt_num(c.q)
+            ));
+        }
         let mut summary = format!(
             "summary objects={} lights={} no_bounds={}",
             self.objects.len(),
             self.lights.len(),
             no_bounds
         );
+        if !kin.joints.is_empty() || !kin.gears.is_empty() || !kin.cams.is_empty() {
+            summary.push_str(&format!(
+                " joints={} gears={} cams={}",
+                kin.joints.len(),
+                kin.gears.len(),
+                kin.cams.len()
+            ));
+        }
         if any_bounds {
             summary.push_str(&format!(
                 " bbox_lo={} bbox_hi={}",
@@ -326,7 +390,7 @@ impl Scene {
 
 pub fn cgs_report(text: &str, asset_root: &str) -> Result<String, String> {
     let run = cgs_run_result(text, asset_root)?;
-    Ok(run.scene.report(&run.camera, &run.tags))
+    Ok(run.scene.report(&run.camera, &run.tags, &run.kinematics))
 }
 
 #[cfg(test)]
@@ -577,7 +641,7 @@ emissive=0x00FF00, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
             rotation_angle: 0.0,
             motor: None,
         }));
-        let rep = sc.report(&cam(), &TagRegistry::new());
+        let rep = sc.report(&cam(), &TagRegistry::new(), &Kinematics::default());
         assert_has(
             &rep,
             &format!(

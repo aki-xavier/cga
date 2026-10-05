@@ -15,6 +15,10 @@ pub struct SceneLoader {
     named: HashMap<String, Vec<Inst>>,
 
     pending: Vec<(String, [f64; 16])>,
+
+    kin: Kinematics,
+    joint_stack: Vec<String>,
+    driven_by: HashMap<String, Driven>,
 }
 impl SceneLoader {
     fn peek(&self) -> CgsToken {
@@ -876,6 +880,324 @@ impl SceneLoader {
         Ok(())
     }
 
+    fn joint_stmt(
+        &mut self,
+        ctx: [f64; 16],
+        mat: &HashMap<String, CgsValue>,
+        scope: &mut HashMap<String, CgsValue>,
+        line: i32,
+    ) -> Result<(), String> {
+        self.take();
+        let (pos, kw) = self.call_args(scope)?;
+        let name = match pos.as_slice() {
+            [CgsValue::Str(s)] => s.clone(),
+            _ => return Err(format!("CGS line {line}: joint needs a name string")),
+        };
+        let type_err = || {
+            format!(
+                "CGS line {line}: joint.type must be \"revolute\", \"continuous\", \"prismatic\", \"helical\", \"cylindrical\", \"spherical\", \"planar\" or \"fixed\""
+            )
+        };
+        let kind = match kw.get("type") {
+            Some(CgsValue::Str(s)) => JointKind::parse(s).ok_or_else(type_err)?,
+            _ => return Err(type_err()),
+        };
+        if self.kin.joints.iter().any(|j| j.name == name) {
+            return Err(format!("CGS line {line}: duplicate joint name {name}"));
+        }
+        let axis_raw = cgs_vec3(
+            &kw.get("axis").cloned().unwrap_or(CgsValue::List(vec![
+                CgsValue::Num(0.0),
+                CgsValue::Num(0.0),
+                CgsValue::Num(1.0),
+            ])),
+            line,
+            "joint.axis",
+        )?;
+        let an =
+            (axis_raw[0] * axis_raw[0] + axis_raw[1] * axis_raw[1] + axis_raw[2] * axis_raw[2])
+                .sqrt();
+        if an < 1e-12 {
+            return Err(format!("CGS line {line}: joint.axis must be nonzero"));
+        }
+        let axis = [axis_raw[0] / an, axis_raw[1] / an, axis_raw[2] / an];
+        let at = cgs_vec3(
+            &kw.get("at").cloned().unwrap_or(CgsValue::List(vec![
+                CgsValue::Num(0.0),
+                CgsValue::Num(0.0),
+                CgsValue::Num(0.0),
+            ])),
+            line,
+            "joint.at",
+        )?;
+        let limit: Option<[f64; 2]> = match kw.get("limit") {
+            Some(v) => {
+                let l = flatten_val(v, line)?;
+                if l.len() != 2 {
+                    return Err(format!("CGS line {line}: joint.limit must be [lo, hi]"));
+                }
+                Some([l[0], l[1]])
+            }
+            None => None,
+        };
+        if kind == JointKind::Continuous && limit.is_some() {
+            return Err(format!("CGS line {line}: continuous joint takes no limit"));
+        }
+        let pitch = match kw.get("pitch") {
+            Some(v) => Some(cgs_num(v, line, "joint.pitch")?),
+            None => None,
+        };
+        if kind == JointKind::Helical && pitch.is_none() {
+            return Err(format!("CGS line {line}: helical joint needs pitch="));
+        }
+        let driven = self.driven_by.remove(&name);
+        let q = self.joint_q(
+            &name,
+            &kind,
+            kw.get("q"),
+            driven,
+            limit,
+            pitch,
+            ctx,
+            axis,
+            at,
+            line,
+        )?;
+        if kind.is_1dof() {
+            if let Some([lo, hi]) = limit {
+                let x = q[0];
+                if x < lo || x > hi {
+                    return Err(format!(
+                        "CGS line {line}: joint {name} q={} outside limit [{}, {}]",
+                        fmt_f64(x),
+                        fmt_f64(lo),
+                        fmt_f64(hi)
+                    ));
+                }
+            }
+        }
+        let m = joint_motion(&kind, axis, &q, pitch.unwrap_or(0.0));
+        let world = mat4_mul(mat4_mul(ctx, translate4(at)), m);
+        let parent = self.joint_stack.last().cloned();
+        self.kin.joints.push(JointDef {
+            name: name.clone(),
+            kind,
+            axis,
+            at,
+            q,
+            pitch,
+            limit,
+            parent,
+            world,
+        });
+        self.joint_stack.push(name);
+        let r = self.body(world, mat, scope, line);
+        self.joint_stack.pop();
+        r
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn joint_q(
+        &mut self,
+        name: &str,
+        kind: &JointKind,
+        q_raw: Option<&CgsValue>,
+        driven: Option<Driven>,
+        limit: Option<[f64; 2]>,
+        pitch: Option<f64>,
+        ctx: [f64; 16],
+        axis: [f64; 3],
+        at: [f64; 3],
+        line: i32,
+    ) -> Result<Vec<f64>, String> {
+        match driven {
+            Some(Driven::Gear(rel)) => {
+                if q_raw.is_some() {
+                    return Err(format!(
+                        "CGS line {line}: joint {name} is driven by gear, q must be omitted"
+                    ));
+                }
+                if !kind.is_1dof() {
+                    return Err(format!(
+                        "CGS line {line}: gear needs 1-DOF joints, got {}",
+                        kind.name()
+                    ));
+                }
+                let dq = self
+                    .kin
+                    .joints
+                    .iter()
+                    .find(|j| j.name == rel.driver)
+                    .map(|j| j.q[0])
+                    .unwrap_or(0.0);
+                Ok(vec![rel.ratio * dq + rel.offset])
+            }
+            Some(Driven::Cam(rel)) => {
+                if q_raw.is_some() {
+                    return Err(format!(
+                        "CGS line {line}: joint {name} is driven by cam, q must be omitted"
+                    ));
+                }
+                if !kind.is_1dof() {
+                    return Err(format!(
+                        "CGS line {line}: cam needs a 1-DOF driven joint, got {}",
+                        kind.name()
+                    ));
+                }
+                let [lo, hi] = limit
+                    .ok_or_else(|| format!("CGS line {line}: cam driven joint needs limit="))?;
+                let driver = self
+                    .kin
+                    .joints
+                    .iter()
+                    .find(|j| j.name == rel.driver)
+                    .cloned()
+                    .ok_or_else(|| format!("CGS line {line}: unknown joint {}", rel.driver))?;
+                let q = cam_solve(
+                    &rel,
+                    &driver,
+                    ctx,
+                    kind,
+                    axis,
+                    at,
+                    pitch.unwrap_or(0.0),
+                    lo,
+                    hi,
+                    line,
+                )?;
+                self.kin.cams.push(CamSolved {
+                    driver: rel.driver.clone(),
+                    driven: name.to_string(),
+                    q,
+                });
+                Ok(vec![q])
+            }
+            None => {
+                let arity = kind.q_arity();
+                if arity == 0 {
+                    if q_raw.is_some() {
+                        return Err(format!("CGS line {line}: fixed joint takes no q"));
+                    }
+                    return Ok(Vec::new());
+                }
+                match q_raw {
+                    None => Ok(vec![0.0; arity]),
+                    Some(v) => {
+                        let bad = || {
+                            format!(
+                                "CGS line {line}: {} joint q must be {}",
+                                kind.name(),
+                                kind.q_shape()
+                            )
+                        };
+                        if arity == 1 {
+                            match v {
+                                CgsValue::Num(x) => Ok(vec![*x]),
+                                _ => Err(bad()),
+                            }
+                        } else {
+                            let l = flatten_val(v, line)?;
+                            if l.len() != arity {
+                                return Err(bad());
+                            }
+                            Ok(l)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn gear_stmt(&mut self, scope: &HashMap<String, CgsValue>, line: i32) -> Result<(), String> {
+        self.take();
+        let (pos, kw) = self.call_args(scope)?;
+        let names_err = || format!("CGS line {line}: gear takes (driver, driven) name strings");
+        let (driver, driven) = match pos.as_slice() {
+            [CgsValue::Str(a), CgsValue::Str(b)] => (a.clone(), b.clone()),
+            _ => return Err(names_err()),
+        };
+        let ratio = match kw.get("ratio") {
+            Some(v) => cgs_num(v, line, "gear.ratio")?,
+            None => return Err(format!("CGS line {line}: gear needs ratio=")),
+        };
+        let offset = match kw.get("offset") {
+            Some(v) => cgs_num(v, line, "gear.offset")?,
+            None => 0.0,
+        };
+        self.expect(TokenKind::Semi)?;
+        let dj = self
+            .kin
+            .joints
+            .iter()
+            .find(|j| j.name == driver)
+            .ok_or_else(|| format!("CGS line {line}: unknown joint {driver}"))?;
+        if !dj.kind.is_1dof() {
+            return Err(format!(
+                "CGS line {line}: gear needs 1-DOF joints, got {}",
+                dj.kind.name()
+            ));
+        }
+        if self.kin.joints.iter().any(|j| j.name == driven) {
+            return Err(format!(
+                "CGS line {line}: gear must precede the driven joint {driven}"
+            ));
+        }
+        if self.driven_by.contains_key(&driven) {
+            return Err(format!("CGS line {line}: joint {driven} is already driven"));
+        }
+        let rel = GearRel {
+            driver,
+            driven: driven.clone(),
+            ratio,
+            offset,
+        };
+        self.driven_by.insert(driven, Driven::Gear(rel.clone()));
+        self.kin.gears.push(rel);
+        Ok(())
+    }
+
+    fn cam_stmt(&mut self, scope: &HashMap<String, CgsValue>, line: i32) -> Result<(), String> {
+        self.take();
+        let (pos, kw) = self.call_args(scope)?;
+        let names_err = || format!("CGS line {line}: cam takes (driver, driven) name strings");
+        let (driver, driven) = match pos.as_slice() {
+            [CgsValue::Str(a), CgsValue::Str(b)] => (a.clone(), b.clone()),
+            _ => return Err(names_err()),
+        };
+        let dp = match kw.get("driver_profile") {
+            Some(v) => geom_val(v, line, "driver_profile")?,
+            None => return Err(format!("CGS line {line}: cam needs driver_profile=")),
+        };
+        let fp = match kw.get("driven_profile") {
+            Some(v) => geom_val(v, line, "driven_profile")?,
+            None => return Err(format!("CGS line {line}: cam needs driven_profile=")),
+        };
+        let driver_profile = cam_profile_of(&dp, line)?;
+        let driven_profile = cam_profile_of(&fp, line)?;
+        self.expect(TokenKind::Semi)?;
+        if !self.kin.joints.iter().any(|j| j.name == driver) {
+            return Err(format!("CGS line {line}: unknown joint {driver}"));
+        }
+        if self.kin.joints.iter().any(|j| j.name == driven) {
+            return Err(format!(
+                "CGS line {line}: cam must precede the driven joint {driven}"
+            ));
+        }
+        if self.driven_by.contains_key(&driven) {
+            return Err(format!("CGS line {line}: joint {driven} is already driven"));
+        }
+        self.driven_by.insert(
+            driven.clone(),
+            Driven::Cam(CamRel {
+                driver,
+                driven,
+                driver_profile,
+                driven_profile,
+            }),
+        );
+        Ok(())
+    }
+
     fn var_stmt(&mut self, scope: &mut HashMap<String, CgsValue>, line: i32) -> Result<(), String> {
         self.take();
         let nt = self.take();
@@ -1309,6 +1631,18 @@ impl SceneLoader {
             }
             if name == "constrain" {
                 self.constrain_stmt(scope, t.line)?;
+                return Ok(());
+            }
+            if name == "joint" {
+                self.joint_stmt(ctx, mat, scope, t.line)?;
+                return Ok(());
+            }
+            if name == "gear" {
+                self.gear_stmt(scope, t.line)?;
+                return Ok(());
+            }
+            if name == "cam" {
+                self.cam_stmt(scope, t.line)?;
                 return Ok(());
             }
             if name == "union" || name == "difference" || name == "intersection" {
@@ -2339,6 +2673,9 @@ pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
         collecting: false,
         named: HashMap::new(),
         pending: Vec::new(),
+        kin: Kinematics::default(),
+        joint_stack: Vec::new(),
+        driven_by: HashMap::new(),
     };
     let mut root_scope: HashMap<String, CgsValue> = HashMap::new();
     root_scope.insert("pi".to_string(), CgsValue::Num(std::f64::consts::PI));
@@ -2379,5 +2716,6 @@ pub fn cgs_run_result(text: &str, asset_root: &str) -> Result<CgsRun, String> {
         scene: l.scene,
         camera: cam,
         tags,
+        kinematics: l.kin,
     })
 }

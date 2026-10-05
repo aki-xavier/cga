@@ -40,6 +40,8 @@ pub mod tag_instance;
 pub use self::tag_instance::*;
 pub mod cgs_run;
 pub use self::cgs_run::*;
+pub mod kinematics;
+pub use self::kinematics::*;
 
 fn punct_kind(ch: u8) -> TokenKind {
     match ch {
@@ -583,6 +585,9 @@ fn is_statement_only_fn(name: &str) -> bool {
             | "drill"
             | "var"
             | "constrain"
+            | "joint"
+            | "gear"
+            | "cam"
             | "module"
             | "for"
             | "if"
@@ -1431,8 +1436,8 @@ mod tests {
         assert_eq!(sa.objects.len(), 1);
         assert_eq!(sb.objects.len(), 1);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
     }
 
@@ -1486,8 +1491,8 @@ mod tests {
         assert_eq!(sa.objects.len(), 2);
         assert_eq!(sb.objects.len(), 2);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
     }
 
@@ -1503,8 +1508,8 @@ mod tests {
         );
         assert_eq!(sa.objects.len(), 2);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
     }
 
@@ -1533,8 +1538,8 @@ mod tests {
         assert_eq!(sa.objects.len(), 6);
         assert_eq!(sb.objects.len(), 6);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
     }
 
@@ -1590,8 +1595,8 @@ mod tests {
         assert_eq!(sa.objects.len(), 4);
         assert_eq!(sb.objects.len(), 4);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
         let (sc, _) = cgs_load(
             &format!(
@@ -1616,8 +1621,8 @@ mod tests {
         );
         assert_eq!(sa.objects.len(), 2);
         assert_eq!(
-            sa.report(&ca, &TagRegistry::new()),
-            sb.report(&cb, &TagRegistry::new())
+            sa.report(&ca, &TagRegistry::new(), &Kinematics::default()),
+            sb.report(&cb, &TagRegistry::new(), &Kinematics::default())
         );
         let e = v2_err("tag(\"plate\") box(s=[1,1,2]);\nv = face(\"plate\");");
         assert!(e.contains("face needs 2 argument(s)"), "{e}");
@@ -2480,5 +2485,309 @@ mod tests {
         }
         let e = v2_err("torus(1, 0.3, 4.2);");
         assert_eq!(e, "CGS line 1: torus too many positional args");
+    }
+
+    // ---- joint / gear / cam (docs/cgs-joint.md P1–P3) ----
+
+    fn kin_of(src: &str) -> Kinematics {
+        cgs_run_result(src, "")
+            .expect("unexpected error")
+            .kinematics
+    }
+
+    #[test]
+    fn test_p1_joint_six_kinds_pose() {
+        use cga_core::transform_point;
+        // revolute: q=pi/2 about z at [1,0,0]; child frame origin maps to at.
+        let k = kin_of(
+            "joint(\"j\", type=\"revolute\", axis=[0,0,1], at=[1,0,0], q=pi/2) sphere(r=0.1);",
+        );
+        let w = k.joints[0].world;
+        assert!(
+            (w[3] - 1.0).abs() < 1e-9 && w[7].abs() < 1e-9,
+            "锚点: {w:?}"
+        );
+        let p = transform_point(w, [1.0, 0.0, 0.0]);
+        assert!(
+            (p[0] - 1.0).abs() < 1e-9 && (p[1] - 1.0).abs() < 1e-9,
+            "旋转: {p:?}"
+        );
+
+        // prismatic: axis z, q=2.
+        let k = kin_of("joint(\"j\", type=\"prismatic\", axis=[0,0,1], q=2) sphere(r=0.1);");
+        assert!(
+            (kin_of("joint(\"j\", type=\"prismatic\", axis=[0,0,1], q=2) sphere(r=0.1);").joints
+                [0]
+            .world[11]
+                - 2.0)
+                .abs()
+                < 1e-9
+        );
+        let _ = k;
+
+        // helical: pitch=0.1, q=pi → 转 pi + 移 0.1pi。
+        let k =
+            kin_of("joint(\"j\", type=\"helical\", axis=[0,0,1], pitch=0.1, q=pi) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [1.0, 0.0, 0.0]);
+        assert!((p[0] + 1.0).abs() < 1e-9, "螺旋转: {p:?}");
+        assert!(
+            (p[2] - 0.1 * std::f64::consts::PI).abs() < 1e-9,
+            "螺旋转移: {p:?}"
+        );
+
+        // cylindrical: q=[qr, qp] = [0, 0.2] → 纯移 0.2。
+        let k =
+            kin_of("joint(\"j\", type=\"cylindrical\", axis=[0,0,1], q=[0, 0.2]) sphere(r=0.1);");
+        assert!((k.joints[0].world[11] - 0.2).abs() < 1e-9);
+
+        // spherical: rx=pi/2 → [0,1,0] 映到 [0,0,1]。
+        let k = kin_of("joint(\"j\", type=\"spherical\", q=[pi/2, 0, 0]) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [0.0, 1.0, 0.0]);
+        assert!((p[2] - 1.0).abs() < 1e-9, "球面副: {p:?}");
+
+        // planar: axis z, q=[1,2,pi/2]。基约定：e1 = axis × x̂（axis≈x̂ 时取 ŷ），e2 = axis × e1。
+        // e1=[0,1,0]，e2=[-1,0,0] → 平移 1·e1+2·e2 = [-2,1,0]；[1,0,0] 转 pi/2 得 [0,1,0]。
+        let k = kin_of("joint(\"j\", type=\"planar\", axis=[0,0,1], q=[1,2,pi/2]) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [1.0, 0.0, 0.0]);
+        assert!(
+            (p[0] + 2.0).abs() < 1e-9 && (p[1] - 2.0).abs() < 1e-9,
+            "平面副: {p:?}"
+        );
+
+        // fixed: 恒等。
+        let k = kin_of("joint(\"j\", type=\"fixed\", at=[1,0,0]) sphere(r=0.1);");
+        let p = transform_point(k.joints[0].world, [1.0, 0.0, 0.0]);
+        assert!((p[0] - 2.0).abs() < 1e-9, "固定副: {p:?}");
+    }
+
+    #[test]
+    fn test_p1_joint_nesting_and_report() {
+        let run = cgs_run_result(
+            "joint(\"root\", type=\"revolute\", axis=[0,0,1], q=0.5, limit=[-1.57, 1.57]) \
+             joint(\"elbow\", type=\"prismatic\", axis=[1,0,0], at=[0.3,0,0], q=0.1) \
+             sphere(r=0.05);",
+            "",
+        )
+        .expect("unexpected error");
+        let k = &run.kinematics;
+        assert_eq!(k.joints.len(), 2);
+        assert_eq!(k.joints[1].parent.as_deref(), Some("root"));
+        // 肘的子系 = 根旋转 0.5 ∘ (锚 [0.3,0,0] + 移动 0.1·x)：平移 = R(0.5)·[0.4,0,0]。
+        let w = k.joints[1].world;
+        assert!((w[3] - 0.4 * 0.5f64.cos()).abs() < 1e-9, "肘 x: {}", w[3]);
+        assert!((w[7] - 0.4 * 0.5f64.sin()).abs() < 1e-9, "肘 y: {}", w[7]);
+
+        let rep = crate::cgs_report(
+            "joint(\"root\", type=\"revolute\", axis=[0,0,1], q=0.5, limit=[-1.57, 1.57]) \
+             joint(\"elbow\", type=\"prismatic\", axis=[1,0,0], at=[0.3,0,0], q=0.1) \
+             sphere(r=0.05);",
+            "",
+        )
+        .expect("unexpected error");
+        assert!(
+            rep.contains(
+                "joint 0 \"root\" type=revolute parent=none axis=[0,0,1] at=[0,0,0] q=0.5 limit=[-1.57,1.57]"
+            ),
+            "{rep}"
+        );
+        assert!(
+            rep.contains(
+                "joint 1 \"elbow\" type=prismatic parent=\"root\" axis=[1,0,0] at=[0.3,0,0] q=0.1"
+            ),
+            "{rep}"
+        );
+        assert!(rep.contains("joints=2 gears=0 cams=0"), "{rep}");
+    }
+
+    #[test]
+    fn test_p1_joint_errors() {
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"blah\") sphere(r=1);"),
+            "CGS line 1: joint.type must be \"revolute\", \"continuous\", \"prismatic\", \"helical\", \"cylindrical\", \"spherical\", \"planar\" or \"fixed\""
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"fixed\") sphere(r=1);\njoint(\"j\", type=\"fixed\") box(s=[1,1,1]);"),
+            "CGS line 2: duplicate joint name j"
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"revolute\", axis=[0,0,0]) sphere(r=1);"),
+            "CGS line 1: joint.axis must be nonzero"
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"revolute\", q=2, limit=[-1, 1]) sphere(r=1);"),
+            "CGS line 1: joint j q=2.0 outside limit [-1.0, 1.0]"
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"helical\", q=1) sphere(r=1);"),
+            "CGS line 1: helical joint needs pitch="
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"fixed\", q=1) sphere(r=1);"),
+            "CGS line 1: fixed joint takes no q"
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"cylindrical\", q=1) sphere(r=1);"),
+            "CGS line 1: cylindrical joint q must be [qr, qp]"
+        );
+        assert_eq!(
+            v2_err("joint(\"j\", type=\"continuous\", limit=[0, 1]) sphere(r=1);"),
+            "CGS line 1: continuous joint takes no limit"
+        );
+        assert_eq!(
+            v2_err("x = joint(\"j\", type=\"fixed\");"),
+            "CGS line 1: joint is a statement and cannot be used in an expression"
+        );
+    }
+
+    #[test]
+    fn test_p2_gear_drives_driven() {
+        let k = kin_of(
+            "joint(\"a\", type=\"revolute\", q=0.4) sphere(r=0.1);\n\
+             gear(\"a\", \"b\", ratio=-0.5);\n\
+             joint(\"b\", type=\"prismatic\", axis=[0,0,1]) box(s=[0.1,0.1,0.1]);",
+        );
+        assert_eq!(k.joints.len(), 2);
+        assert!(
+            (k.joints[1].q[0] + 0.2).abs() < 1e-12,
+            "q_b = -0.5 * 0.4 = -0.2: {}",
+            k.joints[1].q[0]
+        );
+        assert!((k.joints[1].world[11] + 0.2).abs() < 1e-9);
+        assert_eq!(k.gears.len(), 1);
+
+        let rep = crate::cgs_report(
+            "joint(\"a\", type=\"revolute\", q=0.4) sphere(r=0.1);\n\
+             gear(\"a\", \"b\", ratio=-0.5);\n\
+             joint(\"b\", type=\"prismatic\", axis=[0,0,1]) box(s=[0.1,0.1,0.1]);",
+            "",
+        )
+        .expect("unexpected error");
+        assert!(
+            rep.contains("gear 0 driver=\"a\" driven=\"b\" ratio=-0.5 offset=0"),
+            "{rep}"
+        );
+        assert!(rep.contains("joints=2 gears=1 cams=0"), "{rep}");
+    }
+
+    #[test]
+    fn test_p2_gear_errors() {
+        assert_eq!(
+            v2_err("gear(\"nope\", \"b\", ratio=1);"),
+            "CGS line 1: unknown joint nope"
+        );
+        assert_eq!(
+            v2_err("joint(\"b\", type=\"fixed\") sphere(r=1);\ngear(\"b\", \"c\", ratio=1);"),
+            "CGS line 2: gear needs 1-DOF joints, got fixed"
+        );
+        assert_eq!(
+            v2_err(
+                "joint(\"a\", type=\"revolute\") sphere(r=1);\n\
+                 joint(\"b\", type=\"prismatic\") sphere(r=1);\n\
+                 gear(\"a\", \"b\", ratio=1);"
+            ),
+            "CGS line 3: gear must precede the driven joint b"
+        );
+        assert_eq!(
+            v2_err(
+                "joint(\"a\", type=\"revolute\") sphere(r=1);\n\
+                 gear(\"a\", \"b\", ratio=1);\n\
+                 joint(\"b\", type=\"prismatic\", q=1) sphere(r=1);"
+            ),
+            "CGS line 3: joint b is driven by gear, q must be omitted"
+        );
+        assert_eq!(
+            v2_err(
+                "joint(\"a\", type=\"revolute\") sphere(r=1);\n\
+                 gear(\"a\", \"b\", ratio=1);\n\
+                 gear(\"a\", \"b\", ratio=2);"
+            ),
+            "CGS line 3: joint b is already driven"
+        );
+    }
+
+    #[test]
+    fn test_p3_cam_circle_circle_roller() {
+        // 偏心圆凸轮：圆心 [0.05,0,0]、r=0.1，绕 z 转，q=0。
+        // 滚子从动件：r=0.02，锚 [0,0.15,0]，沿 y 移动副。
+        // 接触：sqrt(0.05² + (0.15+q)²) = 0.12 → q = sqrt(0.0119) − 0.15。
+        let k = kin_of(
+            "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+             cam(\"c\", \"f\", driver_profile=at(circle(r=0.1), [0.05,0,0]), driven_profile=circle(r=0.02));\n\
+             joint(\"f\", type=\"prismatic\", axis=[0,1,0], at=[0,0.15,0], limit=[-0.05, 0.05]) sphere(r=0.02);",
+        );
+        assert_eq!(k.cams.len(), 1);
+        let want = 0.0119f64.sqrt() - 0.15;
+        assert!(
+            (k.cams[0].q - want).abs() < 1e-9,
+            "凸轮解应为 {want}，实际 {}",
+            k.cams[0].q
+        );
+        // 从动件世界锚点 = at + q·axis。
+        let w = k.joints[1].world;
+        assert!((w[7] - (0.15 + want)).abs() < 1e-9, "从动件 y: {}", w[7]);
+    }
+
+    #[test]
+    fn test_p3_cam_flat_follower() {
+        // 平底从动件：平面 n=[0,1,0] 过从动件原点；平面压到 cy + r 时接触。
+        // d_plane = 0.15 + q = 0.1 → q = -0.05。
+        let k = kin_of(
+            "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+             cam(\"c\", \"f\", driver_profile=at(circle(r=0.1), [0.05,0,0]), driven_profile=plane(n=[0,1,0], d=0));\n\
+             joint(\"f\", type=\"prismatic\", axis=[0,1,0], at=[0,0.15,0], limit=[-0.2, 0.2]) sphere(r=0.02);",
+        );
+        assert!(
+            (k.cams[0].q + 0.05).abs() < 1e-9,
+            "平底凸轮解应为 -0.05，实际 {}",
+            k.cams[0].q
+        );
+    }
+
+    #[test]
+    fn test_p3_cam_errors() {
+        // 无解：接触距离超出 limit。
+        assert_eq!(
+            v2_err(
+                "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+                 cam(\"c\", \"f\", driver_profile=at(circle(r=0.1), [0.05,0,0]), driven_profile=circle(r=0.02));\n\
+                 joint(\"f\", type=\"prismatic\", axis=[0,1,0], at=[0,0.15,0], limit=[0.02, 0.05]) sphere(r=0.02);"
+            ),
+            "CGS line 3: cam found no contact in limit [0.02, 0.05]"
+        );
+        // 轮廓类型越界。
+        assert_eq!(
+            v2_err(
+                "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+                 cam(\"c\", \"f\", driver_profile=sphere(r=0.1), driven_profile=circle(r=0.02));"
+            ),
+            "CGS line 2: cam profiles must be circle(...) or plane(...)"
+        );
+        // 非平面机构：凸轮轮廓法向不平行于关节轴。
+        assert_eq!(
+            v2_err(
+                "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+                 cam(\"c\", \"f\", driver_profile=rot(circle(r=0.1), [1,0,0], 0.5), driven_profile=circle(r=0.02));\n\
+                 joint(\"f\", type=\"prismatic\", axis=[0,1,0], at=[0,0.15,0], limit=[-0.05, 0.05]) sphere(r=0.02);"
+            ),
+            "CGS line 3: cam profile normal must be parallel to its joint axis"
+        );
+        // driven 自带 q。
+        assert_eq!(
+            v2_err(
+                "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+                 cam(\"c\", \"f\", driver_profile=circle(r=0.1), driven_profile=circle(r=0.02));\n\
+                 joint(\"f\", type=\"prismatic\", q=0.1, limit=[-1, 1]) sphere(r=0.02);"
+            ),
+            "CGS line 3: joint f is driven by cam, q must be omitted"
+        );
+        // 缺 limit。
+        assert_eq!(
+            v2_err(
+                "joint(\"c\", type=\"revolute\", axis=[0,0,1], q=0) sphere(r=0.02);\n\
+                 cam(\"c\", \"f\", driver_profile=circle(r=0.1), driven_profile=circle(r=0.02));\n\
+                 joint(\"f\", type=\"prismatic\") sphere(r=0.02);"
+            ),
+            "CGS line 3: cam driven joint needs limit="
+        );
     }
 }
