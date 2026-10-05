@@ -35,6 +35,21 @@
 | **C. CubeCL（Rust `#[cube]` kernel）** | Metal/Vulkan/CUDA/WGPU，单一 Rust 源 | 中：用 Rust 写 kernel，保留宿主控制流 | 生态年轻，API 稳定性需核实 |
 | **D. burn Tensor API（wgpu/ndarray 后端）** | 桌面全平台 + WASM | 小：eager 张量 API 与 MLX 风格最接近 | `sort/argsort/复杂索引` 各后端覆盖不一；eager 小算子在 wgpu 上调度开销高 |
 | **E. candle** | CPU + CUDA + Metal | 小 | Metal 后端仍锁 Apple；CUDA 不覆盖 AMD/集显；WASM 仅 CPU |
+| **F. 各平台原生 GPU API** | Metal(MLX)/CUDA/D3D12/Vulkan 各一份 | 中：算子词汇表任何 GPU 计算 API 都能表达 | N 个后端 = N 份 kernel 源码：每加一个图元各写一遍、各测一遍、各维护一套金样；D3D12 的 Rust 生态薄 |
+
+原生路线补充（2026-10-06 核实，MLX 官方安装文档 + mlx-rs README）：
+
+- MLX 上游（C++ 核心）的平台覆盖是"两个半平台"：macOS/Apple Silicon 一等（Metal + Accelerate）；Linux 官方支持，含正式维护的 CUDA 后端（`mlx[cuda12]`/`mlx[cuda13]`，要求 glibc 2.35+、SM 7.5+、驱动 550.54.14+（CUDA 13 需 580+）、CUDA toolkit + cuDNN）；Linux 纯 CPU 版 `mlx[cpu]`（需 BLAS/LAPACK）。**Windows 不支持**（构建系统中 `WIN32` 仅出现在排除分支）；AMD/ROCm、Vulkan、WebGPU 无后端，浏览器不可达。
+- mlx-rs（本项目依赖的绑定）feature flags 只有 `metal` 与 `accelerate`，**没有 `cuda` 开关**：上游 CUDA 后端存在，但绑定未暴露 `MLX_BUILD_CUDA=ON` 构建路径。
+- 因此 "MLX 直通 Linux+NVIDIA" 的 spike 具体化为：给 mlx-rs 的 build.rs 补 `cuda` feature（传 `-DMLX_BUILD_CUDA=ON`、链 CUDA/cuDNN），可能需向 oxiglade/mlx-rs 提 PR 或本地 patch。成功后现有约 6 000 行内核代码不改一个算子即可在 Linux+NVIDIA 运行。
+- 精度红利：Metal 无 f64 是渲染内核锁 f32 的根因；CUDA 有原生 f64。MLX-CUDA 走通后，未来把区间算术/高精度求交下放 GPU 有理论通道（当前代码写死 f32，需另立项）。
+- 结论不变：MLX 覆盖不到 Windows 原生、AMD/集显、浏览器；便携后端（wgpu/CubeCL）与 CPU 参考后端的必要性不变。
+
+**结论：原生后端是性能优化，不是移植手段。** 先用单源码便携后端把"全平台能跑且正确"做成事实，再按实测差距（> 2×）决定为哪个平台付一份原生源码。混合策略——trait 之下三类后端分工：
+
+1. **CPU 参考后端（ndarray + rayon）**：所有平台的正确性基准和 CI 底线。
+2. **单源码便携后端（wgpu 或 CubeCL）**：覆盖全部平台和浏览器，是"能跑"的保证。
+3. **原生性能后端，只留收益大的**：MLX on macOS 已在位，继续当性能基准；Linux+NVIDIA 的 cheapest 路径是给 mlx-rs 补 `cuda` feature（见方案 F 补充），CUDA 后端只在目标场景（NVIDIA 工作站批量合成数据）需要时再加；D3D12/Vulkan 原生不做——便携后端已覆盖。
 
 ## 4. 推荐路线：先抽 trait，再三后端
 
