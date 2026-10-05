@@ -59,5 +59,7 @@ pub mod tol;
 
 pub mod certify;
 
+pub(crate) mod fallback;
+
 #[cfg(test)]
 mod degenerate;

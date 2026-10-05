@@ -173,6 +173,35 @@ fn csg_box_minus_hole_still_hits() {
 }
 
 #[test]
+fn csg_uv_probe_scale_relative() {
+    // Two boxes at scale 1e5. A fixed δ=1e-4 probe collapses below the f32
+    // ulp at these coordinates (≈7.6e-3) and cannot straddle the child
+    // boundary, so csg_uv would return (0,0) for every hit. The probe must
+    // scale with the tree extent.
+    let a = Geometry::BoxGeometry(BoxGeometry::new(1e5, 1e5, 1e5));
+    let b = Geometry::AffineGeometry(AffineGeometry::with_motor(
+        Geometry::BoxGeometry(BoxGeometry::new(1e5, 1e5, 1e5)),
+        Multivector::translator([1.5e5, 0.0, 0.0]),
+        IDENT,
+    ));
+    let g = Geometry::CsgGeometry(CsgGeometry::new(CsgOp::Union, vec![a, b]));
+    let p = cam(&g);
+    let cga_core::GeometryParams::CsgParams(cp) = &p else {
+        panic!()
+    };
+    let pos = vec3([1.5e5, 2.5e4, 5e4]);
+    let nrm = vec3([0.0, 0.0, 1.0]);
+    let uv = crate::geom_uv(&p, &pos, &nrm);
+    uv.eval().unwrap();
+    let got = uv.as_slice::<f32>().to_vec();
+    let want_arr = crate::geom_uv(&cp.children[1], &pos, &nrm);
+    want_arr.eval().unwrap();
+    let want = want_arr.as_slice::<f32>().to_vec();
+    assert!(got != [0.0, 0.0], "探针不得塌缩成 (0,0)（固定 δ 的旧行为）");
+    assert_eq!(got, want, "落点在 B 的 +z 面，应取 B 的 uv");
+}
+
+#[test]
 fn tangent_sphere_ray_deterministic() {
     let g = Geometry::SphereGeometry(SphereGeometry::new(1.0));
     let t = hit(&g, [0.0, 1.0, 2.0], [0.0, 0.0, -1.0]);

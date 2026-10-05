@@ -6,7 +6,13 @@ use mlx_rs::Array;
 use crate::mlxops::*;
 use crate::{affine_normal, affine_to_local, col, vecmat};
 
-fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> Array {
+/// Durand–Kerner quartic roots (initial values only). Returns the sorted
+/// real-kept roots plus a per-ray ambiguity mask: a ray is ambiguous when a
+/// kept root has a large relative residual, two kept roots nearly coincide
+/// (merged double root), or a discarded root sits in the near-real gray zone
+/// (|im| in (thr, 8·thr]). Ambiguous rays fall back to `certify::Quartic`
+/// on CPU f64.
+fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> (Array, Array) {
     let rad = s_add(
         &ck(ck(ops::stack(
             &[&ck(c3.abs()), &ck(c2.abs()), &ck(c1.abs()), &ck(c0.abs())],
@@ -44,9 +50,45 @@ fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> Array {
     }
     let re = ck(z.real());
     let im = ck(z.imag());
-    let real_ok = ck(ck(im.abs()).le(s_mul(&s_max(&ck(re.abs()), 1.0), 1e-3)));
+    let thr = s_mul(&s_max(&ck(re.abs()), 1.0), 1e-3);
+    let real_ok = ck(ck(im.abs()).le(&thr));
     let roots = ck(ops::select(&real_ok, &re, inf_like(&re)));
-    ck(ops::sort_axis(&roots, -1))
+    let roots = ck(ops::sort_axis(&roots, -1));
+    // --- ambiguity mask (per ray) ---
+    // 1. large relative residual on a kept root: |P(t)| / Σ|c_k||t|^k > 1e-3.
+    let c3e = ck(c3.expand_dims(1));
+    let c2e = ck(c2.expand_dims(1));
+    let c1e = ck(c1.expand_dims(1));
+    let c0e = ck(c0.expand_dims(1));
+    let h = ck(roots.add(&c3e));
+    let h = ck(ck(h.multiply(&roots)).add(&c2e));
+    let h = ck(ck(h.multiply(&roots)).add(&c1e));
+    let pt = ck(ck(h.multiply(&roots)).add(&c0e));
+    let at = ck(roots.abs());
+    let at2 = ck(at.multiply(&at));
+    let d0 = ck(c0e.abs());
+    let d1 = ck(ck(c1e.abs()).multiply(&at));
+    let d2 = ck(ck(c2e.abs()).multiply(&at2));
+    let d3 = ck(ck(ck(c3e.abs()).multiply(&at2)).multiply(&at));
+    let d4 = ck(at2.multiply(&at2));
+    let denom = ck(ck(ck(ck(d0.add(&d1)).add(&d2)).add(&d3)).add(&d4));
+    let resid = ck(ck(pt.abs()).divide(&ck(ops::maximum(&denom, fs(1e-30)))));
+    let kept = ck(roots.is_finite());
+    let bad_resid = ck(ck(kept.logical_and(&s_gt(&resid, 1e-3))).any_axis(-1, false));
+    // 2. near-coincident kept pair (merged double root).
+    let mut pair_close = ck(ops::zeros_dtype(&[roots.shape()[0]], mlx_rs::Dtype::Bool));
+    for j in 0..3 {
+        let tj = col(&roots, j);
+        let tk = col(&roots, j + 1);
+        let both = ck(tj.is_finite());
+        let close = ck(ck(tk.subtract(&tj)).le(&crate::tol::tol_arr(&tk)));
+        pair_close = ck(pair_close.logical_or(&ck(both.logical_and(&close))));
+    }
+    // 3. discarded root in the near-real gray zone.
+    let gray = ck(ck(ck(im.abs()).gt(&thr)).logical_and(&ck(ck(im.abs()).le(&s_mul(&thr, 8.0)))));
+    let gray = ck(gray.any_axis(-1, false));
+    let amb = ck(ck(bad_resid.logical_or(&pair_close)).logical_or(&gray));
+    (roots, amb)
 }
 
 pub(crate) fn inf_like(a: &Array) -> Array {
@@ -98,7 +140,7 @@ pub(crate) fn cone_local_interval(
     h: f64,
     o: &Array,
     d: &Array,
-) -> (Array, Array, Array, Array, Array) {
+) -> (Array, Array, Array, Array, Array, Array) {
     let k = r / h;
     let k2 = 1.0 + k * k;
     let wz = s_sub(&col(o, 2), h / 2.0);
@@ -119,6 +161,24 @@ pub(crate) fn cone_local_interval(
     ));
     let disc = ck(ck(b.multiply(&b)).subtract(s_mul(&ck(a_s.multiply(&c)), 4.0)));
     side_ok = ck(side_ok.logical_and(s_gt(&disc, 1e-12)));
+    // Ambiguity: a degenerates (ray parallel to the cone slope; the 1−k2·dz²
+    // subtraction cancels) or the discriminant is inside its cancellation band.
+    let a_band = s_mul(
+        &ck(ops::maximum(
+            &ck(ops::ones_like(&a)),
+            &s_mul(&ck(dz.multiply(&dz)), k2),
+        )),
+        (crate::tol::DEGENERATE_ULPS as f64) * (f32::EPSILON as f64),
+    );
+    let amb = ck(
+        ck(ck(a.abs()).le(&a_band)).logical_or(&crate::fallback::quad_ambig(
+            &disc,
+            &ck(ops::maximum(
+                &ck(b.multiply(&b)),
+                &s_mul(&ck(ck(a.multiply(&c)).abs()), 4.0),
+            )),
+        )),
+    );
     let sq = ck(s_max(&disc, 0.0).sqrt());
     let r_lo = ck(ck(ck(b.negative()).subtract(&sq)).divide(s_mul(&a_s, 2.0)));
     let r_hi = ck(ck(ck(b.negative()).add(&sq)).divide(s_mul(&a_s, 2.0)));
@@ -158,7 +218,7 @@ pub(crate) fn cone_local_interval(
     let exit_cap = ck(ck(exit_.eq(&at1)).expand_dims(1));
     let n0 = ck(ops::select(&enter_cap, &n_cap0, &n_s0));
     let n1 = ck(ops::select(&exit_cap, &n_cap1, &n_s1));
-    (enter, exit_, valid, n0, n1)
+    (enter, exit_, valid, n0, n1, amb)
 }
 
 fn cone_side_n(h: f64, k2: f64, o: &Array, d: &Array, t: &Array) -> Array {
@@ -177,7 +237,7 @@ fn cone_side_n(h: f64, k2: f64, o: &Array, d: &Array, t: &Array) -> Array {
 }
 
 fn cone_local_intersect(r: f64, h: f64, o: &Array, d: &Array) -> (Array, Array, Array) {
-    let (enter, exit_, valid, n0, n1) = cone_local_interval(r, h, o, d);
+    let (enter, exit_, valid, n0, n1, _amb) = cone_local_interval(r, h, o, d);
     let hit_enter = ck(valid.logical_and(s_gt(&enter, 1e-6)));
     let hit_exit =
         ck(ck(valid.logical_and(ck(hit_enter.logical_not()))).logical_and(s_gt(&exit_, 1e-6)));
@@ -211,7 +271,7 @@ pub fn cone_intersect(p: ConeParams, o: &Array, d: &Array) -> (Array, Array, Arr
 
 pub fn cone_shadow(p: ConeParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (enter, exit_, valid, _, _) = cone_local_interval(p.r, p.h, &o_l, &d_u);
+    let (enter, exit_, valid, _, _, _amb) = cone_local_interval(p.r, p.h, &o_l, &d_u);
     let hit_enter = ck(valid.logical_and(s_gt(&enter, 1e-6)));
     let t = ck(ops::select(&hit_enter, &enter, &exit_));
     let mask = ck(hit_enter.logical_or(ck(valid.logical_and(s_gt(&exit_, 1e-6)))));
@@ -305,7 +365,7 @@ pub(crate) fn torus_local_crossings(
     arc: f64,
     o: &Array,
     d: &Array,
-) -> (Array, Array, Array) {
+) -> (Array, Array, Array, Array) {
     let r2 = major * major;
     let oo = ck(ck(o.multiply(o)).sum_axes(&[-1], false));
     let od = ck(ck(o.multiply(d)).sum_axes(&[-1], false));
@@ -325,7 +385,7 @@ pub(crate) fn torus_local_crossings(
         &ck(ck(col(o, 0).multiply(col(o, 0))).add(ck(col(o, 1).multiply(col(o, 1))))),
         4.0 * r2,
     )));
-    let ts = dk_roots(&c3, &c2, &c1, &c0);
+    let (ts, amb) = dk_roots(&c3, &c2, &c1, &c0);
     let valid = ck(ts.is_finite());
     let safe_t = ck(ops::select(&valid, &ts, ck(ops::zeros_like(&ts))));
     let p =
@@ -365,7 +425,7 @@ pub(crate) fn torus_local_crossings(
         &ns,
         ck(ops::zeros_like(&ns)),
     ));
-    (ts, ns, valid)
+    (ts, ns, valid, amb)
 }
 
 pub(crate) fn torus_local_contains(major: f64, minor: f64, arc: f64, p: &Array) -> Array {
@@ -390,7 +450,7 @@ pub(crate) fn torus_local_contains(major: f64, minor: f64, arc: f64, p: &Array) 
 
 pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, ns, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
+    let (ts, ns, valid, _amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
@@ -422,7 +482,7 @@ pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, A
 
 pub fn torus_shadow(p: TorusParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, _, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
+    let (ts, _, valid, _amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
@@ -458,7 +518,7 @@ pub(crate) fn cyclide_local_crossings(
     shift: [f64; 3],
     o: &Array,
     d: &Array,
-) -> (Array, Array, Array) {
+) -> (Array, Array, Array, Array) {
     let ox = s_sub(&col(o, 0), shift[0]);
     let oy = s_sub(&col(o, 1), shift[1]);
     let oz = s_sub(&col(o, 2), shift[2]);
@@ -483,7 +543,7 @@ pub(crate) fn cyclide_local_crossings(
         ck(ck(g.multiply(&g)).subtract(s_mul(&ck(p0.multiply(&p0)), 4.0)))
             .subtract(s_mul(&ck(oy.multiply(&oy)), 4.0 * b * b)),
     );
-    let ts = dk_roots(&c3, &c2, &c1, &c0);
+    let (ts, amb) = dk_roots(&c3, &c2, &c1, &c0);
     let valid = ck(ts.is_finite());
     let safe_t = ck(ops::select(&valid, &ts, ck(ops::zeros_like(&ts))));
     let p = ck(ck(
@@ -496,7 +556,7 @@ pub(crate) fn cyclide_local_crossings(
         &ns,
         ck(ops::zeros_like(&ns)),
     ));
-    (ts, ns, valid)
+    (ts, ns, valid, amb)
 }
 
 fn cyclide_normal(a: f64, b: f64, dd: f64, c: f64, p: &Array) -> Array {
@@ -545,7 +605,7 @@ pub(crate) fn cyclide_local_contains(
 
 pub fn cyclide_intersect(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, ns, valid) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
+    let (ts, ns, valid, _amb) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
@@ -577,7 +637,7 @@ pub fn cyclide_intersect(p: CyclideParams, o: &Array, d: &Array) -> (Array, Arra
 
 pub fn cyclide_shadow(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, _, valid) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
+    let (ts, _, valid, _amb) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
     let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
     let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
     let t_l = ck(cand.min_axes(&[-1], false));

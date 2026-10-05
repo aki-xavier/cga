@@ -124,8 +124,8 @@ pub(crate) fn trimesh_winding(p: &TrimeshParams, pts: &Array) -> Array {
 
 /// Peak-bytes budget for the (n, f, 3) f32 temporaries of one winding chunk.
 /// The CSG interval sampler calls `contains` with rays×(k+1) points in one
-/// broadcast (see freeform-robust-boolean.md P3 measured limit); beyond this
-/// budget the point axis is chunked and each chunk evaluated eagerly.
+/// broadcast; beyond this budget the point axis is chunked and each chunk
+/// evaluated eagerly (measured OOM limit of the rays×crossings×tris growth).
 pub(crate) const WINDING_CHUNK_BYTES: usize = 256 * 1024 * 1024;
 
 pub(crate) fn trimesh_winding_chunked(p: &TrimeshParams, pts: &Array, budget: usize) -> Array {
@@ -147,6 +147,79 @@ pub(crate) fn trimesh_winding_chunked(p: &TrimeshParams, pts: &Array, budget: us
         out.extend_from_slice(w.as_slice::<f32>());
     }
     Array::from_slice(&out, &[n as i32])
+}
+
+/// Unchunked ray-axis crossings: one MT broadcast over all rays × faces.
+fn trimesh_crossings_all(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
+    let (tv0, te1, te2, tnrm) = tri_mlx(p);
+    let (tall, nall, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &o_l, &d_u);
+    let n = tall.shape()[0];
+    let f = tall.shape()[1];
+    // Never index past the face axis: take k = min(f, 16), then pad to 16.
+    let k = f.min(16);
+    let firstk: Vec<i32> = (0..k).collect();
+    let order = ck(ck(ops::argsort_axis(&tall, 1)).take_axis(Array::from_slice(&firstk, &[k]), 1));
+    let mut ts = ck(ck(tall.take_along_axis(&order, 1)).divide(ck(col(&lam, 0).expand_dims(1))));
+    let mut ns = ck(nall.take_along_axis(ck(order.expand_dims(2)), 1));
+    if k < 16 {
+        let pad = 16 - k;
+        ts = ck(ops::concatenate(
+            &[&ts, &ck(ops::full::<f32>(&[n, pad], &fs(f64::INFINITY)))],
+            1,
+        ));
+        ns = ck(ops::concatenate(
+            &[&ns, &ck(ops::zeros::<f32>(&[n, pad, 3]))],
+            1,
+        ));
+    }
+    ns = affine_normal(&ns, p.a_inv3);
+    let valid = ck(ts.is_finite());
+    (ts, ns, valid)
+}
+
+/// Crossings chunked along the ray axis under the same peak-bytes budget as
+/// `trimesh_winding_chunked`.
+pub(crate) fn trimesh_crossings_chunked(
+    p: &TrimeshParams,
+    o: &Array,
+    d: &Array,
+    budget: usize,
+) -> (Array, Array, Array) {
+    let n = o.shape()[0] as usize;
+    // Per-ray live temporaries: ~10 (n,f) f32 arrays inside trimesh_mt_all,
+    // plus tall/argsort order (f,i32) and nall (f,3).
+    let per_ray = p.v0.len().max(1) * 4 * 16;
+    let chunk = (budget / per_ray.max(1)).max(64);
+    if n <= chunk {
+        return trimesh_crossings_all(p, o, d);
+    }
+    o.eval().unwrap();
+    d.eval().unwrap();
+    let of: &[f32] = o.as_slice();
+    let df: &[f32] = d.as_slice();
+    let mut tsv: Vec<f32> = Vec::with_capacity(n * 16);
+    let mut nsv: Vec<f32> = Vec::with_capacity(n * 48);
+    let mut vsv: Vec<bool> = Vec::with_capacity(n * 16);
+    for (oc, dc) in of.chunks(chunk * 3).zip(df.chunks(chunk * 3)) {
+        let m = (oc.len() / 3) as i32;
+        let (ts, ns, vs) = trimesh_crossings_all(
+            p,
+            &Array::from_slice(oc, &[m, 3]),
+            &Array::from_slice(dc, &[m, 3]),
+        );
+        ts.eval().unwrap();
+        ns.eval().unwrap();
+        vs.eval().unwrap();
+        tsv.extend_from_slice(ts.as_slice::<f32>());
+        nsv.extend_from_slice(ns.as_slice::<f32>());
+        vsv.extend_from_slice(vs.as_slice::<bool>());
+    }
+    (
+        Array::from_slice(&tsv, &[n as i32, 16]),
+        Array::from_slice(&nsv, &[n as i32, 16, 3]),
+        Array::from_slice(&vsv, &[n as i32, 16]),
+    )
 }
 
 #[cfg(test)]
@@ -319,5 +392,54 @@ mod tests {
         full.eval().unwrap();
         chunked.eval().unwrap();
         assert_eq!(full.as_slice::<f32>(), chunked.as_slice::<f32>());
+    }
+
+    #[test]
+    fn test_trimesh_crossings_chunked_matches_unchunked() {
+        let g = tm_cube();
+        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let cga_core::GeometryParams::TrimeshParams(tp) = p else {
+            panic!()
+        };
+        let n = 200usize; // > the 64-ray chunk floor with a tiny budget
+        let mut of = vec![0.0f32; n * 3];
+        let mut df = vec![0.0f32; n * 3];
+        for i in 0..n {
+            of[i * 3] = (i % 11) as f32 * 0.13 - 0.6;
+            of[i * 3 + 1] = ((i / 11) % 7) as f32 * 0.17 - 0.4;
+            of[i * 3 + 2] = 5.0 - (i % 3) as f32;
+            let dz = -1.0f32;
+            let dx = ((i % 5) as f32 - 2.0) * 0.01;
+            let dy = ((i % 7) as f32 - 3.0) * 0.01;
+            let inv = 1.0 / (dx * dx + dy * dy + dz * dz).sqrt();
+            df[i * 3] = dx * inv;
+            df[i * 3 + 1] = dy * inv;
+            df[i * 3 + 2] = dz * inv;
+        }
+        let o = Array::from_slice(&of, &[n as i32, 3]);
+        let d = Array::from_slice(&df, &[n as i32, 3]);
+        let (tf, nf, vf) = trimesh_crossings_chunked(&tp, &o, &d, usize::MAX);
+        let (tc, nc, vc) = trimesh_crossings_chunked(&tp, &o, &d, 1);
+        tf.eval().unwrap();
+        tc.eval().unwrap();
+        nf.eval().unwrap();
+        nc.eval().unwrap();
+        vf.eval().unwrap();
+        vc.eval().unwrap();
+        assert_eq!(
+            tf.as_slice::<f32>(),
+            tc.as_slice::<f32>(),
+            "ts 分块应逐位一致"
+        );
+        assert_eq!(
+            nf.as_slice::<f32>(),
+            nc.as_slice::<f32>(),
+            "ns 分块应逐位一致"
+        );
+        assert_eq!(
+            vf.as_slice::<bool>(),
+            vc.as_slice::<bool>(),
+            "valid 分块应逐位一致"
+        );
     }
 }

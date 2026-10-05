@@ -244,7 +244,14 @@ pub fn csg_shadow(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array) {
 pub fn csg_uv(p: &CsgParams, pos: &Array, n: &Array) -> Array {
     let mut uv = ck(ops::zeros::<f32>(&[pos.shape()[0], 2]));
     let mut found = ck(ops::zeros_dtype(&[pos.shape()[0]], mlx_rs::Dtype::Bool));
-    let delta = tol::UV_PROBE;
+    // Scale-relative probe: UV_PROBE times the tree's extent (floor 1). A
+    // fixed 1e-4 probe collapses below the f32 ulp at large coordinates and
+    // stops straddling the child boundary. Unbounded trees keep the base
+    // value (their hit positions stay near the bounded siblings' scale).
+    let extent = csg_bounds(p)
+        .map(|[lo, hi]| (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]))
+        .unwrap_or(0.0);
+    let delta = tol::UV_PROBE * extent.max(1.0);
     for cp in &p.children {
         let bp = ck(pos.add(s_mul(n, delta)));
         let bm = ck(pos.subtract(s_mul(n, delta)));

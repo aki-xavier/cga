@@ -8,8 +8,7 @@ use mlx_rs::Array;
 use crate::mlxops::*;
 use crate::{
     affine_normal, affine_to_local, col, cone_local_interval, cyclide_local_contains,
-    cyclide_local_crossings, inf_like, torus_local_contains, torus_local_crossings, tri_mlx,
-    trimesh_mt_all, vecmat,
+    cyclide_local_crossings, inf_like, torus_local_contains, torus_local_crossings, vecmat,
 };
 
 #[inline]
@@ -44,7 +43,12 @@ fn sphere_crossings(p: SphereParams, o: &Array, d: &Array) -> (Array, Array, Arr
     ));
     let ns = ck(ops::stack(&[&n1, &n2], 1));
     let vs = ck(ops::stack(&[&valid, &valid], -1));
-    (ts, ns, vs)
+    let scale = ck(ops::maximum(
+        &ck(b.multiply(&b)),
+        &s_mul(&ck(cq.abs()), 4.0),
+    ));
+    let amb = crate::fallback::quad_ambig(&disc, &scale);
+    crate::fallback::sphere_fallback(&p, o, d, &amb, ts, ns, vs)
 }
 
 fn sphere_contains(p: SphereParams, pos: &Array) -> Array {
@@ -72,7 +76,8 @@ fn plane_crossings(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, Array
         ck(ck(n.expand_dims(0)).expand_dims(0)),
         &[o.shape()[0], 1, 3],
     ));
-    (ts, ns, valid)
+    let amb = s_le(&ck(denom.abs()), 1e-9);
+    crate::fallback::plane_fallback(&p, o, d, &amb, ts, ns, valid)
 }
 
 fn plane_contains(p: PlaneParams, pos: &Array) -> Array {
@@ -104,7 +109,14 @@ fn cylinder_crossings(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array,
     let n_s0 = s_div(&p0, p.r);
     let n_s1 = s_div(&p1, p.r);
     let inf = inf_like(&st0);
-    if p.h < 0.0 {
+    let amb = ck(s_le(&a, 1e-9).logical_or(&crate::fallback::quad_ambig(
+        &disc,
+        &ck(ops::maximum(
+            &ck(b.multiply(&b)),
+            &s_mul(&ck(ck(a.multiply(&cq)).abs()), 4.0),
+        )),
+    )));
+    let (ts, ns, vs) = if p.h < 0.0 {
         let ts = ck(ops::stack(
             &[
                 &ck(ops::select(&side_valid, &st0, &inf)),
@@ -114,46 +126,48 @@ fn cylinder_crossings(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array,
         ));
         let ns = ck(ops::stack(&[&n_s0, &n_s1], 1));
         let vs = ck(ops::stack(&[&side_valid, &side_valid], -1));
-        return (ts, ns, vs);
-    }
-    let h = p.h;
-    let denom = col(&d_par, 0);
-    let safe = ck(ops::select(
-        s_gt(&ck(denom.abs()), 1e-9),
-        &denom,
-        ck(ops::full_like(&denom, fs(1e-9), None)),
-    ));
-    let t_plus = ck(s_rsub(&col(&o_par, 0), h).divide(&safe));
-    let t_minus = ck(s_rsub(&col(&o_par, 0), -h).divide(&safe));
-    let at0 = ck(ops::minimum(&t_plus, &t_minus));
-    let at1 = ck(ops::maximum(&t_plus, &t_minus));
-    let enter = ck(ops::maximum(&st0, &at0));
-    let exit_ = ck(ops::minimum(&st1, &at1));
-    let valid = ck(side_valid.logical_and(ck(enter.lt(&exit_))));
-    let enter_cap = ck(at0.gt(&st0));
-    let exit_cap = ck(at1.lt(&st1));
-    let n_cap0 = ck(ops::select(
-        ck(ck(t_plus.lt(&t_minus)).expand_dims(1)),
-        ck(u.expand_dims(0)),
-        ck(ck(u.negative()).expand_dims(0)),
-    ));
-    let n_cap1 = ck(ops::select(
-        ck(ck(t_plus.gt(&t_minus)).expand_dims(1)),
-        ck(u.expand_dims(0)),
-        ck(ck(u.negative()).expand_dims(0)),
-    ));
-    let n0 = ck(ops::select(ck(enter_cap.expand_dims(1)), &n_cap0, &n_s0));
-    let n1 = ck(ops::select(ck(exit_cap.expand_dims(1)), &n_cap1, &n_s1));
-    let ts = ck(ops::stack(
-        &[
-            &ck(ops::select(&valid, &enter, &inf)),
-            &ck(ops::select(&valid, &exit_, &inf)),
-        ],
-        -1,
-    ));
-    let ns = ck(ops::stack(&[&n0, &n1], 1));
-    let vs = ck(ops::stack(&[&valid, &valid], -1));
-    (ts, ns, vs)
+        (ts, ns, vs)
+    } else {
+        let h = p.h;
+        let denom = col(&d_par, 0);
+        let safe = ck(ops::select(
+            s_gt(&ck(denom.abs()), 1e-9),
+            &denom,
+            ck(ops::full_like(&denom, fs(1e-9), None)),
+        ));
+        let t_plus = ck(s_rsub(&col(&o_par, 0), h).divide(&safe));
+        let t_minus = ck(s_rsub(&col(&o_par, 0), -h).divide(&safe));
+        let at0 = ck(ops::minimum(&t_plus, &t_minus));
+        let at1 = ck(ops::maximum(&t_plus, &t_minus));
+        let enter = ck(ops::maximum(&st0, &at0));
+        let exit_ = ck(ops::minimum(&st1, &at1));
+        let valid = ck(side_valid.logical_and(ck(enter.lt(&exit_))));
+        let enter_cap = ck(at0.gt(&st0));
+        let exit_cap = ck(at1.lt(&st1));
+        let n_cap0 = ck(ops::select(
+            ck(ck(t_plus.lt(&t_minus)).expand_dims(1)),
+            ck(u.expand_dims(0)),
+            ck(ck(u.negative()).expand_dims(0)),
+        ));
+        let n_cap1 = ck(ops::select(
+            ck(ck(t_plus.gt(&t_minus)).expand_dims(1)),
+            ck(u.expand_dims(0)),
+            ck(ck(u.negative()).expand_dims(0)),
+        ));
+        let n0 = ck(ops::select(ck(enter_cap.expand_dims(1)), &n_cap0, &n_s0));
+        let n1 = ck(ops::select(ck(exit_cap.expand_dims(1)), &n_cap1, &n_s1));
+        let ts = ck(ops::stack(
+            &[
+                &ck(ops::select(&valid, &enter, &inf)),
+                &ck(ops::select(&valid, &exit_, &inf)),
+            ],
+            -1,
+        ));
+        let ns = ck(ops::stack(&[&n0, &n1], 1));
+        let vs = ck(ops::stack(&[&valid, &valid], -1));
+        (ts, ns, vs)
+    };
+    crate::fallback::cylinder_fallback(&p, o, d, &amb, ts, ns, vs)
 }
 
 fn cylinder_contains(p: CylinderParams, pos: &Array) -> Array {
@@ -247,7 +261,7 @@ fn box_contains(p: BoxParams, pos: &Array) -> Array {
 
 pub fn cone_crossings(p: ConeParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (enter, exit_, valid, n0, n1) = cone_local_interval(p.r, p.h, &o_l, &d_u);
+    let (enter, exit_, valid, n0, n1, amb) = cone_local_interval(p.r, p.h, &o_l, &d_u);
     let inf = inf_like(&enter);
     let ts = ck(ops::stack(
         &[
@@ -258,11 +272,9 @@ pub fn cone_crossings(p: ConeParams, o: &Array, d: &Array) -> (Array, Array, Arr
     ));
     let mut ns = ck(ops::stack(&[&n0, &n1], 1));
     ns = affine_normal(&ns, p.a_inv3);
-    (
-        ck(ts.divide(ck(col(&lam, 0).expand_dims(1)))),
-        ns,
-        ck(ops::stack(&[&valid, &valid], -1)),
-    )
+    let ts = ck(ts.divide(ck(col(&lam, 0).expand_dims(1))));
+    let vs = ck(ops::stack(&[&valid, &valid], -1));
+    crate::fallback::cone_fallback(&p, o, d, &amb, ts, ns, vs)
 }
 
 fn cone_contains(p: ConeParams, pos: &Array) -> Array {
@@ -299,7 +311,13 @@ fn ellipsoid_crossings(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Arra
     .divide(ck(col(&lam, 0).expand_dims(1))));
     let mut ns = ck(ops::stack(&[&p1, &p2], 1));
     ns = affine_normal(&ns, p.a_inv3);
-    (ts, ns, ck(ops::stack(&[&valid, &valid], -1)))
+    let vs = ck(ops::stack(&[&valid, &valid], -1));
+    let scale = ck(ops::maximum(
+        &ck(b.multiply(&b)),
+        &s_mul(&ck(cq.abs()), 4.0),
+    ));
+    let amb = crate::fallback::quad_ambig(&disc, &scale);
+    crate::fallback::ellipsoid_fallback(&p, o, d, &amb, ts, ns, vs)
 }
 
 fn ellipsoid_contains(p: EllipsoidParams, pos: &Array) -> Array {
@@ -309,9 +327,10 @@ fn ellipsoid_contains(p: EllipsoidParams, pos: &Array) -> Array {
 
 pub fn torus_crossings(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, mut ns, valid) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
+    let (ts, mut ns, valid, amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
     ns = affine_normal(&ns, p.a_inv3);
-    (ck(ts.divide(ck(col(&lam, 0).expand_dims(1)))), ns, valid)
+    let ts = ck(ts.divide(ck(col(&lam, 0).expand_dims(1))));
+    crate::fallback::torus_fallback(&p, o, d, &amb, ts, ns, valid)
 }
 
 fn torus_contains(p: TorusParams, pos: &Array) -> Array {
@@ -321,9 +340,10 @@ fn torus_contains(p: TorusParams, pos: &Array) -> Array {
 
 pub fn cyclide_crossings(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, mut ns, valid) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
+    let (ts, mut ns, valid, amb) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
     ns = affine_normal(&ns, p.a_inv3);
-    (ck(ts.divide(ck(col(&lam, 0).expand_dims(1)))), ns, valid)
+    let ts = ck(ts.divide(ck(col(&lam, 0).expand_dims(1))));
+    crate::fallback::cyclide_fallback(&p, o, d, &amb, ts, ns, valid)
 }
 
 fn cyclide_contains(p: CyclideParams, pos: &Array) -> Array {
@@ -332,17 +352,7 @@ fn cyclide_contains(p: CyclideParams, pos: &Array) -> Array {
 }
 
 pub(crate) fn trimesh_crossings(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (tv0, te1, te2, tnrm) = tri_mlx(p);
-    let (tall, nall, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &o_l, &d_u);
-    let first16: Vec<i32> = (0..16).collect();
-    let order =
-        ck(ck(ops::argsort_axis(&tall, 1)).take_axis(Array::from_slice(&first16, &[16]), 1));
-    let ts = ck(ck(tall.take_along_axis(&order, 1)).divide(ck(col(&lam, 0).expand_dims(1))));
-    let mut ns = ck(nall.take_along_axis(ck(order.expand_dims(2)), 1));
-    ns = affine_normal(&ns, p.a_inv3);
-    let valid = ck(ts.is_finite());
-    (ts, ns, valid)
+    crate::trimesh_crossings_chunked(p, o, d, crate::WINDING_CHUNK_BYTES)
 }
 
 pub(crate) fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
