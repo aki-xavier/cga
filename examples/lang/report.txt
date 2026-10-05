@@ -1,0 +1,89 @@
+scene version=1
+background(color=0x2B3138);
+camera(fov=45, aspect=1.777778, position=[7.5,6.5,9.5], target=[0,1.8,0], up=[0,1,0], near=0.1, far=100);
+directional_light(direction=[0.336861,0.842152,0.421076], color=0xFFFFFF, intensity=0.5);
+point_light(position=[-5,6,4], color=0xFFFFFF, intensity=0.55);
+ambient_light(color=0xFFFFFF, intensity=0.38);
+object 0 material(color=0x4A4F54, roughness=0.5, metalness=0.6, emissive=0x000000, opacity=1, ior=1.5, absorption=0) difference(frame(t=[0,0.15,0], box(s=[7,0.3,7])), frame(t=[2.05061,0.15,-2.05061], axis=[0.862856,0.357407,-0.357407], angle=1.717772, cone(r=0.32, h=0.35)), frame(t=[-2.05061,0.15,-2.05061], axis=[0.281085,0.678598,-0.678598], angle=2.593564, cone(r=0.32, h=0.35)), frame(t=[-2.05061,0.15,2.05061], axis=[0.281085,-0.678598,0.678598], angle=2.593564, cone(r=0.32, h=0.35)), frame(t=[2.05061,0.15,2.05061], axis=[0.862856,-0.357407,0.357407], angle=1.717772, cone(r=0.32, h=0.35)));
+bounds 0 lo=[-3.5,0,-3.5] hi=[3.5,0.3,3.5]
+object 1 material(color=0x9BA1A6, roughness=0.35, metalness=0.75, emissive=0x000000, opacity=1, ior=1.5, absorption=0) difference(frame(t=[0,0.55,0], axis=[-1,0,0], angle=1.570796, cylinder(r=2.6, h=0.5)), frame(t=[2,0.55,0], axis=[-1,0,0], angle=1.570796, cylinder(r=0.16, h=2)), frame(t=[1.414214,0.55,-1.414214], axis=[-0.862856,0.357407,0.357407], angle=1.717772, cylinder(r=0.16, h=2)), frame(t=[0,0.55,-2], axis=[-0.57735,0.57735,0.57735], angle=2.094395, cylinder(r=0.16, h=2)), frame(t=[-1.414214,0.55,-1.414214], axis=[-0.281085,0.678598,0.678598], angle=2.593564, cylinder(r=0.16, h=2)), frame(t=[-2,0.55,0], axis=[0,0.707107,0.707107], angle=3.141593, cylinder(r=0.16, h=2)), frame(t=[-1.414214,0.55,1.414214], axis=[-0.281085,-0.678598,-0.678598], angle=2.593564, cylinder(r=0.16, h=2)), frame(t=[0,0.55,2], axis=[-0.57735,-0.57735,-0.57735], angle=2.094395, cylinder(r=0.16, h=2)), frame(t=[1.414214,0.55,1.414214], axis=[-0.862856,-0.357407,-0.357407], angle=1.717772, cylinder(r=0.16, h=2)), frame(t=[0,0.55,0], axis=[-1,0,0], angle=1.570796, cylinder(r=0.58, h=2)));
+bounds 1 lo=[-2.6,-2.3,-2.6] hi=[2.6,3.4,2.6]
+object 2 translate([2,0.55,0]) rotate(axis=[-1,0,0], angle=1.570796) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 2 lo=[1.87,0.07,-0.13] hi=[2.13,1.03,0.13]
+object 3 translate([2,0.99,0]) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 3 lo=[1.792,0.9,-0.208] hi=[2.208,1.08,0.208]
+object 4 translate([1.414214,0.55,-1.414214]) rotate(axis=[-0.862856,0.357407,0.357407], angle=1.717772) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 4 lo=[1.284214,0.07,-1.544214] hi=[1.544214,1.03,-1.284214]
+object 5 translate([1.414214,0.99,-1.414214]) rotate(axis=[0,1,0], angle=0.785398) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 5 lo=[1.120057,0.9,-1.70837] hi=[1.70837,1.08,-1.120057]
+object 6 translate([0,0.55,-2]) rotate(axis=[-0.57735,0.57735,0.57735], angle=2.094395) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 6 lo=[-0.13,0.07,-2.13] hi=[0.13,1.03,-1.87]
+object 7 translate([0,0.99,-2]) rotate(axis=[0,1,0], angle=1.570796) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 7 lo=[-0.208,0.9,-2.208] hi=[0.208,1.08,-1.792]
+object 8 translate([-1.414214,0.55,-1.414214]) rotate(axis=[-0.281085,0.678598,0.678598], angle=2.593564) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 8 lo=[-1.544214,0.07,-1.544214] hi=[-1.284214,1.03,-1.284214]
+object 9 translate([-1.414214,0.99,-1.414214]) rotate(axis=[0,1,0], angle=2.356194) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 9 lo=[-1.70837,0.9,-1.70837] hi=[-1.120057,1.08,-1.120057]
+object 10 translate([-2,0.55,0]) rotate(axis=[0,0.707107,0.707107], angle=3.141593) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 10 lo=[-2.13,0.07,-0.13] hi=[-1.87,1.03,0.13]
+object 11 translate([-2,0.99,0]) rotate(axis=[0,1,0], angle=3.141593) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 11 lo=[-2.208,0.9,-0.208] hi=[-1.792,1.08,0.208]
+object 12 translate([-1.414214,0.55,1.414214]) rotate(axis=[-0.281085,-0.678598,-0.678598], angle=2.593564) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 12 lo=[-1.544214,0.07,1.284214] hi=[-1.284214,1.03,1.544214]
+object 13 translate([-1.414214,0.99,1.414214]) rotate(axis=[0,-1,0], angle=2.356194) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 13 lo=[-1.70837,0.9,1.120057] hi=[-1.120057,1.08,1.70837]
+object 14 translate([0,0.55,2]) rotate(axis=[-0.57735,-0.57735,-0.57735], angle=2.094395) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 14 lo=[-0.13,0.07,1.87] hi=[0.13,1.03,2.13]
+object 15 translate([0,0.99,2]) rotate(axis=[0,-1,0], angle=1.570796) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 15 lo=[-0.208,0.9,1.792] hi=[0.208,1.08,2.208]
+object 16 translate([1.414214,0.55,1.414214]) rotate(axis=[-0.862856,-0.357407,-0.357407], angle=1.717772) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.13, h=0.7);
+bounds 16 lo=[1.284214,0.07,1.284214] hi=[1.544214,1.03,1.544214]
+object 17 translate([1.414214,0.99,1.414214]) rotate(axis=[0,-1,0], angle=0.785398) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.416,0.18,0.416]);
+bounds 17 lo=[1.120057,0.9,1.120057] hi=[1.70837,1.08,1.70837]
+object 18 translate([0,2.9,0]) rotate(axis=[-1,0,0], angle=1.570796) material(color=0x9BA1A6, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.55, h=4.2);
+bounds 18 lo=[-0.55,0.25,-0.55] hi=[0.55,5.55,0.55]
+object 19 translate([0,1.25,0]) rotate(axis=[-1,0,0], angle=1.570796) material(color=0x9BA1A6, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=0.85, h=0.9);
+bounds 19 lo=[-0.85,-0.05,-0.85] hi=[0.85,2.55,0.85]
+object 20 translate([0,2.6,0]) rotate(axis=[-1,0,0], angle=1.570796) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) cylinder(r=1.15, h=0.45);
+bounds 20 lo=[-1.15,1.225,-1.15] hi=[1.15,3.975,1.15]
+object 21 translate([1.45,2.6,0]) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 21 lo=[1.09,2.375,-0.11] hi=[1.81,2.825,0.11]
+object 22 translate([1.339625,2.6,-0.554891]) rotate(axis=[0,1,0], angle=0.392699) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 22 lo=[0.964934,2.375,-0.794284] hi=[1.714317,2.825,-0.315498]
+object 23 translate([1.025305,2.6,-1.025305]) rotate(axis=[0,1,0], angle=0.785398) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 23 lo=[0.692965,2.375,-1.357645] hi=[1.357645,2.825,-0.692965]
+object 24 translate([0.554891,2.6,-1.339625]) rotate(axis=[0,1,0], angle=1.178097) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 24 lo=[0.315498,2.375,-1.714317] hi=[0.794284,2.825,-0.964934]
+object 25 translate([0,2.6,-1.45]) rotate(axis=[0,1,0], angle=1.570796) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 25 lo=[-0.11,2.375,-1.81] hi=[0.11,2.825,-1.09]
+object 26 translate([-0.554891,2.6,-1.339625]) rotate(axis=[0,1,0], angle=1.963495) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 26 lo=[-0.794284,2.375,-1.714317] hi=[-0.315498,2.825,-0.964934]
+object 27 translate([-1.025305,2.6,-1.025305]) rotate(axis=[0,1,0], angle=2.356194) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 27 lo=[-1.357645,2.375,-1.357645] hi=[-0.692965,2.825,-0.692965]
+object 28 translate([-1.339625,2.6,-0.554891]) rotate(axis=[0,1,0], angle=2.748894) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 28 lo=[-1.714317,2.375,-0.794284] hi=[-0.964934,2.825,-0.315498]
+object 29 translate([-1.45,2.6,0]) rotate(axis=[0,1,0], angle=3.141593) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 29 lo=[-1.81,2.375,-0.11] hi=[-1.09,2.825,0.11]
+object 30 translate([-1.339625,2.6,0.554891]) rotate(axis=[0,-1,0], angle=2.748894) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 30 lo=[-1.714317,2.375,0.315498] hi=[-0.964934,2.825,0.794284]
+object 31 translate([-1.025305,2.6,1.025305]) rotate(axis=[0,-1,0], angle=2.356194) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 31 lo=[-1.357645,2.375,0.692965] hi=[-0.692965,2.825,1.357645]
+object 32 translate([-0.554891,2.6,1.339625]) rotate(axis=[0,-1,0], angle=1.963495) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 32 lo=[-0.794284,2.375,0.964934] hi=[-0.315498,2.825,1.714317]
+object 33 translate([0,2.6,1.45]) rotate(axis=[0,-1,0], angle=1.570796) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 33 lo=[-0.11,2.375,1.09] hi=[0.11,2.825,1.81]
+object 34 translate([0.554891,2.6,1.339625]) rotate(axis=[0,-1,0], angle=1.178097) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 34 lo=[0.315498,2.375,0.964934] hi=[0.794284,2.825,1.714317]
+object 35 translate([1.025305,2.6,1.025305]) rotate(axis=[0,-1,0], angle=0.785398) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 35 lo=[0.692965,2.375,0.692965] hi=[1.357645,2.825,1.357645]
+object 36 translate([1.339625,2.6,0.554891]) rotate(axis=[0,-1,0], angle=0.392699) material(color=0xC8A24A, roughness=0.3, metalness=0.8, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.72,0.45,0.22]);
+bounds 36 lo=[0.964934,2.375,0.315498] hi=[1.714317,2.825,0.794284]
+object 37 translate([0,4.45,0]) rotate(axis=[-1,0,0], angle=1.570796) material(color=0x4A4F54, roughness=0.45, metalness=0.65, emissive=0x000000, opacity=1, ior=1.5, absorption=0) torus(R=0.72, r=0.16, arc=6.283185);
+bounds 37 lo=[-0.88,4.29,-0.88] hi=[0.88,4.61,0.88]
+object 38 translate([0,4.85,0]) material(color=0x6E747A, roughness=0.4, metalness=0.7, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.95,0.5,0.95]);
+bounds 38 lo=[-0.475,4.6,-0.475] hi=[0.475,5.1,0.475]
+object 39 translate([0.62,3.6,0]) material(color=0xC8A24A, roughness=0.35, metalness=0.75, emissive=0x000000, opacity=1, ior=1.5, absorption=0) box(s=[0.18,0.9,0.18]);
+bounds 39 lo=[0.53,3.15,-0.09] hi=[0.71,4.05,0.09]
+object 40 material(color=0x3A4046, roughness=0.9, metalness=0, emissive=0x000000, opacity=1, ior=1.5, absorption=0) plane(n=[0,1,0], d=0);
+bounds 40 none
+summary objects=41 lights=3 no_bounds=1 bbox_lo=[-3.5,-2.3,-3.5] bbox_hi=[3.5,5.55,3.5]

@@ -11,7 +11,7 @@
 
 ## 渲染画廊
 
-CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cgs` 一条命令生成：
+CGS 场景语言（`examples/cgs/*.cgs`）的八张输出，全部由 `render_cgs` 一条命令生成：
 
 <table>
   <tr>
@@ -32,6 +32,26 @@ CGS 场景语言（`examples/cgs/*.cgs`）的四张输出，全部由 `render_cg
     <td align="center" width="50%">
       <img src="examples/cgs/examples_cgs/mechanical.png" width="440" alt="mechanical.cgs 机械件"><br>
       <sub><b>mechanical.cgs</b> — 节圆阵列真钻孔 + 沉头锥孔 + 环面垫圈 + 齿阵列</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="examples/cgs/examples_cgs/primitives.png" width="440" alt="primitives.cgs 图元全家福"><br>
+      <sub><b>primitives.cgs</b> — 图元全家福：sphere·box·cylinder·cone（blade）+ torus·ellipsoid·cyclide·circle（射线逆变换）</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="examples/cgs/examples_cgs/affine.png" width="440" alt="affine.cgs 仿射扩展"><br>
+      <sub><b>affine.cgs</b> — 非均匀 <code>scale</code> / <code>mirror</code> 镜像对（偏心孔 + 角标球随体翻转）</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="examples/cgs/examples_cgs/assembly.png" width="440" alt="assembly.cgs 关联装配"><br>
+      <sub><b>assembly.cgs</b> — v2/v3 汇演：<code>constrain</code> 解孔位 + <code>drill</code> 贯穿 + <code>face</code> 挂点 + <code>instances</code> 集合 + 方法链</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="examples/cgs/examples_cgs/freeform.png" width="440" alt="freeform.cgs 自由曲面"><br>
+      <sub><b>freeform.cgs</b> — 双三次 Bézier 曲面罩 + 厚壳曲面开槽（CSG 叶）</sub>
     </td>
   </tr>
 </table>
@@ -113,7 +133,7 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 | **v3 P6** | 不等式约束 | 方程体 `== / <= / >= / < / >` 进同一 GN 最小二乘：等式残差 `u−v`，不等式 hinge `max(0, u−v)`（满足 ⇒ 残差与梯度为 0，只裁剪可行域）；`!=` 拒绝；不可行仍显式 `did not converge` |
 | **Report** | 执行结果文本 | `cgs_report(text, asset_root)` / `report_cgs` CLI：场景级 background/camera/灯行 + `object <i> …` 行 + `bounds` + 几何参数树 + tag 注册表 + `summary`，数值六位规范化、帧唯一化；全函数，错误契约 **+0 行** |
 
-详见 [`docs/cgs-v2.md`](docs/cgs-v2.md)、[`docs/cgs-v3.md`](docs/cgs-v3.md)、[`docs/scene-report.md`](docs/scene-report.md)。
+详见 [`docs/cgs-v2.md`](docs/cgs-v2.md)、[`docs/cgs-v3.md`](docs/cgs-v3.md)、[`docs/scene-report.md`](docs/scene-report.md)。v2/v3 全部特性（约束解孔位 → `drill` 贯穿 → `face` 面心挂立柱 → `instances` 计数架顶梁）的联合汇演见画廊 `assembly.cgs`（源码 30 行，`examples/cgs/assembly.cgs`）。
 
 ## CGA 建模 vs 传统欧氏建模
 
@@ -139,15 +159,25 @@ cargo run --release -p cga-examples --bin render_cgs -- examples/cgs/orbit.cgs o
 
 ![CSG 布尔并排：并 / 差 / 交](examples/csg/demo_csg.png)
 
-**新图元** — cone（凸体区间裁剪）/ torus（Durand–Kerner 解四次）/ ellipsoid（= 仿射缩放球）/ cyclide（Dupin cyclide 四次曲面）。四者非 CGA blade，经射线逆变换接入。
+**新图元** — cone（凸体区间裁剪）/ torus（Durand–Kerner 解四次；`TorusGeometry::tube` 可画部分圆弧管）/ ellipsoid（= 仿射缩放球）/ cyclide（Dupin cyclide 四次曲面）。四者非 CGA blade，经射线逆变换接入（图：画廊 `primitives.cgs`）。
 
-**仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解为 motor·linear，`rotate` 与 `scale/mirror` 任意嵌套顺序均正确。
+**仿射扩展** — scale/mirror 经 AffineGeometry 射线逆变换（非 versor 可达；法向走逆置变换，det<0 镜像自动正确）。上下文为全 4×4 仿射，几何落点 Newton 极分解为 motor·linear，`rotate` 与 `scale/mirror` 任意嵌套顺序均正确（图：画廊 `affine.cgs` 的镜像对——偏心孔与角标球随体翻转）。
 
 **网格与互操作** — `MeshGeometry`（Möller–Trumbore 批量求交，平坦法向，无 BVH）；`modeling.rs` 的 extrude（耳切凹轮廓三角化）与 loft（等点数多截面）；`mesh_io.rs` 纯 stdlib OBJ 读写，`mesh_io_gltf.rs` glTF/GLB 读写（节点变换/层级/材质色）。
 
-**自由曲面 P3** — `bezier(points=16, thickness, div)` 有理双三次 Bézier 补丁：`crossings`/`contains`/`field`/`bounds` 复用网格 MT 内核（均匀 `div×div` 剖分 + 解析弦高界断言）；`thickness>0` 缝合水密偏置厚壳（共享索引 top/bottom/侧壁，全边 ×2 断言），为真实体、可进 CSG 与烘焙；`thickness=0` 为渲染面（CSG/烘焙显式拒绝，与 `circle` 同族）。见 `examples/cgs/freeform.cgs`（曲面罩 + 曲面开槽 CSG）。实测约束：CSG×网格内存按 O(射线 × 交点 × 三角) 增长（区间分类逐射线多点采样），高 div 配低分辨率/aa。
+**自由曲面 P3** — `bezier(points=16, thickness, div)` 有理双三次 Bézier 补丁（图：画廊 `freeform.cgs` 的曲面罩 + 曲面开槽）：`crossings`/`contains`/`field`/`bounds` 复用网格 MT 内核（均匀 `div×div` 剖分 + 解析弦高界断言）；`thickness>0` 缝合水密偏置厚壳（共享索引 top/bottom/侧壁，全边 ×2 断言），为真实体、可进 CSG 与烘焙；`thickness=0` 为渲染面（CSG/烘焙显式拒绝，与 `circle` 同族）。见 `examples/cgs/freeform.cgs`。实测约束：CSG×网格内存按 O(射线 × 交点 × 三角) 增长（区间分类逐射线多点采样；`contains` 已按 256MB 预算分块求值防 OOM），高 div 配低分辨率/aa。
 
-**烘焙** — `bake` 把任意 CSG 隐式体变三角网格，**纯 CPU f64 无 GPU 依赖（Linux/CI 可用）**：有符号场（与 GPU `*_contains` 同号）→ marching tetrahedra（Kuhn 六四面体）→ 位精确焊接 + 分量级一致定向，**水密为构造性结论**（`topology_report()` 边界边/非流形边/欧拉示性数进 CI 断言）；非有限场值显式报错（导出不弃权）。
+**烘焙** — `bake` 把任意 CSG 隐式体变三角网格，**纯 CPU f64 无 GPU 依赖（Linux/CI 可用）**：有符号场（与 GPU `*_contains` 同号）→ marching tetrahedra（Kuhn 六四面体）→ 位精确焊接 + 分量级一致定向，**水密为构造性结论**（`topology_report()` 边界边/非流形边/欧拉示性数进 CI 断言）；非有限场值显式报错（导出不弃权）。下图为 `demo_bake` 输出：左 = 隐式 CSG 原件（解析光滑），右 = 烘焙网格（可见刻面）：
+
+![隐式 CSG 与烘焙网格并排](examples/bake/demo_bake.png)
+
+```text
+$ cargo run --release -p cga-examples --bin demo_bake
+topology: TopologyReport { vertices: 40868, faces: 81744, degenerate_faces: 0,
+  boundary_edges: 0, nonmanifold_edges: 0, inconsistent_edges: 0, euler: -4 }
+volume: 1.3911
+saved examples/bake/demo_bake.png + demo_bake.obj
+```
 
 ```bash
 cargo run --release -p cga-examples --bin bake_cgs -- examples/cgs/mechanical.cgs out.obj 0.1
@@ -157,7 +187,9 @@ cargo run --release -p cga-examples --bin bake_cgs -- examples/cgs/mechanical.cg
 
 ## 生成 / 无头渲染
 
-给程序化调用方（LLM codegen、外部 GUI）的库级入口：
+给程序化调用方（LLM codegen、外部 GUI）的库级入口（`demo_lang` 一次跑通三件事：生成 → 无头渲染 → 场景报告）：
+
+![gen_flange_assembly 生成并无头渲染的法兰装配](examples/lang/demo_lang.png)
 
 ```rust
 // CGS 生成：结构化参数 → 逐行平铺源码（无 for、确定性、可 diff、必然可解析）
@@ -169,9 +201,23 @@ let text = cga_gpu::gen_flange_assembly(
 let out = cga_gpu::render_cgs_png(&text, ".", 640, 480, 2)?;
 std::fs::write("preview.png", out.png)?;
 
+// 场景报告：执行结果的确定性逐行文本（LLM Verifier 可直接断言）
+let report = cga_gpu::cgs_report(&text, ".")?;
+
 // 网格烘焙：CSG → 三角网格（纯 CPU f64）
 let m = world_params.bake(0.1)?;
 let v = m.volume();
+```
+
+`examples/lang/report.txt`（`demo_lang` 产物）节选——每个对象一行几何参数树 + 包围盒，数值六位规范化：
+
+```text
+scene version=1
+camera(fov=45, aspect=1.777778, position=[7.5,6.5,9.5], target=[0,1.8,0], ...);
+object 1 material(...) difference(frame(t=[0,0.55,0], axis=[-1,0,0], angle=1.570796, cylinder(r=2.6, h=0.5)), ...);
+bounds 1 lo=[-2.6,-2.3,-2.6] hi=[2.6,3.4,2.6]
+...
+summary objects=41 lights=3 no_bounds=1 bbox_lo=[-3.5,-2.3,-3.5] bbox_hi=[3.5,5.55,3.5]
 ```
 
 ## 场景代码
@@ -273,7 +319,7 @@ crates/
     scene_lang / scene_report / cgs_gen / headless CGS 语言、报告、生成、无头渲染
     renderer                mlx-rs GPU 批量光线追踪（SSAA/硬阴影/Whitted 折射）
   cga-examples/             演示 CLI（src/bin/*.rs）
-examples/                   .cgs 场景 + assets 纹理 + 各 demo 输出图（README 插图）
+examples/                   .cgs 场景（含 primitives/affine/assembly/freeform）+ assets 纹理 + 各 demo 输出图（README 插图；bake/lang 为 P4 与生成管线汇演）
 docs/                       架构图、机器人图、cgs-v2/v3、scene-report、freeform-robust-boolean
 ```
 
@@ -285,6 +331,8 @@ docs/                       架构图、机器人图、cgs-v2/v3、scene-report�
 | `demo_advantage` | `examples/advantage/advantage_{a,b,c}.png` 三面板 |
 | `demo_kinematics` | `examples/kinematics/kinematics.gif` |
 | `demo_csg` | `examples/csg/demo_csg.png`（并/差/交并排） |
+| `demo_bake` | `examples/bake/demo_bake.{png,obj}`（隐式 CSG vs 水密烘焙网格并排） |
+| `demo_lang` | `examples/lang/{generated_flange.cgs, demo_lang.png, report.txt}`（生成→无头渲染→报告） |
 | `demo_gltf` | `examples/gltf/demo_gltf.{glb,png}` |
 | `demo_helmet` | `examples/helmet/demo_helmet.png` |
 | `render_cgs <file.cgs> [out.png] [w h aa]` | CGS → PNG |

@@ -1,0 +1,32 @@
+// CGS v2/v3 能力汇演: 几何值、具名实例、派生钻孔、编译期约束求解、
+// 不等式可行域、集合选择 instances()、后缀方法链、面引用装配
+background(color=0x2B3138);
+camera(fov=45, position=[4.2, 3.2, 6.0], target=[0, 0.6, 0]);
+directional_light(direction=[0.4, 1.0, 0.35], intensity=0.5);
+ambient_light(intensity=0.35);
+material(color=0x3A4046, roughness=0.9) plane(n=[0, 1, 0], d=0);
+
+// 编译期约束: 孔位 off 由方程解出(off = 0.8), 不等式只裁剪可行域
+var off = 0.5;
+constrain(off) { 2 * off == 1.6; off <= 1.9; } solve;
+echo(off);
+
+// 几何值绑定(frameless): 板; 派生钻孔 through= 取目标包围盒, 改板厚孔自动贯穿
+plate = box(s=[3.2, 0.4, 1.6]).at([0, 0.2, 0]);
+material(color=0x707A8A, roughness=0.4, metalness=0.3) difference() {
+  show(plate);
+  for (s = [-1, 1])
+    translate([s * off, 0, 0]) drill(r=0.16, through=plate, axis=1);
+}
+
+// 面引用 + 后缀方法链: 立柱落在板面心, 每根注册为具名实例
+for (s = [-1, 1])
+  tag("post") material(color=0x9BA1A6, roughness=0.3, metalness=0.8)
+    cylinder(r=0.12, h=1.0).rot([1, 0, 0], -1.5707963).at(face(plate, "+y") + [s * (off + 0.55), 0.5, 0]);
+
+// 集合选择: 读回全部 post 实例, 计数合法才架顶梁(聚合并集中心 + 关联偏移)
+ps = instances("post");
+if (len(ps) == 2) {
+  material(color=0xC8A24A, roughness=0.35, metalness=0.6)
+    box(s=[3.4, 0.24, 0.5]).at(center("post") + [0, 0.62, 0]);
+}
