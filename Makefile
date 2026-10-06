@@ -1,5 +1,5 @@
 
-.PHONY: test run fmt
+.PHONY: test run fmt vendor-react
 
 test:
 	cargo test --workspace
@@ -9,3 +9,7 @@ run:
 
 fmt:
 	cargo fmt --all
+
+# 重新生成内置 React 运行时（crates/cga-host/assets/react-runtime.*.js）
+vendor-react:
+	node scripts/vendor-react.mjs

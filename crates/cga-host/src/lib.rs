@@ -1,6 +1,9 @@
 /// 渲染模式（供宿主使用者直接引用）。
 pub use cga_gpu::RenderMode;
 
+pub mod react;
+pub use react::{DrainStats, ReactSession, Runtime};
+
 pub mod scene_build;
 pub use scene_build::*;
 
