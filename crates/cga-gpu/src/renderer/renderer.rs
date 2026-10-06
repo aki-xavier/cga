@@ -1,5 +1,14 @@
 use super::*;
 
+/// 遮挡物的**透过率**（着色端乘在可见性上：1 = 不遮挡，0 = 全遮）。
+/// 正常模式取 `1 - opacity`；忽略透明度模式一律 0（当作不透明遮挡物）。
+fn eff_occlusion(mode: RenderMode, obj: &Object) -> f64 {
+    match mode {
+        RenderMode::Normal => 1.0 - obj.material.opacity,
+        RenderMode::IgnoreOpacity => 0.0,
+    }
+}
+
 /// 阴影：遮挡物包围球 vs 阴影射线（p → 光源）的保守筛选，返回需要测试的光线下标。
 /// `None` 表示不能界定（无界几何如平面）→ 调用方回退全量。
 fn shadow_ray_indices(
@@ -152,6 +161,19 @@ fn primary_ray_indices(
     Some(idx)
 }
 
+/// 光线追踪的渲染模式。
+///
+/// - `Normal`：材质透明度生效——`opacity < 1` 的表面发射反射/折射次级光线（Whitted），
+///   半透明遮挡物按 `1 - opacity` 削弱阴影。
+/// - `IgnoreOpacity`：把一切当不透明——不发射任何次级光线，透明度不削弱阴影，
+///   材质的不透明部分照常着色。用于"实体预览"与大幅提速（玻璃场景可快一个数量级）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    #[default]
+    Normal,
+    IgnoreOpacity,
+}
+
 #[derive(Debug)]
 pub struct Renderer {
     pub width: i32,
@@ -159,6 +181,8 @@ pub struct Renderer {
     pub aa: i32,
     pub max_depth: i32,
     pub cam: Option<PerspectiveCamera>,
+    /// 渲染模式（默认 `Normal`）。
+    pub mode: RenderMode,
 }
 impl Renderer {
     pub fn new(width: i32, height: i32, aa: i32, max_depth: i32) -> Renderer {
@@ -175,7 +199,14 @@ impl Renderer {
             aa,
             max_depth,
             cam: None,
+            mode: RenderMode::Normal,
         }
+    }
+
+    /// 设定渲染模式（链式）。
+    pub fn with_mode(mut self, mode: RenderMode) -> Renderer {
+        self.mode = mode;
+        self
     }
 
     pub fn render_frame(
@@ -340,7 +371,7 @@ impl Renderer {
         } else {
             None
         };
-        if depth < self.max_depth {
+        if depth < self.max_depth && self.mode == RenderMode::Normal {
             let need = ck(hit.logical_and(s_lt(&op, 1.0)));
             let need_c = ck(need.contiguous());
             need_c.eval().unwrap();
@@ -603,6 +634,9 @@ impl Renderer {
             let iors = ck(ops::stack(&ior_arr, 0));
             let absos = ck(ops::stack(&abso_arr, 0));
             op = ck(ops_.take_axis(&best_idx, 0));
+            if self.mode == RenderMode::IgnoreOpacity {
+                op = ck(ops::ones_like(&op));
+            }
             ior = ck(iors.take_axis(&best_idx, 0));
             abso = ck(absos.take_axis(&best_idx, 0));
         }
@@ -645,7 +679,11 @@ impl Renderer {
                         } else {
                             m
                         };
-                        let f_s = ck(ops::select(&occ, fs(1.0 - obj.material.opacity), fs(1.0)));
+                        let f_s = ck(ops::select(
+                            &occ,
+                            fs(eff_occlusion(self.mode, obj)),
+                            fs(1.0),
+                        ));
                         // 合并回全量：v *= (1 + 散布(f_s - 1))
                         let delta = ck(ops::indexing::scatter_single(
                             &ck(ops::zeros::<f32>(&[n_rays])),
@@ -664,7 +702,7 @@ impl Renderer {
                         };
                         v = ck(v.multiply(ck(ops::select(
                             &occ,
-                            fs(1.0 - obj.material.opacity),
+                            fs(eff_occlusion(self.mode, obj)),
                             fs(1.0),
                         ))));
                     }

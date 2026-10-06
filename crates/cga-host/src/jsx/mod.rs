@@ -1710,12 +1710,35 @@ pub fn render_jsx_png(
     h: i32,
     aa: i32,
 ) -> Result<HeadlessImage, String> {
+    render_jsx_png_mode(
+        jsx_src,
+        css_src,
+        asset_root,
+        w,
+        h,
+        aa,
+        cga_gpu::RenderMode::Normal,
+    )
+}
+
+/// 同 `render_jsx_png`，但可选渲染模式：`Normal`（透明度生效，含反射/折射）或
+/// `IgnoreOpacity`（一切当不透明，不发射次级光线）。
+#[allow(clippy::too_many_arguments)]
+pub fn render_jsx_png_mode(
+    jsx_src: &str,
+    css_src: Option<&str>,
+    asset_root: &str,
+    w: i32,
+    h: i32,
+    aa: i32,
+    mode: cga_gpu::RenderMode,
+) -> Result<HeadlessImage, String> {
     if w <= 0 || h <= 0 {
         return Err(format!("headless: bad size {w}x{h}"));
     }
     let mut run = run_jsx(jsx_src, css_src, asset_root)?;
     run.camera.aspect = f64::from(w) / f64::from(h);
-    let mut r = cga_gpu::Renderer::new(w, h, aa, 3);
+    let mut r = cga_gpu::Renderer::new(w, h, aa, 3).with_mode(mode);
     let img = r.render(run.scene, run.camera);
     Ok(HeadlessImage {
         width: w,

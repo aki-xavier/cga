@@ -1,7 +1,7 @@
 use crate::geom_kernels::geom_to_camera;
 use crate::geometry_ops::{geom_bounds, geom_intersect, geom_shadow, geom_uv};
 use crate::mlxops::*;
-use crate::scene::{PerspectiveCamera, Scene};
+use crate::scene::{Object, PerspectiveCamera, Scene};
 use crate::scene_graph::{vec3_dot, vec3_unit};
 use crate::shading::{shade_batched, Light, LightKind};
 use crate::texture::WrapMode;
@@ -422,6 +422,84 @@ mod tests {
                 && f64::from(center[0]) - f64::from(center[1]) > 80.0
                 && f64::from(center[0]) - f64::from(center[2]) > 60.0,
             "中心应透过玻璃见到红墙：center={center:?}"
+        );
+    }
+
+    #[test]
+    fn test_render_ignore_opacity_is_noop_without_transparency() {
+        // 不透明场景：忽略透明度模式必须与正常模式**逐位一致**（模式不得有副作用）
+        let sc = rq_shadow_scene(Some(1.0));
+        let mut a = Renderer::new(96, 96, 1, 3);
+        let img_a = a.render(sc.clone(), rq_shadow_cam());
+        let mut b = Renderer::new(96, 96, 1, 3).with_mode(RenderMode::IgnoreOpacity);
+        let img_b = b.render(sc, rq_shadow_cam());
+        img_a.eval().unwrap();
+        img_b.eval().unwrap();
+        assert_eq!(data_f32(&img_a), data_f32(&img_b));
+    }
+
+    #[test]
+    fn test_render_ignore_opacity_disables_refraction() {
+        // 玻璃球在墙前：正常模式中心透过折射见红墙；忽略透明度模式中心是玻璃自身的
+        // 着色（不折射），两者必须不同。
+        let mut sc = rq_wall_scene();
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0xAAD4FF),
+                roughness: 0.1,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 0.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0, 0.0, 2.2],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::directional(
+            Color::from_hex(0xFFFFFF),
+            0.8,
+            [0.2, 1.0, 0.3],
+        ));
+        let mut n = Renderer::new(64, 64, 1, 3);
+        let px_n = rq_px(&n.render(sc.clone(), rq_head_on_cam()), 64, 32, 32);
+        let mut o = Renderer::new(64, 64, 1, 3).with_mode(RenderMode::IgnoreOpacity);
+        let px_o = rq_px(&o.render(sc, rq_head_on_cam()), 64, 32, 32);
+        // 正常模式：折射所见为墙（红主导）
+        assert!(px_n[0] > px_n[2] + 60.0, "正常模式应折射见红墙：{px_n:?}");
+        // 忽略透明度：不再折射（看不到红墙），而是球自身的不透明着色（命中点近镜面
+        // 反射，可能是灰白高光），两模式必须有明显差异。
+        assert!(
+            (f64::from(px_o[0]) - f64::from(px_n[0])).abs() > 30.0,
+            "两模式应有明显差异：{px_n:?} vs {px_o:?}"
+        );
+        assert!(
+            f64::from(px_o[0]) < f64::from(px_n[0]) - 30.0,
+            "忽略透明度不应再看到红墙：{px_n:?} vs {px_o:?}"
+        );
+    }
+
+    #[test]
+    fn test_render_ignore_opacity_transparent_occluder_fully_shadows() {
+        // 完全不透明的遮挡物（opacity=0）：正常模式不投影（透过率 1，像素被照亮），
+        // 忽略透明度模式按全不透明投影（本影只剩环境光）。
+        let sc = rq_shadow_scene(Some(0.0));
+        let want_lit = rq_linear_to_srgb255(0.8 * 0.7071 + 0.2); // 直射 + 环境（粗略上限）
+        let mut n = Renderer::new(96, 96, 1, 3);
+        let px_n = rq_px(&n.render(sc.clone(), rq_shadow_cam()), 96, 48, 48);
+        let mut o = Renderer::new(96, 96, 1, 3).with_mode(RenderMode::IgnoreOpacity);
+        let px_o = rq_px(&o.render(sc, rq_shadow_cam()), 96, 48, 48);
+        let want_amb = rq_linear_to_srgb255(0.2);
+        assert!(
+            (f64::from(px_o[0]) - f64::from(want_amb)).abs() <= 2.0,
+            "忽略透明度应投全阴影（只剩环境光）：{px_o:?} want≈{want_amb}"
+        );
+        assert!(
+            f64::from(px_n[0]) > f64::from(want_amb) + 10.0,
+            "正常模式透明遮挡物不应投全阴影：{px_n:?}（上限参考 {want_lit}）"
         );
     }
 

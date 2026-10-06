@@ -16,6 +16,10 @@ struct Args {
     /// Samples per pixel (anti-aliasing)
     #[arg(default_value_t = 2)]
     aa: i32,
+    /// Ignore transparency: render everything opaque (no reflection/refraction,
+    /// transparent occluders shadow like solid ones)
+    #[arg(long)]
+    opaque: bool,
 }
 
 fn main() {
@@ -47,15 +51,27 @@ fn main() {
         }
         rest = &rest[i + 4..];
     }
-    let img = render_jsx_png(
+    let mode = if args.opaque {
+        RenderMode::IgnoreOpacity
+    } else {
+        RenderMode::Normal
+    };
+    let img = render_jsx_png_mode(
         &text,
         if css.is_empty() { None } else { Some(&css) },
         dir,
         args.w,
         args.h,
         args.aa,
+        mode,
     )
     .unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(&out, &img.png).unwrap();
-    println!("saved {out} ({}x{}, aa={})", img.width, img.height, args.aa);
+    println!(
+        "saved {out} ({}x{}, aa={}, mode={})",
+        img.width,
+        img.height,
+        args.aa,
+        if args.opaque { "opaque" } else { "normal" }
+    );
 }
