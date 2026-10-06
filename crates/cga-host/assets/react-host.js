@@ -36,6 +36,71 @@
     return o;
   };
 
+  // ---- 属性值净化 ----------------------------------------------------------
+  // props 里可以出现 React 元素（`through={plate}`、`face(plate, '+y')` 里的 of），
+  // 旧路径下它们是自建的 {__el,…}，dump 成 {t,p,c}。这里必须转成同形的树，否则
+  // 构建器（to_el / face_of）拿不到几何。组件元素无法在属性位置求值 → 丢弃。
+  // React 19 把元素标记改成了 Symbol.for('react.transitional.element')（19 之前是
+  // 'react.element'）。两个都认，并留一条描述规则以防再改名。
+  const isElement = (v) => {
+    if (v === null || typeof v !== 'object') return false;
+    const s = v.$$typeof;
+    if (typeof s !== 'symbol') return false;
+    if (s === Symbol.for('react.element') || s === Symbol.for('react.transitional.element')) {
+      return true;
+    }
+    const d = String(s); // "Symbol(react.…element)"
+    return d.indexOf('react.') === 7 && d.indexOf('element') > 0;
+  };
+
+  function childrenTree(children) {
+    const out = [];
+    const push = (c) => {
+      if (c === null || c === undefined || typeof c === 'boolean') return;
+      if (Array.isArray(c)) {
+        c.forEach(push);
+        return;
+      }
+      const t = elementTree(c);
+      if (t !== undefined && t !== null) out.push(t);
+    };
+    push(children);
+    return out;
+  }
+
+  function elementTree(el) {
+    if (Array.isArray(el)) return childrenTree(el);
+    if (!isElement(el)) return sanitize(el);
+    if (typeof el.type !== 'string') return undefined;
+    return { t: el.type, p: sanitize(sceneProps(el.props)), c: childrenTree(el.props.children) };
+  }
+
+  // 快照净化：只留 JSON 安全、场景可理解的值。函数 → undefined（丢弃）。
+  function sanitize(v, depth) {
+    depth = depth || 0;
+    if (v === null) return null;
+    if (v === undefined) return undefined;
+    const t = typeof v;
+    if (t === 'number' || t === 'string' || t === 'boolean') return v;
+    if (t === 'function') return undefined;
+    if (Array.isArray(v))
+      return v.map((x) => {
+        const s = sanitize(x, depth + 1);
+        return s === undefined ? null : s;
+      });
+    if (t === 'object') {
+      if (isElement(v)) return elementTree(v);
+      if (depth > 16) return undefined;
+      const o = {};
+      for (const k of Object.keys(v)) {
+        const s = sanitize(v[k], depth + 1);
+        if (s !== undefined) o[k] = s;
+      }
+      return o;
+    }
+    return undefined;
+  }
+
   function makeHost(counters, nextId) {
     let updatePriority = R.lanes.DefaultEventPriority;
 
@@ -263,6 +328,8 @@
       },
 
       // 快照：与旧元素树同形 {t,p,c}；文本节点跳过（当前场景用 props 表达文字）。
+      // 单个根 → 直接是该元素；多个根 → 包一层 fragment（与旧路径的 fragment 语义一致）；
+      // 空场景 → null（交由宿主报"不是元素"，与旧路径一致）。
       snapshot() {
         const clean = (n) => {
           if (n.kind === 'text') return null;
@@ -278,7 +345,9 @@
           const c = clean(ch);
           if (c !== null) out.push(c);
         }
-        return JSON.stringify(out);
+        if (out.length === 0) return 'null';
+        if (out.length === 1) return JSON.stringify(out[0]);
+        return JSON.stringify({ t: 'fragment', p: {}, c: out });
       },
       ids() {
         const walk = (n, acc) => {
@@ -315,31 +384,6 @@
     return session;
   }
 
-  // 快照净化：只留 JSON 安全、场景可理解的值。函数 / React 元素 → undefined（丢弃）。
-  function sanitize(v, depth) {
-    depth = depth || 0;
-    if (v === null) return null;
-    if (v === undefined) return undefined;
-    const t = typeof v;
-    if (t === 'number' || t === 'string' || t === 'boolean') return v;
-    if (t === 'function') return undefined;
-    if (Array.isArray(v)) return v.map((x) => {
-      const s = sanitize(x, depth + 1);
-      return s === undefined ? null : s;
-    });
-    if (t === 'object') {
-      if (v.$$typeof) return undefined; // React 元素不可作为场景属性
-      if (depth > 16) return undefined;
-      const o = {};
-      for (const k of Object.keys(v)) {
-        const s = sanitize(v[k], depth + 1);
-        if (s !== undefined) o[k] = s;
-      }
-      return o;
-    }
-    return undefined;
-  }
-
   globalThis.CGA_REACT_HOST = {
     version: R.version,
     createSession,
@@ -349,11 +393,21 @@
 
   // 宿主唯一的求值入口：异常（含语法错误）转成 '__CGA_ERR__…' 文本返回，
   // Rust 侧只处理字符串，不接触引擎级异常对象。
+  // 注意：boa 里 Error 的 stack 不含 message，必须自己拼上。
+  const describe = (e) => {
+    if (e !== null && typeof e === 'object') {
+      const msg = e.message === undefined ? '' : String(e.message);
+      const st = e.stack === undefined ? '' : String(e.stack);
+      if (msg && st.indexOf(msg) === -1) return msg + '\n' + st;
+      return st || msg || String(e);
+    }
+    return String(e);
+  };
   globalThis.__cga_run = (fn) => {
     try {
       return '__CGA_OK__' + String(fn());
     } catch (e) {
-      return '__CGA_ERR__' + String((e && (e.stack || e.message)) || e);
+      return '__CGA_ERR__' + describe(e);
     }
   };
 })();

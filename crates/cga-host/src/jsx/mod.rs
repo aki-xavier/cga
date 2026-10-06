@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use boa_engine::{Context, Source};
+use boa_engine::Context;
 use serde_json::Value;
 use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS};
 use swc_core::ecma::ast::{
@@ -37,19 +37,8 @@ use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::Color;
 use cga_gpu::shading::Light;
 
-const PRELUDE: &str = r#"
-function h(tag, props, ...children) {
-  const flat = [];
-  const push = (c) => {
-    if (c === null || c === undefined || c === true || c === false) return;
-    if (Array.isArray(c)) { c.forEach(push); return; }
-    flat.push(c);
-  };
-  children.forEach(push);
-  if (typeof tag === 'function') return tag({ ...(props || {}), children: flat });
-  return { __el: true, tag, props: props || {}, children: flat };
-}
-const Fragment = 'fragment';
+/// 元素名常量与查询辅助（旧路径与 React 路径共用）。
+const PRELUDE_COMMON: &str = r#"
 const Sphere='sphere',Plane='plane',Cylinder='cylinder',Box='box',Circle='circle',Cone='cone',
 Torus='torus',Cyclide='cyclide',Ellipsoid='ellipsoid',Translate='translate',Rotate='rotate',Scale='scale',Mirror='mirror',
 Material='material',Union='union',Difference='difference',Intersection='intersection',
@@ -75,17 +64,12 @@ const instances = (name) => h('instances', { of: name });
 const eq = (a, b) => a - b;
 const le = (a, b) => Math.max(0, a - b);
 const ge = (a, b) => Math.max(0, b - a);
-function __dump(v) {
-  if (v === null || v === undefined) return null;
-  if (Array.isArray(v)) return v.map(__dump);
-  if (typeof v === 'object') {
-    if (v.__el) return { t: String(v.tag), p: __dump(v.props), c: v.children.map(__dump) };
-    const o = {};
-    for (const k of Object.keys(v)) o[k] = __dump(v[k]);
-    return o;
-  }
-  return v;
-}
+"#;
+
+/// React 路径：JSX 编译成 `React.createElement`，函数组件由 React 渲染（hooks 可用）。
+const PRELUDE_REACT: &str = r#"
+const h = React.createElement;
+const Fragment = React.Fragment;
 "#;
 
 /// swc: parse JSX, rewrite `export default` → `const __scene`, strip .css
@@ -329,31 +313,6 @@ fn solve_host(
 
 /// boa executes the compiled module; the scene element tree comes back as
 /// JSON (all prop values are numbers/strings/bools/arrays/objects).
-fn eval_js(js: &str, pose: &[(String, f64)]) -> Result<Value, String> {
-    let pose_json = serde_json::to_string(&pose.iter().cloned().collect::<HashMap<String, f64>>())
-        .map_err(|e| format!("JSX: pose serialization failed: {e}"))?;
-    let mut ctx = Context::default();
-    ctx.register_global_callable(
-        boa_engine::js_string!("solve"),
-        2,
-        boa_engine::NativeFunction::from_fn_ptr(solve_host),
-    )
-    .map_err(|e| format!("JSX: host setup failed: {e}"))?;
-    ctx.eval(Source::from_bytes(&format!(
-        "{PRELUDE}\nconst P = {pose_json};\n{js}\nglobalThis.__out = JSON.stringify(__dump(__scene));"
-    )))
-    .map_err(|e| format!("JSX eval: {e}"))?;
-    let out = ctx
-        .global_object()
-        .get(boa_engine::js_string!("__out"), &mut ctx)
-        .map_err(|e| format!("JSX eval: {e}"))?;
-    let s = out
-        .to_string(&mut ctx)
-        .map_err(|e| format!("JSX eval: {e}"))?
-        .to_std_string_escaped();
-    serde_json::from_str(&s).map_err(|e| format!("JSX: scene serialization failed: {e}"))
-}
-
 #[derive(Clone, Debug)]
 pub struct El {
     pub tag: String,
@@ -365,10 +324,15 @@ fn to_el(v: &Value) -> Result<El, String> {
     let obj = v
         .as_object()
         .ok_or_else(|| format!("JSX: scene is not an element: {v}"))?;
-    let tag = obj
-        .get("t")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "JSX: element without tag".to_string())?;
+    let tag = obj.get("t").and_then(Value::as_str).ok_or_else(|| {
+        let t = v.to_string();
+        let t = if t.len() > 240 {
+            format!("{}…", &t[..240])
+        } else {
+            t
+        };
+        format!("JSX: element without tag: {t}")
+    })?;
     let props: HashMap<String, Value> = obj
         .get("p")
         .and_then(Value::as_object)
@@ -1639,8 +1603,48 @@ pub fn run_jsx_pose(
     pose: &[(String, f64)],
 ) -> Result<crate::SceneRun, String> {
     let js = compile_jsx(jsx_src)?;
-    let v = eval_js(&js, pose)?;
-    let root = to_el(&v)?;
+    let v = eval_js_react(&js, pose)?;
+    build_scene_run(&v, css_src, asset_root, pose)
+}
+
+/// React 路径：真 React 渲染（hooks/状态/副作用可用），把已提交的场景实例树快照成
+/// `{t,p,c}` JSON——与旧元素树同形，于是场景构建一行都不用改。
+fn eval_js_react(js: &str, pose: &[(String, f64)]) -> Result<Value, String> {
+    use crate::react;
+    let module = format!("{PRELUDE_REACT}{PRELUDE_COMMON}\n{js}");
+    let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
+    let dump = react::with_session(react::Runtime::from_env(), |sess| {
+        sess.register_global("solve", 2, solve_host)?;
+        sess.unmount()?; // 清掉上一个场景（顺带跑其副作用清理）
+        sess.begin(&module, &pose_map)?;
+        let stats = sess.drain()?;
+        if stats.errors > 0 {
+            let detail = sess
+                .logs()?
+                .into_iter()
+                .filter(|l| l.level == "error")
+                .map(|l| l.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!("JSX: 渲染期异常:\n{detail}"));
+        }
+        let errors = sess.errors()?;
+        if !errors.is_empty() {
+            return Err(format!("JSX: React 错误: {}", errors.join("; ")));
+        }
+        sess.snapshot()
+    })?;
+    serde_json::from_str(&dump).map_err(|e| format!("JSX: 场景序列化失败: {e}"))
+}
+
+/// 由 `{t,p,c}` 树构建场景（CSS 匹配、材质继承、惰性查询解析都在这里）。
+fn build_scene_run(
+    v: &Value,
+    css_src: Option<&str>,
+    asset_root: &str,
+    pose: &[(String, f64)],
+) -> Result<crate::SceneRun, String> {
+    let root = to_el(v)?;
     let rules = match css_src {
         Some(c) => parse_css(c)?,
         None => Vec::new(),
@@ -1773,6 +1777,52 @@ mod tests {
             assert!(out.png.len() > 1000, "{name}: 非空渲染");
         }
     }
+    /// 冻结金标：7 个画廊场景的渲染（96×72 aa=1）哈希。
+    ///
+    /// 迁移到 React 运行时之前，旧的一次性求值路径与新路径已逐位核对（7/7 一致），
+    /// 这些哈希即那时的输出。此后它是端到端护栏：只要渲染/场景构建语义不漂移，
+    /// 就必须一直吻合（改渲染器或升级内置 React 时这里是第一道警报）。
+    /// 取三个代表场景（其余 4 个由 `test_jsx_gallery_smoke` 覆盖可渲染性）：
+    /// orbit = 透明/折射，assembly = solve 约束 + tag/when + 嵌套元素属性，
+    /// mechanical = CSG。
+    const GOLDEN: &[(&str, u64)] = &[
+        ("orbit", 0x7c79_87c6_76e2_361c),
+        ("mechanical", 0xa1ae_01a8_4b10_c72a),
+        ("assembly", 0xadf0_d90d_5db2_7afe),
+    ];
+
+    #[test]
+    fn gallery_render_golden() {
+        for (name, want) in GOLDEN {
+            let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx")).unwrap();
+            let css = std::fs::read_to_string(format!("../../examples/jsx/{name}.css")).unwrap();
+            let run = run_jsx(&jsx, Some(&css), "../../examples/jsx")
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let png = render_png(&run);
+            assert_eq!(
+                fnv1a(&png),
+                *want,
+                "{name}: 渲染金标不符（{} 字节）",
+                png.len()
+            );
+        }
+    }
+
+    fn render_png(run: &crate::SceneRun) -> Vec<u8> {
+        let mut r = cga_gpu::Renderer::new(96, 72, 1, 3);
+        let img = r.render(run.scene.clone(), run.camera.clone());
+        cga_gpu::frame_to_png_bytes(&img)
+    }
+
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
     #[test]
     fn renders_generated_flange() {
         let text = crate::gen_flange_assembly(

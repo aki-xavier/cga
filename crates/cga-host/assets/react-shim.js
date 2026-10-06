@@ -18,7 +18,12 @@
 
   const str = (x) => {
     if (typeof x === 'string') return x;
-    if (x instanceof Error) return x.stack || x.message;
+    if (x !== null && typeof x === 'object') {
+      const msg = x.message === undefined ? '' : String(x.message);
+      const st = x.stack === undefined ? '' : String(x.stack);
+      if (msg && st.indexOf(msg) === -1) return msg + ' | ' + st;
+      return st || msg || String(x);
+    }
     try {
       return String(x);
     } catch (_) {

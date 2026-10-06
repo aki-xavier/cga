@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # JSX + CSS 场景宿主：React 模式前端
 
-状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-host/src/jsx/`、CLI `render_jsx` / `report_jsx`。
+状态：已实现（2026-10-06，路线 A：真 JS；2026-10-07，P1：改用**真 React 运行时**）。适用：`crates/cga-host/src/jsx/`、`crates/cga-host/src/react/`、CLI `render_jsx` / `report_jsx`。
 R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX；互操作**仅导出**（URDF / STL），不提供导入；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
@@ -10,23 +10,40 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 | 件 | 选型 | 职责 |
 | --- | --- | --- |
 | JSX → JS | swc（`swc_core`，classic 运行时，pragma `h`） | 解析 + 变换，错误带 span（报 `JSX line N: …`） |
-| JS 执行 | boa（纯 Rust，无 IO 沙箱） | 真 JS 语义：函数组件、`map`、三元、`Math`、任意表达式 |
+| JS 执行 | boa（纯 Rust，无 IO 沙箱） | 真 JS 语义：组件、`map`、三元、`Math`、任意表达式 |
+| React 运行时 | 内置 react@19.3.0 + react-reconciler@0.34.0 + scheduler@0.28.0（`crates/cga-host/assets/react-runtime.{dev,prod}.js`，`make vendor-react` 生成） | 组件模型：hooks / context / memo / effects / 协调与局部更新 |
+| 平台层 | `crates/cga-host/assets/react-shim.js`（我们维护） | 确定性 `setTimeout`/microtask/`performance`/`console`：时间只由 `drain` 推进，无事件循环 |
+| 渲染器适配层 | `crates/cga-host/assets/react-host.js`（我们维护） | host config → 场景实例树 → `{t,p,c}` 快照（与旧元素树同形） |
 | CSS | lightningcss | 规则解析（tag / `.class` / `#id` / `:root` / `scene`） |
 | 场景构建 | 复用 `scene_build` 的 `build_geometry`/`build_material`/kinematics | 语义单一来源 |
 
-管线：`.jsx` → swc 变换 → boa 执行（宿主 `h` 是纯 JS prelude）→ 元素树经 `JSON.stringify` 回传 → Rust 建 `SceneRun`（Scene + camera + tags + kinematics，报告管线原样可用）。
+管线：`.jsx` → swc 变换（`export default` → `const __scene`）→ 在常驻会话里以 `new Function('P', 模块)` 求值一次 → React 挂载 → `drain` 跑到不动点 → 快照已提交的场景实例树 → Rust 建 `SceneRun`（Scene + camera + tags + kinematics，报告管线原样可用）。
+
+会话按线程复用，运行时只解析一次（进程内）；每次渲染只付"模块求值 + React 挂载 + 快照"。引擎跑在自带 64 MB 栈的专用线程上（boa 的解析是递归的，深嵌套场景在 debug 下会顶爆默认栈）。
 
 ## 2. 约定
 
 - 场景 = 文件末尾的 `export default <element>`。
 - 内置元素 PascalCase 或全小写均可（`<Sphere r={1}/>` ≡ `<sphere r={1}/>`）。
-- 函数组件首字母大写，按 React 约定调用。
+- 组件就是 React 组件（首字母大写）：hooks、`memo`、`Fragment`、`key` 都可用。模块只求值一次，组件身份跨帧稳定，因此 hook 状态得以保留。
 - CSS 只认单层选择器（tag / `.class` / `#id` / `:root` / `scene`），材质属性沿元素树继承，内联 prop 优先于 CSS 规则，CSS 按源码顺序级联。
 - `import './x.css'` 由宿主跟随装载；其他 import 报错。
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
 
-## 3. 元素 → 语义映射
+## 3. React 能力边界
+
+**可用**（真 React 提供，均有测试看守）：`useState useReducer useMemo useRef useContext useEffect`（依赖与清理顺序正确）、`memo`、`createContext`、`Fragment`、`key` 协调；`Suspense` / error boundary / `useTransition` / `useSyncExternalStore` / `ref` / `forwardRef` 的机制都在（需要时自行给数据或驱动）。
+
+**协调语义**：只有变化的实例被重建 —— 子组件自身 `setState` → 新建 0 / 更新 1；keyed 插入 → 新建 1、其余实例身份不变；卸载跑副作用清理。
+
+**确定性**：调度器的时间由宿主 `drain` 推进（微任务 + 定时器，有界轮数），"挂载 → 提交 → 副作用"在没有事件循环的情况下跑到不动点；同输入同输出（有测试）。
+
+**没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）、真实事件源与布局、portal 到 DOM。`onClick` 之类会被 React 正常装上，但需要宿主派发事件并长驻会话——交互运行时属于后续阶段；`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
+
+**版本适配**：host config 面按 React 版本固定（19 移除了 `prepareUpdate`、把 diff 交给 `commitUpdate(instance, type, prevProps, nextProps)`、元素标记改名 `react.transitional.element`、dev 构建额外要求性能追踪/View Transition/test selector 一组键）。升级 React 只需改 `react-host.js` 并重跑 `make vendor-react`。
+
+## 4. 元素 → 语义映射
 
 | JSX | 语义 |
 | --- | --- |
@@ -54,15 +71,18 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 | `face/fnrm/center/lo/hi/size/xdir…` | 同名惰性查询函数（prop 位置解析；向量运算用 `vadd/vsub/vscale`） |
 | `--set` / 原 cgs_pose | `run_jsx_pose` + 全局 `P` 约定（`P.x` 读覆盖）+ 关节名覆盖 |
 
-## 4. 验收
+## 5. 验收
 
 - 平权验收（R2 时点，CGS 尚在）：orbit/assembly/画廊六场景的 JSX 版与原 CGS 版渲染**逐字节相同**（96×72 PNG）。R4 后 CGS 文件已删除，测试现为 JSX 冒烟。
+- React 迁移验收（P1）：React 路径与旧的一次性求值路径对 7 个画廊场景渲染**逐字节相同**；旧路径删除后固化为渲染金标（orbit / mechanical / assembly 三场景，覆盖透明、CSG、solve 约束 + tag/when + 嵌套元素属性）。
+- 跨二进制核对：迁移前后两个 CLI 对 7 个场景（640×480 aa=2）输出逐位一致，端到端 +80…+240 ms/进程。
+- React 运行时测试：hooks 求值、局部更新计数、keyed 身份稳定、effect 依赖与清理顺序、卸载清理、同输入同输出、作者错误（语法/运行时）回传。
 - 函数组件 + `map` + 三元控制流出 4 个对象。
 - CSS 类命中材质（color/roughness 断言）。
 - JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常。
 
-## 5. 架构终态
+## 6. 架构终态
 
-`.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 JS 执行结果翻译成它的调用。下游（渲染/报告/URDF 互转）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）。
+.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 React 已提交的实例树翻译成它的调用。下游（渲染/报告/URDF、STL 导出）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）；一次性求值路径已由真 React 运行时取代（2026-10-07，P1）。
