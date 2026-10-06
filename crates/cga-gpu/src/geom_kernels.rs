@@ -96,11 +96,119 @@ pub fn affine_contains(p: &AffineParams, pos: &Array) -> Array {
     crate::geom_contains(&p.inner, &p_l)
 }
 
+/// 子节点包围球 vs 光线束的保守筛选：返回需要测试的光线下标。
+/// `None` = 走全量（无界几何，或子集收益不足）；`Some(空)` = 无光线可命中。
+pub(crate) fn child_ray_subset(child: &GeometryParams, o: &Array, d: &Array) -> Option<Vec<i32>> {
+    let b = crate::geom_bounds(child)?;
+    let (lo, hi) = (b[0], b[1]);
+    let c = [
+        0.5 * (lo[0] + hi[0]),
+        0.5 * (lo[1] + hi[1]),
+        0.5 * (lo[2] + hi[2]),
+    ];
+    let r =
+        0.5 * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    if !(r.is_finite() && r >= 0.0) {
+        return None;
+    }
+    let n = o.shape()[0];
+    let to_c = ck(ck(o.negative()).add(&arr3v(c)));
+    let proj = ck(ck(to_c.multiply(d)).sum_axes(&[-1], false));
+    let perp2 =
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
+    mask.eval().unwrap();
+    let cnt = ck(mask.sum(None)).item_cast::<i32>();
+    if cnt * 4 >= n * 3 {
+        return None; // 子集收益不足 1/4：直接全量
+    }
+    if cnt == 0 {
+        return Some(Vec::new());
+    }
+    let mut idx: Vec<i32> = Vec::with_capacity(cnt as usize);
+    let data = mask.as_slice::<bool>();
+    for (i, &v) in data.iter().enumerate() {
+        if v {
+            idx.push(i as i32);
+        }
+    }
+    Some(idx)
+}
+
+/// 只对 `idx` 指定的光线求穿越点，散布回全量 (b, c) 形状；`空子集`用 +inf 占位
+/// （列数由一次 1 光线探针取得，保持与全量调用一致的形状）。
+fn child_crossings_subset(
+    cp: &GeometryParams,
+    o: &Array,
+    d: &Array,
+    idx: &[i32],
+) -> (Array, Array, Array) {
+    let b = o.shape()[0];
+    let ids = Array::from_slice(idx, &[idx.len() as i32]);
+    let o_s = ck(o.take_axis(&ids, 0));
+    let d_s = ck(d.take_axis(&ids, 0));
+    let (t_s, n_s, v_s) = crate::geom_crossings(cp, &o_s, &d_s);
+    let c = t_s.shape()[1];
+    let m = idx.len() as i32;
+    // 散布回全量：t/n/valid 的未选中行留 +inf / 0 / false
+    let t_full = ck(ops::indexing::scatter_single(
+        &ck(ops::full::<f32>(&[b, c], &fs(f64::INFINITY))),
+        &ids,
+        &ck(t_s.reshape(&[m, 1, c])),
+        0,
+    ));
+    let n_full = ck(ops::indexing::scatter_single(
+        &ck(ops::zeros::<f32>(&[b, c, 3])),
+        &ids,
+        &ck(n_s.reshape(&[m, 1, c, 3])),
+        0,
+    ));
+    let v_full_i = ck(ops::indexing::scatter_single(
+        &ck(ops::zeros::<i32>(&[b, c])),
+        &ids,
+        &ck(ck(v_s.as_type::<i32>()).reshape(&[m, 1, c])),
+        0,
+    ));
+    let v_full = ck(v_full_i.ne(Array::from_int(0)));
+    (t_full, n_full, v_full)
+}
+
+/// 该子节点在全量子集为空时的占位列（列数用 1 光线探针取，值全 +inf / 0 / false）。
+fn child_crossings_empty(cp: &GeometryParams, o: &Array) -> (Array, Array, Array) {
+    let b = o.shape()[0];
+    let dummy_o = ck(ops::zeros::<f32>(&[1, 3]));
+    let dummy_d = ck(ck(ops::zeros::<f32>(&[1, 3])).add(&arr3v([0.0, 0.0, 1.0])));
+    let (t1, _n1, _) = crate::geom_crossings(cp, &dummy_o, &dummy_d);
+    let c = t1.shape()[1];
+    (
+        ck(ops::full::<f32>(&[b, c], &fs(f64::INFINITY))),
+        ck(ops::zeros::<f32>(&[b, c, 3])),
+        ck(ops::zeros_dtype(&[b, c], mlx_rs::Dtype::Bool)),
+    )
+}
+
 pub(crate) fn csg_crossings(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let mut ts_l: Vec<Array> = Vec::new();
     let mut ns_l: Vec<Array> = Vec::new();
     let mut vs_l: Vec<Array> = Vec::new();
     for cp in &p.children {
+        match child_ray_subset(cp, o, d) {
+            Some(v) if v.is_empty() => {
+                let (t, n, val) = child_crossings_empty(cp, o);
+                ts_l.push(t);
+                ns_l.push(n);
+                vs_l.push(val);
+                continue;
+            }
+            Some(v) => {
+                let (t, n, val) = child_crossings_subset(cp, o, d, &v);
+                ts_l.push(t);
+                ns_l.push(n);
+                vs_l.push(val);
+                continue;
+            }
+            None => {}
+        }
         let (t, n, v) = crate::geom_crossings(cp, o, d);
         ts_l.push(t);
         ns_l.push(n);
@@ -137,8 +245,79 @@ pub(crate) fn csg_contains(p: &CsgParams, pos: &Array) -> Array {
     acc
 }
 
+/// 单子节点的成员关系（全量 (b, k1) bool）：只在“可能命中该子节点”的光线
+/// 所对应的采样点上求值，其余置 false。无界子节点（平面）走全量。
+fn child_contains_subset(
+    child: &GeometryParams,
+    o: &Array,
+    d: &Array,
+    flat: &Array,
+    b: i32,
+    k1: i32,
+) -> Array {
+    let Some(idx) = child_ray_subset(child, o, d) else {
+        let mem = crate::geom_contains(child, flat);
+        return ck(mem.reshape(&[b, k1]));
+    };
+    if idx.is_empty() {
+        return ck(ops::zeros_dtype(&[b, k1], mlx_rs::Dtype::Bool));
+    }
+    let m = idx.len() as i32;
+    let ids = Array::from_slice(&idx, &[m]);
+    let pts = ck(ck(flat.reshape(&[b, k1, 3])).take_axis(&ids, 0));
+    let pts = ck(pts.reshape(&[m * k1, 3]));
+    let mem = ck(ck(crate::geom_contains(child, &pts).as_type::<i32>()).reshape(&[m, k1]));
+    let full_i = ck(ops::indexing::scatter_single(
+        &ck(ops::zeros::<i32>(&[b, k1])),
+        &ids,
+        &ck(mem.reshape(&[m, 1, k1])),
+        0,
+    ));
+    ck(full_i.ne(Array::from_int(0)))
+}
+
+/// 与 `csg_contains` 同语义，但逐子节点做光线子集裁剪（区间分类的采样点里，
+/// 大部分点离多数子节点很远——这一层裁剪是 CSG 求值的主要开销所在）。
+fn csg_contains_culled(p: &CsgParams, o: &Array, d: &Array, pos: &Array) -> Array {
+    let shape = pos.shape().to_vec();
+    let (b, k1) = (shape[0], shape[1]);
+    let flat = ck(pos.reshape(&[b * k1, 3]));
+    let mut mems: Vec<Array> = Vec::with_capacity(p.children.len());
+    for cp in &p.children {
+        mems.push(child_contains_subset(cp, o, d, &flat, b, k1));
+    }
+    if p.op == CsgOp::Difference {
+        let first = mems[0].clone();
+        let mut rest = ck(ops::zeros_dtype(&[b, k1], mlx_rs::Dtype::Bool));
+        for m in &mems[1..] {
+            rest = ck(rest.logical_or(m));
+        }
+        return ck(first.logical_and(&ck(rest.logical_not())));
+    }
+    let mut acc = mems[0].clone();
+    for m in &mems[1..] {
+        acc = if p.op == CsgOp::Union {
+            ck(acc.logical_or(m))
+        } else {
+            ck(acc.logical_and(m))
+        };
+    }
+    acc
+}
+
 fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let dbg = std::env::var("CGA_CSG_TIME").is_ok();
+    let t_all = std::time::Instant::now();
     let (ts, ns, _) = csg_crossings(p, o, d);
+    if dbg {
+        ts.eval().unwrap();
+        eprintln!(
+            "    csg: 穿越点收集 {:.1} ms ({} 列) 光线={}",
+            t_all.elapsed().as_secs_f64() * 1e3,
+            ts.shape()[1],
+            ts.shape()[0]
+        );
+    }
     let b = ts.shape()[0];
     let k = ts.shape()[1] as usize;
     debug_assert!(k > 0, "csg needs >= 1 crossing column");
@@ -197,8 +376,26 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     }
     let s = ck(ops::concatenate(&s_cols, 1));
 
+    let t_pts = std::time::Instant::now();
     let pos = ck(ck(o.expand_dims(1)).add(ck(ck(s.expand_dims(2)).multiply(ck(d.expand_dims(1))))));
-    let mem = csg_contains(p, &pos);
+    if dbg {
+        order.eval().unwrap();
+        eprintln!(
+            "    csg: 排序+采样点 {:.1} ms (采样点 {})",
+            t_pts.elapsed().as_secs_f64() * 1e3,
+            pos.shape()[1]
+        );
+    }
+    let t_contains = std::time::Instant::now();
+    let mem = csg_contains_culled(p, o, d, &pos);
+    if dbg {
+        mem.eval().unwrap();
+        eprintln!(
+            "    csg: 区间 contains {:.1} ms ({} 子节点)",
+            t_contains.elapsed().as_secs_f64() * 1e3,
+            p.children.len()
+        );
+    }
 
     let ga = ck(ops::broadcast_to(
         Array::from_slice(&(0..k as i32).collect::<Vec<_>>(), &[1, k as i32]),
@@ -229,6 +426,13 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
         &n,
         ck(ops::zeros_like(&n)),
     ));
+    if dbg {
+        t.eval().unwrap();
+        eprintln!(
+            "    csg: 总计 {:.1} ms",
+            t_all.elapsed().as_secs_f64() * 1e3
+        );
+    }
     (t, n, mask)
 }
 
