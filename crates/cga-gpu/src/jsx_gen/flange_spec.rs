@@ -28,21 +28,21 @@ impl Default for FlangeSpec {
 impl FlangeSpec {
     pub fn generate(&self) -> String {
         let mut out = format!(
-            "material(color=0x{:06X}, roughness=0.35, metalness=0.75)\ndifference() {{\n  {}\n",
+            "      <difference color={{0x{:06X}}} roughness={{0.35}} metalness={{0.75}}>\n        {}\n",
             self.color,
             gen_post(self.r_disc, self.h_disc)
         );
         for i in 0..self.n_holes {
             let a = i as f64 * 2.0 * std::f64::consts::PI / self.n_holes as f64;
             out.push_str(&format!(
-                "  rotate(axis=[0.0, 1.0, 0.0], angle={}) translate([{}, 0.0, 0.0]) {}\n",
+                "        <rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><translate t={{[{}, 0.0, 0.0]}}>{}</translate></rotate>\n",
                 fmt_num(a),
                 fmt_num(self.hole_circle_r),
                 gen_post(self.hole_r, self.hole_h)
             ));
         }
         out.push_str(&format!(
-            "  {}\n}}\n",
+            "        {}\n      </difference>\n",
             gen_post(self.center_hole_r, self.hole_h)
         ));
         out

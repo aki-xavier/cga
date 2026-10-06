@@ -28,17 +28,16 @@ impl BoltCircleSpec {
             let a = i as f64 * 2.0 * std::f64::consts::PI / self.n as f64;
             let hw = self.bolt_r * 3.2;
             out.push_str(&format!(
-            "rotate(axis=[0.0, 1.0, 0.0], angle={}) translate([{}, {}, 0.0]) {{\n  material(color=0x{:06X}, roughness=0.4, metalness=0.7) {}\n  translate([0.0, {}, 0.0]) material(color=0x{:06X}, roughness=0.4, metalness=0.7) box(s=[{}, 0.18, {}]);\n}}\n",
-            fmt_num(a),
-            fmt_num(self.radius),
-            fmt_num(self.y),
-            self.color,
-            gen_post(self.bolt_r, self.bolt_h),
-            fmt_num(self.bolt_h / 2.0 + 0.09),
-            self.color,
-            fmt_num(hw),
-            fmt_num(hw)
-        ));
+                "    <rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><translate t={{[{}, {}, 0.0]}}>\n      {}\n      <translate t={{[0.0, {}, 0.0]}}><box s={{[{}, 0.18, {}]}} color={{0x{:06X}}} roughness={{0.4}} metalness={{0.7}} /></translate>\n    </translate></rotate>\n",
+                fmt_num(a),
+                fmt_num(self.radius),
+                fmt_num(self.y),
+                gen_post_mat(self.bolt_r, self.bolt_h, self.color, 0.4, 0.7),
+                fmt_num(self.bolt_h / 2.0 + 0.09),
+                fmt_num(hw),
+                fmt_num(hw),
+                self.color
+            ));
         }
         out
     }

@@ -4,35 +4,16 @@ pub struct HeadlessImage {
     pub png: Vec<u8>,
 }
 
-pub fn render_cgs_png(
-    text: &str,
-    asset_root: &str,
-    w: i32,
-    h: i32,
-    aa: i32,
-) -> Result<HeadlessImage, String> {
-    if w <= 0 || h <= 0 {
-        return Err(format!("headless: bad size {w}x{h}"));
-    }
-    let (scene, mut cam) = crate::cgs_load_result(text, asset_root)?;
-    cam.aspect = f64::from(w) / f64::from(h);
-    let mut r = crate::Renderer::new(w, h, aa, 3);
-    let img = r.render(scene, cam);
-    Ok(HeadlessImage {
-        width: w,
-        height: h,
-        png: crate::frame_to_png_bytes(&img),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn renders_orbit_to_png() {
-        let text = include_str!("../../../examples/cgs/orbit.cgs");
-        let out = render_cgs_png(text, "examples/cgs", 96, 72, 1).expect("headless render");
+        let text = include_str!("../../../examples/jsx/orbit.jsx");
+        let css = include_str!("../../../examples/jsx/orbit.css");
+        let out = crate::render_jsx_png(text, Some(css), "examples/jsx", 96, 72, 1)
+            .expect("headless render");
         assert_eq!(out.width, 96);
         assert_eq!(out.height, 72);
 
@@ -48,12 +29,12 @@ mod tests {
             &crate::GearSpec::default(),
             &crate::BasePlateSpec::default(),
         );
-        let out = render_cgs_png(&text, ".", 96, 72, 1).expect("flange render");
+        let out = crate::render_jsx_png(&text, None, ".", 96, 72, 1).expect("flange render");
         assert!(out.png.len() > 1000);
     }
 
     #[test]
     fn bad_size_errors() {
-        assert!(render_cgs_png("background(color=0x000000);", ".", 0, 10, 1).is_err());
+        assert!(crate::render_jsx_png("export default <scene />;", None, ".", 0, 10, 1).is_err());
     }
 }

@@ -3,11 +3,8 @@ use std::f64::consts::PI;
 
 use crate::geom_kernels::geom_to_camera;
 use crate::scene::{Mesh, PerspectiveCamera, Scene};
+use crate::scene_build::{csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry};
 use crate::scene_graph::{vec3_unit, Color};
-use crate::scene_lang::{
-    cgs_run_result, cgs_run_result_pose, csg_op_name, JointDef, Kinematics, TagInstance,
-    TagRegistry,
-};
 use crate::shading::{Light, LightKind, Material, MaterialKind};
 
 fn fmt_num(v: f64) -> String {
@@ -395,20 +392,6 @@ impl Scene {
     }
 }
 
-pub fn cgs_report(text: &str, asset_root: &str) -> Result<String, String> {
-    let run = cgs_run_result(text, asset_root)?;
-    Ok(run.scene.report(&run.camera, &run.tags, &run.kinematics))
-}
-
-pub fn cgs_report_pose(
-    text: &str,
-    asset_root: &str,
-    pose: &[(String, f64)],
-) -> Result<String, String> {
-    let run = cgs_run_result_pose(text, asset_root, pose)?;
-    Ok(run.scene.report(&run.camera, &run.tags, &run.kinematics))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +415,11 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
         )
     }
 
+    fn rep(jsx: &str) -> String {
+        let run = crate::jsx::run_jsx(jsx, None, "").expect("run");
+        run.scene.report(&run.camera, &run.tags, &run.kinematics)
+    }
+
     fn assert_has(rep: &str, line: &str) {
         assert!(
             rep.contains(line),
@@ -441,11 +429,7 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
 
     #[test]
     fn test_report_minimal_golden() {
-        let rep = cgs_report(
-            "translate([2,0,0]) material(color=0xFF0000) sphere(r=0.5);",
-            "",
-        )
-        .expect("report");
+        let rep = rep("export default <translate t={[2,0,0]}><sphere r={0.5} color={0xFF0000} /></translate>;");
         let want = [
             "scene version=1",
             "background(color=0x87CEEB);",
@@ -464,16 +448,14 @@ bbox_hi=[2.5,0.5,0.5]",
 
     #[test]
     fn test_report_rotation_canonical() {
-        let rep = cgs_report(
-            "rotate(axis=[0,0,1], angle=pi/2) sphere(r=1);\n\
-             rotate(axis=[0,0,1], angle=-pi/2) sphere(r=1);\n\
-             sphere(r=1);\n\
-             translate([1e-9,0,0]) sphere(r=1);\n\
-             rotate(axis=[0,0,1], angle=2*pi) sphere(r=1);\n\
-             plane(n=[0,0,1], d=-0.0);",
-            "",
-        )
-        .expect("report");
+        let rep = rep("export default <scene>\
+<rotate axis={[0,0,1]} angle={Math.PI/2}><sphere r={1} /></rotate>\
+<rotate axis={[0,0,1]} angle={-Math.PI/2}><sphere r={1} /></rotate>\
+<sphere r={1} />\
+<translate t={[1e-9,0,0]}><sphere r={1} /></translate>\
+<rotate axis={[0,0,1]} angle={2*Math.PI}><sphere r={1} /></rotate>\
+<plane n={[0,0,1]} d={-0.0} />\
+</scene>;");
         assert_has(
             &rep,
             "object 0 rotate(axis=[0,0,1], angle=1.570796) material",
@@ -504,14 +486,12 @@ plane(n=[0,0,1], d=0);",
 
     #[test]
     fn test_report_csg_nested_frames() {
-        let rep = cgs_report(
-            "difference() {\n  translate([0.5,0,0]) box(s=[2,2,2]);\n  \
-             scale([2,1,1]) sphere(r=1);\n}\n\
-             difference() {\n  difference() { box(s=[4,4,4]); sphere(r=0.5); }\n  \
-             translate([1,0,0]) sphere(r=0.5);\n}",
-            "",
-        )
-        .expect("report");
+        let rep = rep(
+            "export default <scene>\
+<difference><translate t={[0.5,0,0]}><box s={[2,2,2]} /></translate><scale s={[2,1,1]}><sphere r={1} /></scale></difference>\
+<difference><difference><box s={[4,4,4]} /><sphere r={0.5} /></difference><translate t={[1,0,0]}><sphere r={0.5} /></translate></difference>\
+</scene>;",
+        );
         assert_has(
             &rep,
             &format!(
@@ -537,14 +517,12 @@ sphere(r=0.5)), frame(t=[1,0,0], sphere(r=0.5)));"
 
     #[test]
     fn test_report_unbounded_bounds() {
-        let rep = cgs_report(
-            "cylinder(r=1);\n\
-             plane(n=[0,0,1], d=0);\n\
-             translate([0,1,0]) box(s=[2,1,2]);\n\
-             scale([2,1,1]) box(s=[1,1,1]);",
-            "",
-        )
-        .expect("report");
+        let rep = rep("export default <scene>\
+<cylinder r={1} />\
+<plane n={[0,0,1]} d={0} />\
+<translate t={[0,1,0]}><box s={[2,1,2]} /></translate>\
+<scale s={[2,1,1]}><box s={[1,1,1]} /></scale>\
+</scene>;");
         assert_has(&rep, &format!("object 0 {DEF_MAT} cylinder(r=1, h=-1);"));
         assert_has(&rep, "bounds 0 none");
         assert_has(&rep, &format!("object 1 {DEF_MAT} plane(n=[0,0,1], d=0);"));
@@ -564,14 +542,16 @@ bbox_hi=[1,1.5,1]",
 
     #[test]
     fn test_report_tags() {
-        let src = "tag(\"zeta\") sphere(r=1);\n\
-                   tag(\"alpha\") translate([1,0,0]) sphere(r=0.5);\n\
-                   tag(\"alpha\") translate([2,0,0]) sphere(r=0.5);\n\
-                   tag(\"alpha\") difference() { box(s=[2,2,2]); sphere(r=0.5); }\n\
-                   tag(\"alpha\") scale([2,1,1]) box(s=[1,1,1]);\n\
-                   tag(\"zeta\") translate([3,0,0]) sphere(r=0.5);";
-        let a = cgs_report(src, "").expect("report a");
-        let b = cgs_report(src, "").expect("report b");
+        let src = "export default <scene>\
+<tag name=\"zeta\"><sphere r={1} /></tag>\
+<tag name=\"alpha\"><translate t={[1,0,0]}><sphere r={0.5} /></translate></tag>\
+<tag name=\"alpha\"><translate t={[2,0,0]}><sphere r={0.5} /></translate></tag>\
+<tag name=\"alpha\"><difference><box s={[2,2,2]} /><sphere r={0.5} /></difference></tag>\
+<tag name=\"alpha\"><scale s={[2,1,1]}><box s={[1,1,1]} /></scale></tag>\
+<tag name=\"zeta\"><translate t={[3,0,0]}><sphere r={0.5} /></translate></tag>\
+</scene>;";
+        let a = rep(src);
+        let b = rep(src);
         assert_eq!(a, b, "two runs must be byte-identical");
 
         assert_has(&a, "tag \"alpha\" count=6\n");
@@ -604,8 +584,7 @@ bbox_hi=[1,1.5,1]",
 
     #[test]
     fn test_report_trimesh() {
-        let rep =
-            cgs_report("extrude(profile=[[0,0],[2,0],[2,2],[0,2]], h=3);", "").expect("report");
+        let rep = rep("export default <extrude profile={[[0,0],[2,0],[2,2],[0,2]]} h={3} />;");
         assert_has(
             &rep,
             &format!("object 0 {DEF_MAT} trimesh(faces=12, lo=[0,0,0], hi=[2,2,3]);"),
@@ -619,13 +598,12 @@ bbox_hi=[1,1.5,1]",
 
     #[test]
     fn test_report_material_variants() {
-        let rep = cgs_report(
-            "material(unlit=true, color=0x123456, opacity=1) box(s=[1,1,1]);\n\
-             material(color=0xFF0000, emissive=0x00FF00, roughness=0.9, \
-             metalness=0.5, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
-            "",
-        )
-        .expect("report");
+        let rep = rep(
+            "export default <scene>\
+<box s={[1,1,1]} unlit={true} color={0x123456} opacity={1} />\
+<sphere r={1} color={0xFF0000} emissive={0x00FF00} roughness={0.9} metalness={0.5} opacity={0.5} ior={1.8} absorption={0.1} />\
+</scene>;",
+        );
         assert_has(
             &rep,
             "object 0 material(color=0x123456, roughness=0, metalness=0, \
@@ -669,16 +647,14 @@ emissive=0x00FF00, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
 
     #[test]
     fn test_report_lights_camera() {
-        let rep = cgs_report(
-            "background(color=0x20313A);\n\
-             camera(fov=60, aspect=16/9, position=[1,2,3], target=[0,1,0]);\n\
-             ambient_light(color=0x112233, intensity=0.4);\n\
-             directional_light(direction=[0,-1,0], color=0x445566, intensity=0.7);\n\
-             point_light(position=[1,2,3], color=0x778899, intensity=1.5);\n\
-             sphere(r=1);",
-            "",
-        )
-        .expect("report");
+        let rep = rep("export default <scene>\
+<background color={0x20313A} />\
+<camera fov={60} aspect={16/9} position={[1,2,3]} target={[0,1,0]} />\
+<ambient_light color={0x112233} intensity={0.4} />\
+<directional_light direction={[0,-1,0]} color={0x445566} intensity={0.7} />\
+<point_light position={[1,2,3]} color={0x778899} intensity={1.5} />\
+<sphere r={1} />\
+</scene>;");
         assert_has(&rep, "background(color=0x20313A);\n");
         assert_has(
             &rep,

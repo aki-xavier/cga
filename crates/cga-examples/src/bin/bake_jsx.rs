@@ -4,7 +4,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
-    /// Input .cgs scene
+    /// Input .jsx scene (imports of ./x.css are followed)
     src: String,
     /// Output .obj|.glb (default: <src> minus extension + .obj)
     out: Option<String>,
@@ -26,7 +26,9 @@ fn main() {
         Some(i) => &src[..i],
         None => ".",
     };
-    let (scene, _) = cga_gpu::cgs_load(&text, asset_root);
+    let scene = cga_gpu::run_jsx(&text, None, asset_root)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .scene;
 
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut faces: Vec<[i32; 3]> = Vec::new();

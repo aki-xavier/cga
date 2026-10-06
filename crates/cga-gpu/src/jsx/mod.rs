@@ -3,7 +3,7 @@
 //!
 //! Pipeline: .jsx source → swc (parse JSX → h() calls) → boa executes real
 //! JS (components, map, Math, …) → element tree → scene builder (reuses the
-//! CGS geometry/material builders and the kinematics registry) → `CgsRun`.
+//! CGS geometry/material builders and the kinematics registry) → `SceneRun`.
 //!
 //! Conventions:
 //! - The scene is the `export default <element>` value.
@@ -30,11 +30,11 @@ use swc_core::ecma::visit::VisitMutWith;
 use cga_core::Multivector;
 
 use crate::scene::{Mesh, MeshParams, PerspectiveCamera, Scene};
-use crate::scene_graph::Color;
-use crate::scene_lang::{
-    cam_solve, joint_motion, rpy4, CamProfile, CamRel, CamSolved, CgsValue, Driven, GearRel,
-    JointDef, JointKind, Kinematics, SceneLoader, TagInstance, TagRegistry,
+use crate::scene_build::{
+    cam_solve, joint_motion, rpy4, Builders, CamProfile, CamRel, CamSolved, CgsValue, Driven,
+    GearRel, JointDef, JointKind, Kinematics, TagInstance, TagRegistry,
 };
+use crate::scene_graph::Color;
 use crate::shading::Light;
 
 const PRELUDE: &str = r#"
@@ -468,7 +468,7 @@ fn cgs_of(v: &Value) -> CgsValue {
     }
 }
 
-const MATERIAL_KEYS: [&str; 8] = [
+const MATERIAL_KEYS: [&str; 9] = [
     "color",
     "roughness",
     "metalness",
@@ -477,6 +477,7 @@ const MATERIAL_KEYS: [&str; 8] = [
     "ior",
     "absorption",
     "map",
+    "unlit",
 ];
 
 // ---- CSS ----
@@ -599,7 +600,7 @@ fn css_value_to_arg(name: &str, raw: &str) -> Option<CgsValue> {
 // ---- scene builder ----
 
 struct Builder {
-    loader: SceneLoader,
+    loader: Builders,
     kin: Kinematics,
     joint_stack: Vec<String>,
     driven_by: HashMap<String, Driven>,
@@ -642,6 +643,17 @@ impl Builder {
             .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))
     }
 
+    fn register_tags(&mut self, geo: &cga_core::Geometry, world: [f64; 16], emit: [f64; 16]) {
+        for (name, entry) in self.pending_tags.clone() {
+            let rel = mat4_mul(mat4_inv(entry), emit);
+            self.tags.entry(name).or_default().push(TagInstance {
+                geo: geo.clone(),
+                world,
+                rel,
+            });
+        }
+    }
+
     fn emit(
         &mut self,
         scene: &mut Scene,
@@ -669,14 +681,7 @@ impl Builder {
                 j.meshes.push(idx);
             }
         }
-        for (name, entry) in self.pending_tags.clone() {
-            let rel = mat4_mul(mat4_inv(entry), world);
-            self.tags.entry(name).or_default().push(TagInstance {
-                geo: geo.clone(),
-                world,
-                rel,
-            });
-        }
+        self.register_tags(&geo, world, world);
     }
 
     fn walk(
@@ -690,11 +695,10 @@ impl Builder {
         match el.tag.as_str() {
             "fragment" | "scene" => {
                 if el.tag == "scene" {
-                    if let Some(c) = p_str(el, "background")? {
-                        scene.background = parse_hex(&c)?;
-                    }
                     if let Some(b) = p_num(el, "background")? {
                         scene.background = Color::from_hex(b as i32);
+                    } else if let Some(c) = p_str(el, "background")? {
+                        scene.background = parse_hex(&c)?;
                     }
                 }
                 for c in &el.children {
@@ -853,9 +857,9 @@ impl Builder {
                     "difference" => cga_core::CsgOp::Difference,
                     _ => cga_core::CsgOp::Intersection,
                 };
-                kids.push(cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(
-                    op, inner,
-                )));
+                let g = cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, inner));
+                self.register_tags(&g, cga_core::mat4_identity(), ctx);
+                kids.push(g);
                 Ok(())
             }
             _ => {
@@ -879,6 +883,7 @@ impl Builder {
                     return Ok(());
                 }
                 let geo = self.build_geo(el)?;
+                self.register_tags(&geo, ctx, ctx);
                 let (motor, lin) = cga_core::decompose_rigid(ctx);
                 kids.push(cga_core::Geometry::AffineGeometry(
                     cga_core::AffineGeometry::with_motor(geo, motor, lin),
@@ -1322,7 +1327,7 @@ impl Builder {
                     if let Some(b) = self
                         .loader
                         .local_bounds(&i.geo)
-                        .map(|b| crate::scene_lang::transform_bbox(b, i.world))
+                        .map(|b| crate::scene_build::transform_bbox(b, i.world))
                     {
                         acc = Some(match acc {
                             None => b,
@@ -1349,7 +1354,7 @@ impl Builder {
                 let b = self
                     .loader
                     .local_bounds(&geo)
-                    .map(|b| crate::scene_lang::transform_bbox(b, m4));
+                    .map(|b| crate::scene_build::transform_bbox(b, m4));
                 Ok((m4, b))
             }
             _ => Err(format!("JSX: {what} needs a reference name or element")),
@@ -1362,7 +1367,7 @@ impl Builder {
         key: &str,
         what: &str,
     ) -> Result<([f64; 3], [f64; 3]), String> {
-        let (axis, sign) = crate::scene_lang::parse_face_key(key, 0, what)?;
+        let (axis, sign) = crate::scene_build::parse_face_key(key, 0, what)?;
         let (m, p, n) = match of {
             Value::String(s) => {
                 let insts = self
@@ -1370,14 +1375,14 @@ impl Builder {
                     .get(s)
                     .filter(|l| !l.is_empty())
                     .ok_or_else(|| format!("JSX: unknown reference \"{s}\""))?;
-                let (p, n) = crate::scene_lang::face_local(&insts[0].geo, axis, sign)
+                let (p, n) = crate::scene_build::face_local(&insts[0].geo, axis, sign)
                     .ok_or_else(|| format!("JSX: {what}: reference has no finite bounds"))?;
                 (insts[0].world, p, n)
             }
             Value::Object(_) => {
                 let el = to_el(of)?;
                 let (geo, m4) = self.el_geometry(&el, cga_core::mat4_identity())?;
-                let (p, n) = crate::scene_lang::face_local(&geo, axis, sign)
+                let (p, n) = crate::scene_build::face_local(&geo, axis, sign)
                     .ok_or_else(|| format!("JSX: {what}: reference has no finite bounds"))?;
                 (m4, p, n)
             }
@@ -1385,7 +1390,7 @@ impl Builder {
         };
         Ok((
             cga_core::transform_point(m, p),
-            crate::scene_lang::transform_normal(m, n),
+            crate::scene_build::transform_normal(m, n),
         ))
     }
 
@@ -1505,7 +1510,7 @@ impl Builder {
                     if let Some(b) = self
                         .loader
                         .local_bounds(&i.geo)
-                        .map(|b| crate::scene_lang::transform_bbox(b, i.world))
+                        .map(|b| crate::scene_build::transform_bbox(b, i.world))
                     {
                         acc = Some(match acc {
                             None => b,
@@ -1525,7 +1530,7 @@ impl Builder {
                     }
                 }
                 let b = acc.ok_or_else(|| "JSX: drill target has no finite bounds".to_string())?;
-                (rel0, Some(crate::scene_lang::transform_bbox(b, finv)))
+                (rel0, Some(crate::scene_build::transform_bbox(b, finv)))
             }
             Some(v @ Value::Object(_)) => {
                 let t = to_el(v)?;
@@ -1551,7 +1556,7 @@ impl Builder {
                     let (nm, key) = s
                         .split_once(':')
                         .ok_or_else(|| "JSX: drill face ref must be \"name:key\"".to_string())?;
-                    let (axis, sign) = crate::scene_lang::parse_face_key(key, 0, "drill")?;
+                    let (axis, sign) = crate::scene_build::parse_face_key(key, 0, "drill")?;
                     if axis != ax {
                         return Err(format!(
                             "JSX: drill face key \"{key}\" does not match axis={ax}"
@@ -1562,7 +1567,7 @@ impl Builder {
                         .get(nm)
                         .filter(|l| !l.is_empty())
                         .ok_or_else(|| format!("JSX: unknown reference \"{nm}\""))?;
-                    let (p_local, _) = crate::scene_lang::face_local(&insts[0].geo, axis, sign)
+                    let (p_local, _) = crate::scene_build::face_local(&insts[0].geo, axis, sign)
                         .ok_or_else(|| {
                             "JSX: drill face reference has no finite bounds".to_string()
                         })?;
@@ -1614,12 +1619,12 @@ impl Builder {
     }
 }
 
-/// Evaluate a JSX scene (+ optional CSS) into a `CgsRun`.
+/// Evaluate a JSX scene (+ optional CSS) into a `SceneRun`.
 pub fn run_jsx(
     jsx_src: &str,
     css_src: Option<&str>,
     asset_root: &str,
-) -> Result<crate::CgsRun, String> {
+) -> Result<crate::SceneRun, String> {
     run_jsx_pose(jsx_src, css_src, asset_root, &[])
 }
 
@@ -1630,7 +1635,7 @@ pub fn run_jsx_pose(
     css_src: Option<&str>,
     asset_root: &str,
     pose: &[(String, f64)],
-) -> Result<crate::CgsRun, String> {
+) -> Result<crate::SceneRun, String> {
     let js = compile_jsx(jsx_src)?;
     let v = eval_js(&js, pose)?;
     let root = to_el(&v)?;
@@ -1653,7 +1658,7 @@ pub fn run_jsx_pose(
     }
     let mut cam: Option<PerspectiveCamera> = None;
     let mut b = Builder {
-        loader: SceneLoader::stub(asset_root),
+        loader: Builders::new(asset_root),
         kin: Kinematics::default(),
         joint_stack: Vec::new(),
         driven_by: HashMap::new(),
@@ -1686,7 +1691,7 @@ pub fn run_jsx_pose(
     let mut ps: Vec<(String, f64)> = pose.to_vec();
     ps.sort_by(|a, b| a.0.cmp(&b.0));
     kin.pose = ps;
-    Ok(crate::CgsRun {
+    Ok(crate::SceneRun {
         scene,
         camera: cam,
         tags: b.tags,
@@ -1721,17 +1726,28 @@ pub fn render_jsx_png(
 mod tests {
     use super::*;
 
-    const ORBIT_JSX: &str = include_str!("../../../../examples/jsx/orbit.jsx");
-    const ORBIT_CSS: &str = include_str!("../../../../examples/jsx/orbit.css");
-    const ORBIT_CGS: &str = include_str!("../../../../examples/cgs/orbit.cgs");
-
     #[test]
-    fn test_jsx_orbit_parity_with_cgs() {
-        // 同一场景的两种写法必须渲染出逐字节相同的 PNG。
-        let a = crate::render_cgs_png(ORBIT_CGS, "examples/cgs", 96, 72, 1).expect("cgs render");
-        let b = render_jsx_png(ORBIT_JSX, Some(ORBIT_CSS), "examples/jsx", 96, 72, 1)
-            .expect("jsx render");
-        assert_eq!(a.png, b.png, "JSX 与 CGS 渲染必须逐字节一致");
+    fn test_jsx_gallery_smoke() {
+        // 画廊八场景（JSX+CSS 版）：全部可渲染出合法 PNG。
+        for name in [
+            "orbit",
+            "grid",
+            "building",
+            "mechanical",
+            "primitives",
+            "affine",
+            "freeform",
+            "assembly",
+        ] {
+            let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
+                .unwrap_or_else(|_| panic!("read {name}.jsx"));
+            let css = std::fs::read_to_string(format!("../../examples/jsx/{name}.css"))
+                .unwrap_or_else(|_| panic!("read {name}.css"));
+            let out = render_jsx_png(&jsx, Some(&css), "../../examples/jsx", 96, 72, 1)
+                .unwrap_or_else(|e| panic!("jsx {name}: {e}"));
+            assert!(out.png.starts_with(&[137, 80, 78, 71]), "{name}: PNG magic");
+            assert!(out.png.len() > 1000, "{name}: 非空渲染");
+        }
     }
 
     #[test]
@@ -1807,41 +1823,6 @@ export default (
     }
 
     #[test]
-    fn test_jsx_assembly_parity_with_cgs() {
-        // v2/v3 汇演场景的 JSX 版：solve/drill/face/tag/instances 门控全走过。
-        let jsx = include_str!("../../../../examples/jsx/assembly.jsx");
-        let css = include_str!("../../../../examples/jsx/assembly.css");
-        let cgs = include_str!("../../../../examples/cgs/assembly.cgs");
-        let a = crate::render_cgs_png(cgs, "examples/cgs", 96, 72, 1).expect("cgs render");
-        let b = render_jsx_png(jsx, Some(css), "examples/jsx", 96, 72, 1).expect("jsx render");
-        assert_eq!(a.png, b.png, "assembly JSX 与 CGS 渲染必须逐字节一致");
-    }
-
-    #[test]
-    fn test_jsx_gallery_parity() {
-        // 画廊六场景：JSX+CSS 版与 CGS 版渲染逐字节一致。
-        for name in [
-            "grid",
-            "building",
-            "mechanical",
-            "primitives",
-            "affine",
-            "freeform",
-        ] {
-            let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
-                .unwrap_or_else(|_| panic!("read {name}.jsx"));
-            let css = std::fs::read_to_string(format!("../../examples/jsx/{name}.css"))
-                .unwrap_or_else(|_| panic!("read {name}.css"));
-            let cgs = std::fs::read_to_string(format!("../../examples/cgs/{name}.cgs"))
-                .unwrap_or_else(|_| panic!("read {name}.cgs"));
-            let a = crate::render_cgs_png(&cgs, "../../examples/cgs", 96, 72, 1)
-                .unwrap_or_else(|e| panic!("cgs {name}: {e}"));
-            let b = render_jsx_png(&jsx, Some(&css), "../../examples/jsx", 96, 72, 1)
-                .unwrap_or_else(|e| panic!("jsx {name}: {e}"));
-            assert_eq!(a.png, b.png, "{name}: JSX 与 CGS 渲染必须逐字节一致");
-        }
-    }
-
     #[test]
     fn test_jsx_solve_and_pose() {
         // solve: 线性方程一步收敛。

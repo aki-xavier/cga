@@ -7,7 +7,6 @@ pub enum CgsValue {
     Str(String),
     List(Vec<CgsValue>),
     Vec3(CgsVec3),
-    Geom(GeomVal),
 }
 impl PartialEq for CgsValue {
     fn eq(&self, other: &CgsValue) -> bool {
@@ -34,7 +33,6 @@ impl fmt::Display for CgsValue {
             CgsValue::Vec3(v) => {
                 write!(f, "[{}, {}, {}]", fmt_f64(v.x), fmt_f64(v.y), fmt_f64(v.z))
             }
-            CgsValue::Geom(_) => f.write_str("<geom>"),
         }
     }
 }

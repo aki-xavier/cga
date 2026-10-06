@@ -896,14 +896,25 @@ mod tests {
 
     #[test]
     fn test_cgs_modifier_ordering() {
-        let (sc, _) = crate::cgs_load("translate([10,0,0]) scale(2) sphere(r=1);", "");
+        let sc = crate::run_jsx(
+            "export default <translate t={[10,0,0]}><scale s={2}><sphere r={1} /></scale></translate>;",
+            None,
+            "",
+        )
+        .unwrap()
+        .scene;
         assert_eq!(sc.objects.len(), 1);
         let p = sc.objects[0].position;
         assert!((p[0] - 10.0).abs() < 1e-6);
         assert!(p[1].abs() < 1e-6);
         assert!(p[2].abs() < 1e-6);
-        let (sc2, _) =
-            crate::cgs_load("mirror(axis=[1,0,0]) translate([2.5,0,0]) sphere(r=1);", "");
+        let sc2 = crate::run_jsx(
+            "export default <mirror axis={[1,0,0]}><translate t={[2.5,0,0]}><sphere r={1} /></translate></mirror>;",
+            None,
+            "",
+        )
+        .unwrap()
+        .scene;
         let p2 = sc2.objects[0].position;
         assert!((p2[0] + 2.5).abs() < 1e-6);
         assert!(p2[1].abs() < 1e-6);
@@ -912,15 +923,15 @@ mod tests {
 
     #[test]
     fn test_cgs_csg_block_and_new_primitives() {
-        let text = "difference() { box(s=[2,2,2]); cylinder(r=0.5, h=4); }\n\
-                    cone(r=1, h=2);\n\
-                    torus(R=1, r=0.3);\n\
-                    ellipsoid(radii=[1,2,3]);\n\
-                    extrude(profile=[[0,0],[1,0],[1,1],[0,1]], h=0.5);\n\
-                    p1 = [[0,0],[1,0],[1,1],[0,1]];\n\
-                    p2 = [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]];\n\
-                    loft(profiles=[p1, p2], zs=[0, 0.5]);";
-        let (sc, _) = crate::cgs_load(text, "");
+        let text = "export default (\n  <scene>\n    \
+            <difference><box s={[2,2,2]} /><cylinder r={0.5} h={4} /></difference>\n    \
+            <cone r={1} h={2} />\n    \
+            <torus R={1} r={0.3} />\n    \
+            <ellipsoid radii={[1,2,3]} />\n    \
+            <extrude profile={[[0,0],[1,0],[1,1],[0,1]]} h={0.5} />\n    \
+            <loft profiles={[[[0,0],[1,0],[1,1],[0,1]], [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]]} zs={[0, 0.5]} />\n  \
+            </scene>\n);";
+        let sc = crate::run_jsx(text, None, "").unwrap().scene;
         assert_eq!(sc.objects.len(), 6);
         assert_eq!(geom_kind(&sc.objects[0].geometry), "csg");
         assert_eq!(geom_kind(&sc.objects[1].geometry), "cone");
@@ -942,7 +953,13 @@ mod tests {
                 color: None,
             }],
         );
-        let (sc, _) = crate::cgs_load("mesh(file=\"cga_cgs.glb\");", "/tmp");
+        let sc = crate::run_jsx(
+            "export default <mesh file=\"cga_cgs.glb\" />;",
+            None,
+            "/tmp",
+        )
+        .unwrap()
+        .scene;
         assert_eq!(sc.objects.len(), 1);
         assert_eq!(geom_kind(&sc.objects[0].geometry), "mesh");
         let _ = std::fs::remove_file("/tmp/cga_cgs.glb");

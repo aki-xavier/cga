@@ -217,50 +217,6 @@ pub(crate) fn joint_motion(kind: &JointKind, axis: [f64; 3], q: &[f64], pitch: f
     }
 }
 
-/// Rigid-check + transform a cam profile by a GeomVal's 4×4 (at/rot only).
-pub(crate) fn cam_profile_of(g: &GeomVal, line: i32) -> Result<CamProfile, String> {
-    let rigid_err = || format!("CGS line {line}: cam profile must not be scaled");
-    for row in 0..3 {
-        let n = v3_norm([g.m4[row * 4], g.m4[row * 4 + 1], g.m4[row * 4 + 2]]);
-        if (n - 1.0).abs() > 1e-9 {
-            return Err(rigid_err());
-        }
-    }
-    let point = |p: [f64; 3]| transform_point(g.m4, p);
-    let dir = |v: [f64; 3]| -> [f64; 3] {
-        v3_unit([
-            g.m4[0] * v[0] + g.m4[1] * v[1] + g.m4[2] * v[2],
-            g.m4[4] * v[0] + g.m4[5] * v[1] + g.m4[6] * v[2],
-            g.m4[8] * v[0] + g.m4[9] * v[1] + g.m4[10] * v[2],
-        ])
-    };
-    match &g.geo {
-        Geometry::CircleGeometry(c) => {
-            // CGS circle: origin-centered, z-normal, in its local frame.
-            Ok(CamProfile::Circle {
-                c: point([0.0, 0.0, 0.0]),
-                n: dir([0.0, 0.0, 1.0]),
-                r: c.radius,
-            })
-        }
-        Geometry::PlaneGeometry(p) => {
-            let n = p.blade.euclidean_vector();
-            let d = p.blade.einf_coeff();
-            let nw = dir(v3_unit(n));
-            // Plane n·x = d under x' = R x + t: (R n)·x' = d + (R n)·t.
-            let t = [g.m4[3], g.m4[7], g.m4[11]];
-            let scale = v3_norm(n);
-            Ok(CamProfile::Plane {
-                n: nw,
-                d: d / scale + vec3_dot(nw, t),
-            })
-        }
-        _ => Err(format!(
-            "CGS line {line}: cam profiles must be circle(...) or plane(...)"
-        )),
-    }
-}
-
 struct ProfilePose {
     // circle: center/normal/radius; plane: normal/d (r = 0 marker unused)
     c: [f64; 3],

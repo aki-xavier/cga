@@ -6,14 +6,15 @@
 //! Link geometry: a single native primitive (sphere/box/cylinder) exports as
 //! URDF geometry; anything else bakes to a watertight OBJ.
 //!
-//! Import: urdf-rs parses, CGS text is generated `cgs_gen`-style (flat,
+//! Import: urdf-rs parses, JSX text is generated `jsx_gen`-style (flat,
 //! deterministic, parseable by construction).
 
 use cga_core::GeometryParams;
 use urdf_rs::{Geometry as UGeometry, JointType, Robot};
 
-use crate::scene_lang::{cgs_run_result, JointDef, JointKind, Kinematics};
-use crate::{geom_to_camera, CgsRun};
+use crate::geom_to_camera;
+use crate::jsx::run_jsx;
+use crate::scene_build::{JointDef, JointKind, Kinematics, SceneRun};
 
 fn uf(v: f64) -> String {
     let s = format!("{v:.6}");
@@ -87,7 +88,7 @@ struct Visual {
 }
 
 fn visual_of(
-    run: &CgsRun,
+    run: &SceneRun,
     mesh_idx: usize,
     link_world: [f64; 16],
     link: &str,
@@ -261,15 +262,16 @@ fn joint_origin(j: &JointDef) -> String {
     format!("<origin xyz=\"{}\" rpy=\"{}\"/>", uv(j.at), uv(j.rpy))
 }
 
-/// Export the CGS joint tree as URDF. `step` is the bake step for
+/// Export a JSX scene's joint tree as URDF. `step` is the bake step for
 /// non-primitive link geometry.
-pub fn cgs_to_urdf(
-    text: &str,
+pub fn jsx_to_urdf(
+    jsx_src: &str,
+    css_src: Option<&str>,
     asset_root: &str,
     robot: &str,
     step: f64,
 ) -> Result<UrdfExport, String> {
-    let run = cgs_run_result(text, asset_root)?;
+    let run = run_jsx(jsx_src, css_src, asset_root)?;
     let kin = &run.kinematics;
     let mut xml = String::new();
     xml.push_str(&format!("<robot name=\"{robot}\">\n"));
@@ -476,13 +478,14 @@ pub fn cgs_to_urdf(
     Ok(UrdfExport { xml, meshes })
 }
 
-/// Import URDF as CGS text (flat, deterministic, `cgs_gen` style).
+/// Import URDF as JSX scene text (flat, deterministic, `jsx_gen` style).
 /// Mesh references keep their basename under `mesh_prefix`.
-pub fn urdf_to_cgs(xml: &str, mesh_prefix: &str) -> Result<String, String> {
+pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     let robot: Robot =
         urdf_rs::read_from_string(xml).map_err(|e| format!("urdf: parse failed: {e}"))?;
     let mut out = String::new();
     out.push_str(&format!("// from URDF robot \"{}\"\n", robot.name));
+    out.push_str("export default (\n  <scene>\n");
 
     // Topological order: joints whose parent link is already emitted.
     let mut emitted_links: Vec<String> = Vec::new();
@@ -496,7 +499,6 @@ pub fn urdf_to_cgs(xml: &str, mesh_prefix: &str) -> Result<String, String> {
         .collect();
     let mut remaining: Vec<&urdf_rs::Joint> = robot.joints.iter().collect();
     let mut body = String::new();
-    let mut gears: Vec<String> = Vec::new();
     while !remaining.is_empty() {
         let mut progress = false;
         let mut next: Vec<&urdf_rs::Joint> = Vec::new();
@@ -506,7 +508,7 @@ pub fn urdf_to_cgs(xml: &str, mesh_prefix: &str) -> Result<String, String> {
                 continue;
             }
             progress = true;
-            write_joint(&mut body, &mut gears, &robot, j)?;
+            write_joint(&mut body, &robot, j)?;
             emitted_links.push(j.child.link.clone());
             queue.push(j.child.link.clone());
         }
@@ -521,14 +523,11 @@ pub fn urdf_to_cgs(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     // Root-link visuals at top level.
     for l in &robot.links {
         if !child_links.contains(&l.name) {
-            write_visuals(&mut out, l, mesh_prefix)?;
+            write_visuals(&mut body, l, mesh_prefix)?;
         }
     }
-    for g in gears {
-        out.push_str(&g);
-        out.push('\n');
-    }
     out.push_str(&body);
+    out.push_str("  </scene>\n);\n");
     Ok(out)
 }
 
@@ -537,37 +536,47 @@ fn write_visuals(out: &mut String, link: &urdf_rs::Link, mesh_prefix: &str) -> R
         let xyz = [v.origin.xyz[0], v.origin.xyz[1], v.origin.xyz[2]];
         let rpy = [v.origin.rpy[0], v.origin.rpy[1], v.origin.rpy[2]];
         let mut prefix = String::new();
+        let mut suffix = String::new();
         if xyz != [0.0; 3] {
-            prefix.push_str(&format!("translate([{}]) ", uv(xyz).replace(' ', ", ")));
+            prefix.push_str(&format!(
+                "<translate t={{[{}]}}>",
+                uv(xyz).replace(' ', ", ")
+            ));
+            suffix.push_str("</translate>");
         }
         if rpy != [0.0; 3] {
             let (ax, ang) = rpy_axis_angle(rpy);
             if ang.abs() > 1e-12 {
                 prefix.push_str(&format!(
-                    "rotate(axis=[{}], angle={}) ",
+                    "<rotate axis={{[{}]}} angle={{ {} }}>",
                     uv(ax).replace(' ', ", "),
                     uf(ang)
                 ));
+                suffix = format!("</rotate>{suffix}");
             }
         }
         let stmt = match &v.geometry {
             UGeometry::Box { size } => format!(
-                "box(s=[{}, {}, {}]);",
+                "<box s={{[{}, {}, {}]}} />",
                 uf(size[0]),
                 uf(size[1]),
                 uf(size[2])
             ),
             UGeometry::Cylinder { radius, length } => {
-                format!("cylinder(r={}, h={});", uf(*radius), uf(*length))
+                format!(
+                    "<cylinder r={{ {} }} h={{ {} }} />",
+                    uf(*radius),
+                    uf(*length)
+                )
             }
-            UGeometry::Sphere { radius } => format!("sphere(r={});", uf(*radius)),
+            UGeometry::Sphere { radius } => format!("<sphere r={{ {} }} />", uf(*radius)),
             UGeometry::Mesh { filename, .. } => {
                 let base = filename.rsplit('/').next().unwrap_or(filename);
-                format!("mesh(file=\"{mesh_prefix}{base}\");")
+                format!("<mesh file=\"{mesh_prefix}{base}\" />")
             }
             _ => return Err("urdf: unsupported visual geometry".to_string()),
         };
-        out.push_str(&format!("{prefix}{stmt}\n"));
+        out.push_str(&format!("    {prefix}{stmt}{suffix}\n"));
     }
     Ok(())
 }
@@ -600,12 +609,7 @@ fn rpy_axis_angle(rpy: [f64; 3]) -> ([f64; 3], f64) {
     )
 }
 
-fn write_joint(
-    out: &mut String,
-    gears: &mut Vec<String>,
-    robot: &Robot,
-    j: &urdf_rs::Joint,
-) -> Result<(), String> {
+fn write_joint(out: &mut String, robot: &Robot, j: &urdf_rs::Joint) -> Result<(), String> {
     let ty = match j.joint_type {
         JointType::Revolute => "revolute",
         JointType::Continuous => "continuous",
@@ -617,40 +621,41 @@ fn write_joint(
     let at = [j.origin.xyz[0], j.origin.xyz[1], j.origin.xyz[2]];
     let rpy = [j.origin.rpy[0], j.origin.rpy[1], j.origin.rpy[2]];
     let axis = [j.axis.xyz[0], j.axis.xyz[1], j.axis.xyz[2]];
-    let mut args = format!(
-        "\"{}\", type=\"{}\", at=[{}], rpy=[{}]",
-        j.name,
-        ty,
-        uv(at).replace(' ', ", "),
-        uv(rpy).replace(' ', ", ")
-    );
-    if ty != "fixed" {
-        args.push_str(&format!(", axis=[{}]", uv(axis).replace(' ', ", ")));
-    }
-    if ty == "revolute" || ty == "prismatic" {
-        args.push_str(&format!(
-            ", limit=[{}, {}]",
-            uf(j.limit.lower),
-            uf(j.limit.upper)
-        ));
-    }
+    // mimic → gear：紧随被驱动关节之前（JSX 走文档序，driver 已先于它发射）。
     if let Some(m) = &j.mimic {
-        gears.push(format!(
-            "gear(\"{}\", \"{}\", ratio={}, offset={});",
+        out.push_str(&format!(
+            "    <gear driver=\"{}\" driven=\"{}\" ratio={{ {} }} offset={{ {} }} />\n",
             m.joint,
             j.name,
             uf(m.multiplier.unwrap_or(1.0)),
             uf(m.offset.unwrap_or(0.0))
         ));
     }
-    out.push_str(&format!("joint({args}) {{\n"));
+    let mut args = format!(
+        "name=\"{}\" type=\"{}\" at={{[{}]}} rpy={{[{}]}}",
+        j.name,
+        ty,
+        uv(at).replace(' ', ", "),
+        uv(rpy).replace(' ', ", ")
+    );
+    if ty != "fixed" {
+        args.push_str(&format!(" axis={{[{}]}}", uv(axis).replace(' ', ", ")));
+    }
+    if ty == "revolute" || ty == "prismatic" {
+        args.push_str(&format!(
+            " limit={{[{}, {}]}}",
+            uf(j.limit.lower),
+            uf(j.limit.upper)
+        ));
+    }
+    out.push_str(&format!("    <joint {args}>\n"));
     let link = robot
         .links
         .iter()
         .find(|l| l.name == j.child.link)
         .ok_or_else(|| format!("urdf: unknown link {}", j.child.link))?;
     write_visuals(out, link, "")?;
-    out.push_str("}\n");
+    out.push_str("    </joint>\n");
     Ok(())
 }
 
@@ -658,18 +663,24 @@ fn write_joint(
 mod tests {
     use super::*;
 
-    const ARM: &str = "joint(\"shoulder\", type=\"revolute\", axis=[0,0,1], q=0.3, limit=[-1.57, 1.57]) {\n\
-        cylinder(r=0.05, h=0.4);\n\
-        joint(\"elbow\", type=\"prismatic\", axis=[1,0,0], at=[0.3,0,0], limit=[0, 0.2]) {\n\
-        box(s=[0.2, 0.2, 0.2]);\n\
-        gear(\"elbow\", \"wrist\", ratio=2, offset=0.1);\n\
-        joint(\"wrist\", type=\"revolute\", axis=[0,1,0], at=[0.5,0,0], limit=[-1, 1]) sphere(r=0.08);\n\
-        }\n\
-        }";
+    const ARM: &str = r#"export default (
+  <scene>
+    <joint name="shoulder" type="revolute" axis={[0,0,1]} q={0.3} limit={[-1.57, 1.57]}>
+      <cylinder r={0.05} h={0.4} />
+      <joint name="elbow" type="prismatic" axis={[1,0,0]} at={[0.3,0,0]} limit={[0, 0.2]}>
+        <box s={[0.2, 0.2, 0.2]} />
+        <gear driver="elbow" driven="wrist" ratio={2} offset={0.1} />
+        <joint name="wrist" type="revolute" axis={[0,1,0]} at={[0.5,0,0]} limit={[-1, 1]}>
+          <sphere r={0.08} />
+        </joint>
+      </joint>
+    </joint>
+  </scene>
+);"#;
 
     #[test]
     fn test_p5_urdf_export_arm() {
-        let e = cgs_to_urdf(ARM, "", "arm", 0.05).unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm", 0.05).unwrap();
         let x = &e.xml;
         assert!(x.contains("<robot name=\"arm\">"), "{x}");
         assert!(
@@ -698,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_roundtrip_urdf_rs() {
-        let e = cgs_to_urdf(ARM, "", "arm", 0.05).unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm", 0.05).unwrap();
         let robot = urdf_rs::read_from_string(&e.xml).expect("urdf-rs 读回应成功");
         assert_eq!(robot.joints.len(), 3);
         let sh = robot.joints.iter().find(|j| j.name == "shoulder").unwrap();
@@ -712,8 +723,9 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_helical_degrades() {
-        let e = cgs_to_urdf(
-            "joint(\"screw\", type=\"helical\", axis=[0,0,1], pitch=0.05, q=1, limit=[-2, 2]) sphere(r=0.1);",
+        let e = jsx_to_urdf(
+            r#"export default <joint name="screw" type="helical" axis={[0,0,1]} pitch={0.05} q={1} limit={[-2, 2]}><sphere r={0.1} /></joint>;"#,
+            None,
             "",
             "bot",
             0.05,
@@ -740,8 +752,9 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_csg_bakes() {
-        let e = cgs_to_urdf(
-            "joint(\"j\", type=\"fixed\") difference() { box(s=[0.8,0.8,0.8]); sphere(r=0.3); }",
+        let e = jsx_to_urdf(
+            r#"export default <joint name="j" type="fixed"><difference><box s={[0.8,0.8,0.8]} /><sphere r={0.3} /></difference></joint>;"#,
+            None,
             "",
             "bot",
             0.1,
@@ -761,8 +774,9 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_needs_limit() {
-        let e = cgs_to_urdf(
-            "joint(\"j\", type=\"revolute\") sphere(r=0.1);",
+        let e = jsx_to_urdf(
+            r#"export default <joint name="j" type="revolute"><sphere r={0.1} /></joint>;"#,
+            None,
             "",
             "bot",
             0.05,
@@ -785,13 +799,16 @@ mod tests {
     <limit lower="-1.5" upper="1.5" effort="10" velocity="1"/>
   </joint>
 </robot>"#;
-        let cgs = urdf_to_cgs(xml, "").unwrap();
-        assert!(cgs.contains("joint(\"hip\", type=\"revolute\""), "{cgs}");
-        assert!(cgs.contains("at=[0.1, 0, 0.3]"), "{cgs}");
-        assert!(cgs.contains("limit=[-1.5, 1.5]"), "{cgs}");
-        assert!(cgs.contains("cylinder(r=0.05, h=0.4);"), "{cgs}");
-        // 往返：生成的 CGS 可解析，关节树一致。
-        let run = cgs_run_result(&cgs, "").unwrap();
+        let jsx = urdf_to_jsx(xml, "").unwrap();
+        assert!(
+            jsx.contains("<joint name=\"hip\" type=\"revolute\""),
+            "{jsx}"
+        );
+        assert!(jsx.contains("at={[0.1, 0, 0.3]}"), "{jsx}");
+        assert!(jsx.contains("limit={[-1.5, 1.5]}"), "{jsx}");
+        assert!(jsx.contains("<cylinder r={ 0.05 } h={ 0.4 } />"), "{jsx}");
+        // 往返：生成的 JSX 可运行，关节树一致。
+        let run = run_jsx(&jsx, None, "").unwrap();
         assert_eq!(run.kinematics.joints.len(), 1);
         let j = &run.kinematics.joints[0];
         assert_eq!(j.name, "hip");
@@ -809,7 +826,7 @@ mod tests {
   <joint name="j" type="floating"><parent link="a"/><child link="b"/></joint>
 </robot>"#;
         assert_eq!(
-            urdf_to_cgs(xml, "").unwrap_err(),
+            urdf_to_jsx(xml, "").unwrap_err(),
             "urdf: floating joint j is not supported"
         );
     }

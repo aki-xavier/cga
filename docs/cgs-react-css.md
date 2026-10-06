@@ -1,8 +1,8 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # JSX + CSS 场景宿主：React 模式的 CGS 前端
 
-状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-gpu/src/jsx/`、CLI `render_jsx`。
-R2 平权已完成：drill / instances / when 门控 / solve（constrain）/ pose / 惰性查询（face/fnrm/center/lo/hi/size/xdir/ydir/zdir + vadd/vsub/vscale/polar）全部可用；画廊 8 场景全部有 JSX 版且渲染逐字节一致。
+状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-gpu/src/jsx/`、CLI `render_jsx` / `report_jsx` / `bake_jsx`。
+R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_to_urdf`）改出 JSX；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
 ## 1. 技术栈与管线
