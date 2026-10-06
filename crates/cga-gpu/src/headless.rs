@@ -6,7 +6,6 @@ pub struct HeadlessImage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn renders_orbit_to_png() {

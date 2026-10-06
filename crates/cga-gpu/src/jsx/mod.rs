@@ -1823,7 +1823,6 @@ export default (
     }
 
     #[test]
-    #[test]
     fn test_jsx_solve_and_pose() {
         // solve: 线性方程一步收敛。
         let run = run_jsx(

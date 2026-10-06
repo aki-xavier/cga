@@ -300,7 +300,7 @@ pub(crate) fn cam_solve(
     pitch: f64,
     lo: f64,
     hi: f64,
-    line: i32,
+    _line: i32,
 ) -> Result<f64, String> {
     // Planar-mechanism check: circle normals must be parallel to each other
     // (for a revolute/helical/cylindrical joint the profile normal must be

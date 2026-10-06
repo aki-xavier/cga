@@ -22,7 +22,7 @@ impl Builders {
         name: &str,
         pos: Vec<ArgValue>,
         kw: HashMap<String, ArgValue>,
-        line: i32,
+        _line: i32,
     ) -> Result<HashMap<String, ArgValue>, String> {
         let names = sig_names(name);
         let defaults = sig_defaults(name);

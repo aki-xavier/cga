@@ -50,7 +50,7 @@ fn fmt_f64(x: f64) -> String {
     }
 }
 
-fn cgs_num(v: &ArgValue, line: i32, what: &str) -> Result<f64, String> {
+fn cgs_num(v: &ArgValue, _line: i32, what: &str) -> Result<f64, String> {
     match v {
         ArgValue::Num(x) => Ok(*x),
         _ => Err(format!("build: {what} needs a number, got {v}")),
@@ -155,7 +155,7 @@ pub(crate) fn transform_bbox(b: [[f64; 3]; 2], m: [f64; 16]) -> [[f64; 3]; 2] {
     [lo, hi]
 }
 
-pub(crate) fn parse_face_key(key: &str, line: i32, what: &str) -> Result<(usize, f64), String> {
+pub(crate) fn parse_face_key(key: &str, _line: i32, what: &str) -> Result<(usize, f64), String> {
     let ok =
         key.len() == 2 && matches!(&key[..1], "+" | "-") && matches!(&key[1..], "x" | "y" | "z");
     if !ok {
