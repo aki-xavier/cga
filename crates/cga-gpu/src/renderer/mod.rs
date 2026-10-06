@@ -542,4 +542,123 @@ mod tests {
             "中心像素应为折射所见红墙，得到 {p:?}（无 D3 时是天蓝背景）"
         );
     }
+
+    #[test]
+    fn test_render_mesh_receives_shadow() {
+        // D1：光栅表面接收阴影——网格地面在光线盒子下方只剩环境光。
+        let mut sc = Scene::new(None);
+        let verts: [[f64; 3]; 4] = [
+            [-20.0, 0.0, -20.0],
+            [20.0, 0.0, -20.0],
+            [20.0, 0.0, 20.0],
+            [-20.0, 0.0, 20.0],
+        ];
+        let faces: [[i32; 3]; 2] = [[0, 2, 1], [0, 3, 2]]; // 法线 +y（朝上）
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0xFFFFFF),
+                roughness: 1.0,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 1.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
+            material: std_red_material(),
+            position: [2.0, 1.5, 3.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::directional(
+            Color::from_hex(0xFFFFFF),
+            0.8,
+            [0.0, 1.0, 0.0],
+        ));
+        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.2));
+        let mut r = Renderer::new(96, 96, 1, 3);
+        let img = r.render(sc, rq_shadow_cam());
+        let p = rq_px(&img, 96, 48, 48);
+        let want = rq_linear_to_srgb255(0.2);
+        assert!(
+            (f64::from(p[0]) - f64::from(want)).abs() <= 2.0,
+            "网格地面本影应只剩环境光：p={p:?} want≈{want}"
+        );
+    }
+
+    #[test]
+    fn test_render_transparent_mesh_blends() {
+        // D4：半透明网格与光线结果 alpha 混合（无折射近似）。
+        let mut sc = rq_wall_scene(); // 光线红墙（204,51,51）
+        let verts: [[f64; 3]; 4] = [
+            [-1.5, -1.5, 2.0],
+            [1.5, -1.5, 2.0],
+            [1.5, 1.5, 2.0],
+            [-1.5, 1.5, 2.0],
+        ];
+        let faces: [[i32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+            material: Material::basic(Color::from_hex(0xFFFFFF), 0.5),
+            position: [0.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut r = Renderer::new(64, 64, 1, 3);
+        let img = r.render(sc, rq_head_on_cam());
+        let p = rq_px(&img, 64, 32, 32);
+        // 线性空间混合：0.5·1.0 + 0.5·lin(wall)
+        let wl = [
+            srgb_to_linear(204.0 / 255.0),
+            srgb_to_linear(51.0 / 255.0),
+            srgb_to_linear(51.0 / 255.0),
+        ];
+        for c in 0..3 {
+            let want = rq_linear_to_srgb255(0.5 + 0.5 * wl[c]);
+            assert!(
+                (f64::from(p[c]) - f64::from(want)).abs() <= 2.0,
+                "通道 {c}：p={} want≈{want}",
+                p[c]
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_raster_antialiasing() {
+        // D7：光栅边缘参与 SSAA——斜边三角形在 aa=2 时边缘有过渡像素，aa=1 全硬边。
+        let mk = || {
+            let mut sc = Scene::new(None);
+            let verts: [[f64; 3]; 3] = [[-1.5, -1.5, 3.0], [0.3, -1.5, 3.0], [-1.5, 1.5, 3.0]];
+            let faces: [[i32; 3]; 1] = [[0, 1, 2]];
+            sc.add_mesh(Mesh::new(MeshParams {
+                geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+                material: Material::basic(Color::from_hex(0xFFFFFF), 1.0),
+                position: [0.0, 0.0, 0.0],
+                rotation_axis: [0.0, 0.0, 1.0],
+                rotation_angle: 0.0,
+                motor: None,
+            }));
+            sc
+        };
+        let mid_count = |aa: i32| {
+            let mut r = Renderer::new(64, 64, aa, 3);
+            let img = r.render(mk(), rq_head_on_cam());
+            let d = data_f32(&img);
+            // 严格处于背景(≈135)与白色(255)之间的像素数
+            (0..64 * 64)
+                .filter(|&i| d[i * 4] > 145.0 && d[i * 4] < 245.0)
+                .count()
+        };
+        let (n1, n2) = (mid_count(1), mid_count(2));
+        assert!(n2 > n1, "aa=2 应有更多过渡像素：aa1={n1} aa2={n2}");
+    }
 }

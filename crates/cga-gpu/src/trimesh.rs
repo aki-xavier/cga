@@ -114,6 +114,8 @@ fn chunk_rays<T>(
     if n <= chunk {
         return f(o, d);
     }
+    let o = ck(o.contiguous());
+    let d = ck(d.contiguous());
     o.eval().unwrap();
     d.eval().unwrap();
     let of: &[f32] = o.as_slice();
@@ -421,10 +423,7 @@ mod tests {
             |parts| {
                 let ts: Vec<&Array> = parts.iter().map(|p| &p.0).collect();
                 let ms: Vec<&Array> = parts.iter().map(|p| &p.1).collect();
-                (
-                    ck(ops::concatenate(&ts, 0)),
-                    ck(ops::concatenate(&ms, 0)),
-                )
+                (ck(ops::concatenate(&ts, 0)), ck(ops::concatenate(&ms, 0)))
             },
         );
         for arr in [&t1, &m1, &t2, &m2] {

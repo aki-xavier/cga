@@ -86,7 +86,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 194 tests pass.
+   Result: all 204 tests pass.
 
 2. Render the smoke scene:
 
@@ -360,9 +360,9 @@ crates/
     scene / scene_graph     Mesh·Scene·PerspectiveCamera·OrbitControls, Vec3/Color
     geometry_ops / geometry_extra / geom_kernels   blade analytic intersection (incl. cone/torus/ellipsoid/cyclide)
     trimesh / csg / certify intersection, recursive CSG, certifiable root-finding and interval classification
-    texture / image_io / shading / mesh_raster     textures, PNG, CPU raster compositing
+    texture / image_io / shading / mesh_raster     textures, PNG, GPU raster coverage (window batches + scatter z-buffer)
     mesh_io_gltf            glTF/GLB read/write
-    renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction)
+    renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction); raster/ray depth composite; meshes cast and receive shadows
   cga-host/                 scene authoring host (no mlx dependency)
     scene_build / scene_report  scene builders, kinematics registry, scene report text
     jsx                     JSX+CSS scene host (swc compile → boa execute → SceneRun)
@@ -392,7 +392,7 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 
 ## Quality
 
-- `make test`: **all 194 tests pass** (cga-core 61 + cga-gpu 103 + cga-host 30, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/bake volume), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
+- `make test`: **all 204 tests pass** (cga-core 61 + cga-gpu 113 + cga-host 30, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the raster path (GPU-vs-CPU reference equivalence, double-sided open mesh, near-plane clipping, mesh shadow casting/receiving, transparent mesh blending, raster SSAA), the ray path (chunked trimesh intersection bitwise-equal to single shot), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/bake volume), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg goldens have **RMSE = 0**.
 
 ## License

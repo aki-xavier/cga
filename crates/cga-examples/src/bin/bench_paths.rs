@@ -30,7 +30,11 @@ fn uv_sphere(stacks: usize, slices: usize) -> TrimeshGeometry {
     }
     // 过滤极点处的零面积三角形
     faces.retain(|f| {
-        let (a, b, c) = (verts[f[0] as usize], verts[f[1] as usize], verts[f[2] as usize]);
+        let (a, b, c) = (
+            verts[f[0] as usize],
+            verts[f[1] as usize],
+            verts[f[2] as usize],
+        );
         let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
         let cx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -73,7 +77,11 @@ fn mesh_scene(g: TrimeshGeometry) -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_light(Light::directional(Color::from_hex(0xFFFFFF), 0.8, [0.5, 1.0, 0.5]));
+    sc.add_light(Light::directional(
+        Color::from_hex(0xFFFFFF),
+        0.8,
+        [0.5, 1.0, 0.5],
+    ));
     sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.3));
     sc
 }
@@ -140,18 +148,15 @@ fn bench_ray_trimesh(faces: usize, w: i32, h: i32) {
 fn main() {
     // warmup: mlx pipeline 初始化
     let mut r = Renderer::new(32, 32, 1, 3);
-    r.render(mesh_scene(uv_sphere(4, 8)), cam(32, 32)).eval().unwrap();
+    r.render(mesh_scene(uv_sphere(4, 8)), cam(32, 32))
+        .eval()
+        .unwrap();
 
-    println!("== 光线路径（trimesh 求交，GPU）==");
-    for &(f, w, h) in &[
-        (1_000usize, 640i32, 480i32),
-        (2_000, 640, 480),
-        (8_000, 320, 240),
-        (32_000, 160, 120),
-    ] {
+    println!("== 光线路径（trimesh 求交，GPU，ray 轴分块）==");
+    for &(f, w, h) in &[(1_000usize, 320i32, 240i32), (8_000, 160, 120)] {
         bench_ray_trimesh(f, w, h);
     }
-    println!("== 光栅路径（端到端 Renderer，CPU 扫描 + GPU 着色）==");
+    println!("== 光栅路径（端到端 Renderer，GPU 覆盖 + scatter z-buffer）==");
     for &(f, w, h) in &[
         (1_000usize, 640i32, 480i32),
         (8_000, 640, 480),
@@ -160,5 +165,23 @@ fn main() {
         (512_000, 640, 480),
     ] {
         bench_raster_end_to_end(f, w, h);
+    }
+    println!("== 光栅路径 aa=2（super-res 2x）==");
+    for &(f, w, h) in &[(8_000usize, 640i32, 480i32), (128_000, 640, 480)] {
+        let s0 = ((f / 2) as f64).sqrt().max(2.0) as usize;
+        let sl = f / (2 * s0);
+        let g = uv_sphere(s0, sl);
+        let rf = g.n_faces;
+        let sc = mesh_scene(g);
+        let t0 = Instant::now();
+        let mut r = Renderer::new(w, h, 2, 3);
+        r.render(sc, cam(w, h)).eval().unwrap();
+        println!(
+            "raster  {:>7} faces {:>4}x{:<4} aa=2 {:>8.1} ms",
+            rf,
+            w,
+            h,
+            t0.elapsed().as_secs_f64() * 1e3
+        );
     }
 }

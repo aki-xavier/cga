@@ -1,5 +1,7 @@
+#[cfg(test)]
 use super::*;
 
+#[cfg(test)]
 pub(crate) struct RastFace {
     pub(crate) a: [f64; 3],
     pub(crate) b: [f64; 3],
