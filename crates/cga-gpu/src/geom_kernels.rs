@@ -188,6 +188,17 @@ fn child_crossings_empty(cp: &GeometryParams, o: &Array) -> (Array, Array, Array
 }
 
 pub(crate) fn csg_crossings(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (t, n, v, _) = csg_crossings_offsets(p, o, d);
+    (t, n, v)
+}
+
+/// 同 `csg_crossings`，另返回每个子节点在列轴上的起始偏移（用于按子节点切片，
+/// 避免为了凸判定重复计算穿越点）。
+pub(crate) fn csg_crossings_offsets(
+    p: &CsgParams,
+    o: &Array,
+    d: &Array,
+) -> (Array, Array, Array, Vec<i32>) {
     let mut ts_l: Vec<Array> = Vec::new();
     let mut ns_l: Vec<Array> = Vec::new();
     let mut vs_l: Vec<Array> = Vec::new();
@@ -214,6 +225,13 @@ pub(crate) fn csg_crossings(p: &CsgParams, o: &Array, d: &Array) -> (Array, Arra
         ns_l.push(n);
         vs_l.push(v);
     }
+    let mut offs: Vec<i32> = Vec::with_capacity(p.children.len() + 1);
+    let mut acc = 0i32;
+    for t in &ts_l {
+        offs.push(acc);
+        acc += t.shape()[1];
+    }
+    offs.push(acc);
     let refs_t: Vec<&Array> = ts_l.iter().collect();
     let refs_n: Vec<&Array> = ns_l.iter().collect();
     let refs_v: Vec<&Array> = vs_l.iter().collect();
@@ -221,6 +239,7 @@ pub(crate) fn csg_crossings(p: &CsgParams, o: &Array, d: &Array) -> (Array, Arra
         ck(ops::concatenate(&refs_t, 1)),
         ck(ops::concatenate(&refs_n, 1)),
         ck(ops::concatenate(&refs_v, 1)),
+        offs,
     )
 }
 
@@ -243,6 +262,38 @@ pub(crate) fn csg_contains(p: &CsgParams, pos: &Array) -> Array {
         };
     }
     acc
+}
+
+/// 凸子节点（球/盒/柱/锥/椭球及其仿射包装）——这些是绝大多数布尔运算的实体。
+fn is_convex_inner(p: &GeometryParams) -> bool {
+    match p {
+        GeometryParams::SphereParams(_)
+        | GeometryParams::BoxParams(_)
+        | GeometryParams::CylinderParams(_)
+        | GeometryParams::ConeParams(_)
+        | GeometryParams::EllipsoidParams(_) => true,
+        GeometryParams::AffineParams(a) => is_convex_inner(&a.inner),
+        _ => false,
+    }
+}
+
+/// 凸子节点的成员关系由它自己的两个穿越点直接判定：`t_lo ≤ s ≤ t_hi`。
+/// 凸体沿一条直线只交一段，这个判据是定义级的，不需要解析 contains——省掉逐
+/// 采样点的认证求值（法兰这类"圆柱挖孔"的基准圆柱正是此项的最大开销）。
+/// 仅在恰好 2 个穿越列、两者都有效且区间非退化时启用；相切/退化/非凸 → None
+/// （回退到认证的 contains 路径）。
+fn convex_membership(child: &GeometryParams, ts: &Array, lo: i32, s: &Array) -> Option<Array> {
+    if !is_convex_inner(child) {
+        return None;
+    }
+    // 该子节点恰好 2 列穿越（无效穿越在收集阶段已填 +inf）
+    let t0 = ck(col(ts, lo).expand_dims(1));
+    let t1 = ck(col(ts, lo + 1).expand_dims(1));
+    let t_lo = ck(ops::minimum(&t0, &t1));
+    let t_hi = ck(ops::maximum(&t0, &t1));
+    let clean = s_gt(&ck(t_hi.subtract(&t_lo)), 1e-6); // 非退化（+inf 也在此被排除）
+    let inside = ck(ck(s.ge(&t_lo)).logical_and(&ck(s.le(&t_hi))));
+    Some(ck(inside.logical_and(&clean)))
 }
 
 /// 单子节点的成员关系（全量 (b, k1) bool）：只在“可能命中该子节点”的光线
@@ -278,13 +329,40 @@ fn child_contains_subset(
 
 /// 与 `csg_contains` 同语义，但逐子节点做光线子集裁剪（区间分类的采样点里，
 /// 大部分点离多数子节点很远——这一层裁剪是 CSG 求值的主要开销所在）。
-fn csg_contains_culled(p: &CsgParams, o: &Array, d: &Array, pos: &Array) -> Array {
+fn csg_contains_culled(
+    p: &CsgParams,
+    o: &Array,
+    d: &Array,
+    s: &Array,
+    pos: &Array,
+    ts: &Array,
+    offs: &[i32],
+) -> Array {
     let shape = pos.shape().to_vec();
     let (b, k1) = (shape[0], shape[1]);
     let flat = ck(pos.reshape(&[b * k1, 3]));
+    let dbg = std::env::var("CGA_CSG_TIME").is_ok();
     let mut mems: Vec<Array> = Vec::with_capacity(p.children.len());
-    for cp in &p.children {
-        mems.push(child_contains_subset(cp, o, d, &flat, b, k1));
+    for (ci, cp) in p.children.iter().enumerate() {
+        let t0 = std::time::Instant::now();
+        let c_cols = offs[ci + 1] - offs[ci];
+        let m = match if c_cols == 2 {
+            convex_membership(cp, ts, offs[ci], s)
+        } else {
+            None
+        } {
+            Some(m) => m,
+            None => child_contains_subset(cp, o, d, &flat, b, k1),
+        };
+        if dbg {
+            m.eval().unwrap();
+            eprintln!(
+                "      child {ci}: {:.1} ms ({} 点)",
+                t0.elapsed().as_secs_f64() * 1e3,
+                b * k1
+            );
+        }
+        mems.push(m);
     }
     if p.op == CsgOp::Difference {
         let first = mems[0].clone();
@@ -308,7 +386,7 @@ fn csg_contains_culled(p: &CsgParams, o: &Array, d: &Array, pos: &Array) -> Arra
 fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let dbg = std::env::var("CGA_CSG_TIME").is_ok();
     let t_all = std::time::Instant::now();
-    let (ts, ns, _) = csg_crossings(p, o, d);
+    let (ts, ns, _v, offs) = csg_crossings_offsets(p, o, d);
     if dbg {
         ts.eval().unwrap();
         eprintln!(
@@ -387,7 +465,7 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
         );
     }
     let t_contains = std::time::Instant::now();
-    let mem = csg_contains_culled(p, o, d, &pos);
+    let mem = csg_contains_culled(p, o, d, &s, &pos, &ts, &offs);
     if dbg {
         mem.eval().unwrap();
         eprintln!(
