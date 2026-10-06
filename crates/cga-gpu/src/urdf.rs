@@ -275,11 +275,11 @@ pub fn cgs_to_urdf(
     xml.push_str(&format!("<robot name=\"{robot}\">\n"));
     let mut meshes: Vec<(String, String)> = Vec::new();
 
-    let mut emit_link = |name: &str,
-                         mesh_ids: &[usize],
-                         link_world: [f64; 16],
-                         meshes: &mut Vec<(String, String)>,
-                         xml: &mut String|
+    let emit_link = |name: &str,
+                     mesh_ids: &[usize],
+                     link_world: [f64; 16],
+                     meshes: &mut Vec<(String, String)>,
+                     xml: &mut String|
      -> Result<(), String> {
         xml.push_str(&format!("  <link name=\"{name}\">\n"));
         for (slot, &mi) in mesh_ids.iter().enumerate() {
@@ -333,14 +333,14 @@ pub fn cgs_to_urdf(
             None => "base_link".to_string(),
         }
     };
-    let mut joint_xml = |xml: &mut String,
-                         name: &str,
-                         ty: &str,
-                         parent: &str,
-                         child: &str,
-                         origin: &str,
-                         axis: Option<[f64; 3]>,
-                         extra: &str| {
+    let joint_xml = |xml: &mut String,
+                     name: &str,
+                     ty: &str,
+                     parent: &str,
+                     child: &str,
+                     origin: &str,
+                     axis: Option<[f64; 3]>,
+                     extra: &str| {
         xml.push_str(&format!("  <joint name=\"{name}\" type=\"{ty}\">\n"));
         xml.push_str(&format!("    <parent link=\"{parent}\"/>\n"));
         xml.push_str(&format!("    <child link=\"{child}\"/>\n"));

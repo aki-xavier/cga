@@ -1,0 +1,9 @@
+/* orbit demo 场景的材质表（对应 orbit.cgs 的 material(...) 修饰符） */
+:root { background: #87CEEB; }
+.ground { color: #B0B0B0; roughness: 0.7; }
+.red { color: #C0392B; roughness: 0.25; metalness: 0.25; }
+.blue { color: #2980B9; roughness: 0.15; metalness: 0.35; }
+.gold { color: #D4AC0D; roughness: 0.4; metalness: 0.3; }
+.green { color: #27AE60; roughness: 0.6; }
+.purple { color: #8E44AD; roughness: 0.3; }
+.glass { color: #AAD4FF; roughness: 0.05; opacity: 0.08; ior: 1.5; absorption: 0.2; }

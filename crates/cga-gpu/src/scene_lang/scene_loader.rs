@@ -22,6 +22,28 @@ pub struct SceneLoader {
     pose: HashMap<String, f64>,
 }
 impl SceneLoader {
+    /// Empty loader used by the JSX host to reuse geometry/material builders.
+    pub(crate) fn stub(asset_root: &str) -> SceneLoader {
+        SceneLoader {
+            toks: Vec::new(),
+            pos: 0,
+            asset_root: asset_root.to_string(),
+            scene: Scene::new(None),
+            camera: None,
+            modules: HashMap::new(),
+            params: HashMap::new(),
+            param_order: Vec::new(),
+            collect: Vec::new(),
+            collecting: false,
+            named: HashMap::new(),
+            pending: Vec::new(),
+            kin: Kinematics::default(),
+            joint_stack: Vec::new(),
+            driven_by: HashMap::new(),
+            pose: HashMap::new(),
+        }
+    }
+
     fn peek(&self) -> CgsToken {
         if self.pos >= self.toks.len() {
             return CgsToken {
@@ -2363,7 +2385,7 @@ impl SceneLoader {
         Ok(())
     }
 
-    fn build_geometry(
+    pub(crate) fn build_geometry(
         &mut self,
         name: &str,
         args: &HashMap<String, CgsValue>,
@@ -2588,7 +2610,10 @@ impl SceneLoader {
         }
     }
 
-    fn build_material(&self, mat: &HashMap<String, CgsValue>) -> Result<Material, String> {
+    pub(crate) fn build_material(
+        &self,
+        mat: &HashMap<String, CgsValue>,
+    ) -> Result<Material, String> {
         let color = match mat.get("color") {
             Some(v) => {
                 let c = cgs_num(v, 0, "color")?;

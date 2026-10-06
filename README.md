@@ -110,6 +110,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 | **Render engine** | three.js naming: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
 | **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. **Mesh**: Möller–Trumbore batch intersection + extrude/loft + OBJ/glTF/GLB. |
 | **MLX GPU** | Per-pixel vectorized analytic intersection. One kernel batch per full-resolution frame (mlx-rs / Metal). Camera space: X right, Y down, Z forward. |
+| **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `CgsRun`; orbit.jsx renders byte-identical to orbit.cgs. See `docs/cgs-react-css.md`. |
 
 ## CGS scene language (OpenSCAD style)
 
@@ -359,9 +360,10 @@ crates/
     mesh_io_gltf            glTF/GLB read/write
     scene_lang / scene_report / cgs_gen / headless CGS language, report, generation, headless rendering
     urdf                    URDF export/import (cgs_to_urdf / urdf_to_cgs, urdf-rs)
+    jsx                     JSX+CSS scene host (swc compile → boa execute → CgsRun)
     renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction)
   cga-examples/             demo CLIs (src/bin/*.rs)
-examples/                   .cgs scenes (incl. primitives/affine/assembly/freeform) + assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
+examples/                   .cgs scenes (incl. primitives/affine/assembly/freeform) + jsx/ React-style scenes + assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
 docs/                       architecture diagram, robotics diagram, cross-platform plan
 ```
 
@@ -378,6 +380,7 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `demo_gltf` | `examples/gltf/demo_gltf.{glb,png}` |
 | `demo_helmet` | `examples/helmet/demo_helmet.png` |
 | `render_cgs <file.cgs> [out.png] [w h aa] [--set name=value]` | CGS → PNG |
+| `render_jsx <file.jsx> [out.png] [w h aa]` | JSX(+CSS) → PNG |
 | `bake_cgs <file.cgs> [out.obj\|out.glb] [step]` | CGS → triangle mesh (unbounded planes are skipped automatically) |
 | `report_cgs <file.cgs> [--set name=value]` | CGS → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |

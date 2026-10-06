@@ -64,5 +64,8 @@ pub(crate) mod fallback;
 pub mod urdf;
 pub use urdf::*;
 
+pub mod jsx;
+pub use jsx::*;
+
 #[cfg(test)]
 mod degenerate;
