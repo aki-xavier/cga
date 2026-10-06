@@ -1,4 +1,4 @@
-use crate::mesh_io::mat4_mul;
+use crate::mat4::mat4_mul;
 use crate::motors::{mat3_mul, mat3_new, Mat3};
 use crate::Multivector;
 

@@ -1,6 +1,6 @@
 use cga_core::{
     mat3_transpose, BoxParams, ConeParams, CyclideParams, CylinderParams, EllipsoidParams,
-    GeometryParams, Mat3, PlaneParams, SphereParams, TorusParams, TrimeshParams,
+    GeometryParams, Mat3, PlaneParams, SphereParams, TorusParams,
 };
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -351,21 +351,6 @@ fn cyclide_contains(p: CyclideParams, pos: &Array) -> Array {
     cyclide_local_contains(p.a, p.b, p.d, p.c, p.shift, &p_l)
 }
 
-pub(crate) fn trimesh_crossings(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    crate::trimesh_crossings_chunked(p, o, d, crate::WINDING_CHUNK_BYTES)
-}
-
-pub(crate) fn trimesh_contains(p: &TrimeshParams, pos: &Array) -> Array {
-    let p_l = affine_point_to_local(p.a_inv3, p.t_inv, pos);
-    let shape: Vec<i32> = p_l.shape()[..p_l.shape().len() - 1].to_vec();
-    let pts = ck(p_l.reshape(&[-1, 3]));
-    let w = crate::trimesh_winding_chunked(p, &pts, crate::WINDING_CHUNK_BYTES);
-    // inside ⇔ |w| > 1/2 ⇔ |ΣΩ| > 2π; |·| tolerates a globally flipped
-    // orientation (orientation-free convention, Jacobson 2013 §2).
-    let inside = s_gt(&ck(w.abs()), 2.0 * std::f64::consts::PI);
-    ck(inside.reshape(&shape))
-}
-
 pub fn geom_crossings(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     match p {
         GeometryParams::SphereParams(p) => sphere_crossings(*p, o, d),
@@ -376,8 +361,6 @@ pub fn geom_crossings(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array
         GeometryParams::EllipsoidParams(p) => ellipsoid_crossings(*p, o, d),
         GeometryParams::TorusParams(p) => torus_crossings(*p, o, d),
         GeometryParams::CyclideParams(p) => cyclide_crossings(*p, o, d),
-        GeometryParams::TrimeshParams(p) => trimesh_crossings(p, o, d),
-        GeometryParams::BezierParams(p) => trimesh_crossings(&p.to_trimesh_params(), o, d),
         GeometryParams::CircleParams(_) => panic!("circle is not a solid (no crossings)"),
         GeometryParams::CsgParams(p) => crate::csg_crossings(p, o, d),
         GeometryParams::AffineParams(p) => crate::affine_crossings(p, o, d),
@@ -394,8 +377,6 @@ pub fn geom_contains(p: &GeometryParams, pos: &Array) -> Array {
         GeometryParams::EllipsoidParams(p) => ellipsoid_contains(*p, pos),
         GeometryParams::TorusParams(p) => torus_contains(*p, pos),
         GeometryParams::CyclideParams(p) => cyclide_contains(*p, pos),
-        GeometryParams::TrimeshParams(p) => trimesh_contains(p, pos),
-        GeometryParams::BezierParams(p) => trimesh_contains(&p.to_trimesh_params(), pos),
         GeometryParams::CircleParams(_) => panic!("circle is not a solid (no contains)"),
         GeometryParams::CsgParams(p) => crate::csg_contains(p, pos),
         GeometryParams::AffineParams(p) => crate::affine_contains(p, pos),

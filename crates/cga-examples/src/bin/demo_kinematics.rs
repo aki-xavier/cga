@@ -32,7 +32,7 @@ fn gear_meshes(
         absorption: 0.0,
     });
     let mut idx: Vec<usize> = Vec::new();
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(r_hub, thick)),
         material: mat.clone(),
         position: [0.0, 0.0, 0.0],
@@ -46,7 +46,7 @@ fn gear_meshes(
         let a = f64::from(i) * 2.0 * PI / f64::from(n_teeth);
         let m =
             Multivector::rotor([0.0, 1.0, 0.0], a).gp(&Multivector::translator([r_mid, 0.0, 0.0]));
-        ks.scene.add_mesh(Mesh::new(MeshParams {
+        ks.scene.add_object(Object::new(ObjectParams {
             geometry: Geometry::BoxGeometry(BoxGeometry::new(r_tooth - r_hub + 0.06, thick, 0.16)),
             material: mat.clone(),
             position: [0.0, 0.0, 0.0],
@@ -96,7 +96,7 @@ fn build_scene() -> KinScene {
         m0: Multivector::identity(),
         twist: Multivector::identity(),
     };
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], -0.05)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x3A4046),
@@ -133,7 +133,7 @@ fn build_scene() -> KinScene {
     }
 
     let crank_c = [-1.6, 0.6, 2.6];
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.55, 0.25)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x4A4F54),
@@ -149,7 +149,7 @@ fn build_scene() -> KinScene {
         rotation_angle: -PI / 2.0,
         motor: None,
     }));
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.09, 1.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC8A24A),
@@ -166,7 +166,7 @@ fn build_scene() -> KinScene {
         motor: None,
     }));
     ks.rod = ks.scene.objects.len() - 1;
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::BoxGeometry(BoxGeometry::new(0.5, 0.4, 0.35)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x9BA1A6),
@@ -183,7 +183,7 @@ fn build_scene() -> KinScene {
         motor: None,
     }));
     ks.slider = ks.scene.objects.len() - 1;
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::BoxGeometry(BoxGeometry::new(2.6, 0.08, 0.5)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x4A4F54),
@@ -200,7 +200,7 @@ fn build_scene() -> KinScene {
         motor: None,
     }));
 
-    ks.scene.add_mesh(Mesh::new(MeshParams {
+    ks.scene.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(0.18)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC0392B),
@@ -223,7 +223,7 @@ fn build_scene() -> KinScene {
     ks.m0 = m0;
     ks.twist = m0.reverse().gp(&m1).log();
     for k in 0..9 {
-        ks.scene.add_mesh(Mesh::new(MeshParams {
+        ks.scene.add_object(Object::new(ObjectParams {
             geometry: Geometry::SphereGeometry(SphereGeometry::new(0.05)),
             material: Material::standard(MaterialParams {
                 color: Color::from_hex(0x7F8C8D),

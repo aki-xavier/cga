@@ -52,9 +52,6 @@ fn shadow_ray_indices(
     Some(idx)
 }
 
-/// 网格阴影测试的光线×面数预算（无 BVH，实测约 1.4e8 ray-face/s）。
-const MESH_SHADOW_BUDGET: usize = 100_000_000;
-
 /// 主光线：对象屏幕包围盒内的光线下标（保守剔除）。
 ///
 /// 光线包按 `(子采样 j,i) × 基础像素 (y,x)` 展开：`idx = (j*k+i)·(w·h) + y·w + x`。
@@ -115,21 +112,6 @@ fn primary_ray_indices(
         }
     }
     Some(idx)
-}
-
-/// 该遮挡物的面数（网格类）；非网格返回 0。
-fn mesh_face_count(p: &GeometryParams) -> usize {
-    match p {
-        GeometryParams::TrimeshParams(t) => t.v0.len(),
-        GeometryParams::BezierParams(b) => b.v0.len(),
-        _ => 0,
-    }
-}
-
-/// 网格遮挡物的阴影测试是否超预算（超了就跳过，保持确定性上限）。
-fn mesh_shadow_over_budget(p: &GeometryParams, n_rays: i32) -> bool {
-    let f = mesh_face_count(p);
-    f > 0 && (n_rays as usize).saturating_mul(f) > MESH_SHADOW_BUDGET
 }
 
 #[derive(Debug)]
@@ -227,40 +209,21 @@ impl Renderer {
             }
         }
 
-        let mut mesh_objs: Vec<Mesh> = Vec::new();
-        let mut mesh_of_scene: Vec<i32> = vec![-1; scene.objects.len()];
-        for (i, obj) in scene.objects.iter().enumerate() {
-            if matches!(
-                obj.geometry,
-                Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
-            ) {
-                mesh_of_scene[i] = mesh_objs.len() as i32;
-                mesh_objs.push(obj.clone());
-            }
-        }
-        // 追踪场景保留全部对象：主可见性在 nearest(primary) 里跳过网格类
-        // （由光栅路径负责），但网格参与阴影遮挡（D2）与反射/折射（D3）。
+        // 场景即全部对象（解析图元 + CSG + 仿射包装）：纯光线追踪。
         let s2 = scene.clone();
-        // 相机空间参数 + 对象陈述参数全场景各建一次（阴影遮挡表/UV 陈述共用；
-        // 此前 nearest 在每个追踪深度重建一次，大网格下是 O(depth×faces) 的克隆）。
+        // 相机空间参数 + 对象陈述参数全场景各建一次（阴影遮挡表 / UV 陈述共用）
         let mut params_list: Vec<GeometryParams> = Vec::with_capacity(s2.objects.len());
         let mut stated_list: Vec<GeometryParams> = Vec::with_capacity(s2.objects.len());
-        let mut opacities: Vec<f32> = Vec::with_capacity(s2.objects.len());
-        let mut is_mesh: Vec<bool> = Vec::with_capacity(s2.objects.len());
-        let mut occluder_mesh_obj: Vec<i32> = Vec::with_capacity(s2.objects.len());
-        for (i, obj) in s2.objects.iter().enumerate() {
-            occluder_mesh_obj.push(mesh_of_scene[i]);
+        for obj in s2.objects.iter() {
             params_list.push(geom_to_camera(
                 &obj.geometry,
                 &camera.motor.compose(&obj.motor()),
             ));
             stated_list.push(geom_to_camera(&obj.geometry, &obj.motor()));
-            opacities.push(obj.material.opacity as f32);
-            is_mesh.push(mesh_of_scene[i] >= 0);
         }
         let in_medium = ck(ops::zeros::<bool>(&[n_rays]));
         let sigma = ck(ops::zeros::<f32>(&[n_rays]));
-        let (rgb_sr, t, truth) = self.trace(
+        let (rgb_sr, _t, truth) = self.trace(
             &s2,
             &params_list,
             &stated_list,
@@ -271,50 +234,16 @@ impl Renderer {
             &bg,
             &in_medium,
             &sigma,
-            &is_mesh,
             0,
         );
-        let k = self.aa;
-        let (ww, hh) = (self.width, self.height);
-        // super-res 重排：光线按 (j,i) 子采样索引堆叠，重排到 (y*k+j, x*k+i) 栅格
-        let mut rgb = ck(ck(rgb_sr.reshape(&[k, k, hh, ww, 3]))
-            .transpose_axes(&[2, 0, 3, 1, 4])
-            .unwrap()
-            .reshape(&[hh * k, ww * k, 3]));
-        let mut dz = ck(t.multiply(ck(rays.take_axis(Array::from_int(2), 1))));
-        dz = ck(ck(dz.reshape(&[k, k, hh, ww]))
-            .transpose_axes(&[2, 0, 3, 1])
-            .unwrap()
-            .reshape(&[hh * k, ww * k]));
-        if !mesh_objs.is_empty() {
-            let (sw, sh) = (ww * k, hh * k);
-            let fy2 = f64::from(sh) / (2.0 * (camera.fov.to_radians() / 2.0).tan());
-            let fx2 = fy2 * camera.aspect;
-            let rr = rasterize_meshes(
-                &mesh_objs,
-                &camera,
-                sw,
-                sh,
-                fx2,
-                fy2,
-                f64::from(sw - 1) / 2.0,
-                f64::from(sh - 1) / 2.0,
-                &lit,
-                ambient,
-                &params_list,
-                &opacities,
-                &occluder_mesh_obj,
-            );
-            let closer = ck(ck(rr.depth.lt(&dz)).logical_and(&rr.hit));
-            // D4：半透明网格与光线结果 alpha 混合（无折射弯曲的近似，见 docs）
-            let op = ck(rr.opacity.expand_dims(2));
-            let blended =
-                ck(ck(rr.color.multiply(&op)).add(&ck(rgb.multiply(&ck(fs(1.0).subtract(&op))))));
-            rgb = ck(ops::select(&ck(closer.expand_dims(2)), &blended, &rgb));
-        }
-        // 单点降采样：颜色与深度在同一 super-res 栅格上合成（消边界 halo，D7）
-        rgb = ck(ck(rgb.reshape(&[hh, k, ww, k, 3])).mean_axes(&[1, 3], false));
-        rgb = ck(rgb.reshape(&[hh * ww, 3]));
+        // SSAA：子采样均值降采样
+        let s = self.aa * self.aa;
+        let mut rgb = if s > 1 {
+            ck(ck(rgb_sr.reshape(&[s, n_rays / s, 3])).mean_axes(&[0], false))
+        } else {
+            rgb_sr
+        };
+        rgb = ck(rgb.reshape(&[self.height * self.width, 3]));
         rgb = s_clip(&rgb, 0.0, 1.0);
         rgb = ck(ops::select(
             s_le(&rgb, 0.0031308),
@@ -322,7 +251,7 @@ impl Renderer {
             s_sub(&s_mul(&s_pow(&rgb, 1.0 / 2.4), 1.055), 0.055),
         ));
         let mut rgba = ck(ops::concatenate(
-            &[&rgb, &ck(ops::ones::<f32>(&[hh * ww, 1]))],
+            &[&rgb, &ck(ops::ones::<f32>(&[n_rays / s, 1]))],
             -1,
         ));
         rgba = s_clip(&s_add(&s_mul(&rgba, 255.0), 0.5), 0.0, 255.0);
@@ -345,7 +274,6 @@ impl Renderer {
         bg: &Array,
         in_medium: &Array,
         sigma: &Array,
-        is_mesh: &[bool],
         depth: i32,
     ) -> (Array, Array, Option<Truth>) {
         let (hit, t, n0, local, op, ior, abso, index, vis) = self.nearest(
@@ -356,7 +284,6 @@ impl Renderer {
             d,
             lit,
             ambient,
-            is_mesh,
             depth == 0,
         );
         let mut cos_i = ck(ck(ck(d.multiply(&n0)).sum_axes(&[-1], true)).negative());
@@ -410,7 +337,6 @@ impl Renderer {
                     bg,
                     in_medium,
                     sigma,
-                    is_mesh,
                     depth + 1,
                 );
                 let (refr, _, _) = self.trace(
@@ -424,7 +350,6 @@ impl Renderer {
                     bg,
                     &entering,
                     &sig_next,
-                    is_mesh,
                     depth + 1,
                 );
                 let body = ck(ck(ck(op.expand_dims(1)).multiply(&local))
@@ -454,7 +379,6 @@ impl Renderer {
         d: &Array,
         lit: &[Light],
         ambient: Option<Light>,
-        is_mesh: &[bool],
         primary: bool,
     ) -> (
         Array,
@@ -491,18 +415,8 @@ impl Renderer {
         let cull_on = std::env::var("CGA_NO_CULL").is_err();
         let cam = self.cam.unwrap_or_else(|| panic!("no camera"));
         let frame = view_frame(&cam);
-        for (i, obj) in objs.iter().enumerate() {
+        for (i, _obj) in objs.iter().enumerate() {
             let params = &params_list[i];
-            if primary
-                && matches!(
-                    obj.geometry,
-                    Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
-                )
-            {
-                // 主可见性交给光栅路径；网格类仅在阴影（下方）和
-                // 非主光线（反射/折射，primary=false）里参与求交。
-                continue;
-            }
             // 主光线逐对象屏幕区间子集（保守剔除）：只对落在对象屏幕包围盒内的
             // 光线求交。无界几何/跨近平面 → None 回退全量；空表 → 画面外，跳过。
             let subset: Option<Vec<i32>> = if primary && cull_on {
@@ -521,19 +435,11 @@ impl Renderer {
             };
             let (t, n_i, mask) = geom_intersect(params, &o_u, &d_u);
             let hit_point = ck(o_u.add(ck(ck(t.expand_dims(1)).multiply(&d_u))));
-            let uv_i = if matches!(
-                obj.geometry,
-                Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
-            ) {
-                // 网格类 UV 由光栅路径透视校正插值；此处避免大数组克隆
-                ck(ops::zeros::<f32>(&[d_u.shape()[0], 2]))
-            } else {
-                geom_uv(
-                    &stated_list[i],
-                    &outward(&hit_point, &frame.0, &frame.1),
-                    &outward(&n_i, &frame.0, &[0.0, 0.0, 0.0]),
-                )
-            };
+            let uv_i = geom_uv(
+                &stated_list[i],
+                &outward(&hit_point, &frame.0, &frame.1),
+                &outward(&n_i, &frame.0, &[0.0, 0.0, 0.0]),
+            );
             match &ids {
                 None => {
                     let nearer = ck(mask.logical_and(ck(t.lt(&best_t))));
@@ -588,9 +494,6 @@ impl Renderer {
             }
         }
         let hit = ck(best_t.is_finite());
-        // 网格遮挡物的阴影测试是 O(光线×面数)；没有一条光线命中任何物体时
-        // 无表面需要可见性（纯网格场景的主光线全部由光栅路径着色），跳过。
-        let any_hit = ck(hit.sum(None)).item_cast::<i32>() > 0;
 
         let mut op = ck(ops::ones::<f32>(&[n_rays]));
         let mut ior = ck(ops::full::<f32>(&[n_rays], &fs(1.5)));
@@ -626,13 +529,6 @@ impl Renderer {
             let far = light.far(&p);
             let mut v = ck(ops::ones::<f32>(&[n_rays]));
             for (j, obj) in objs.iter().enumerate() {
-                if is_mesh.get(j).copied().unwrap_or(false) {
-                    // 无命中 → 无表面需要可见性；工作量（光线×面数）超预算 →
-                    // 跳过（网格阴影无 BVH，是 O(光线×面数)；预算是确定性上限）
-                    if !any_hit || mesh_shadow_over_budget(&params_list[j], n_rays) {
-                        continue;
-                    }
-                }
                 // 逐对象阴影子集：只有“打到光源的射线”靠近该对象时才需要测试
                 let sh_sub = if cull_on {
                     shadow_ray_indices(&params_list[j], &p_s, &ld, &far, n_rays)

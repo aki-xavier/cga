@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # JSX + CSS 场景宿主：React 模式前端
 
-状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-host/src/jsx/`、CLI `render_jsx` / `report_jsx` / `bake_jsx`。
+状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-host/src/jsx/`、CLI `render_jsx` / `report_jsx`。
 R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_to_urdf`）改出 JSX；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
@@ -30,18 +30,15 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_
 
 | JSX | 语义 |
 | --- | --- |
-| `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid Bezier Extrude Loft Mesh>` | 图元（参数校验复用 scene_build builder） |
+| `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid>` | 图元（参数校验复用 scene_build builder）。网格/曲面（mesh/bezier/extrude/loft）与烘焙已随网格支持一并移除 |
 | `<Translate t>` `<Rotate axis angle>` `<Scale s>` `<Mirror axis>` | 修饰符（组合 4×4 ctx） |
 | `<Material …>` | 材质合并作用于子树 |
-| `<Union/Difference/Intersection>` | CSG 块（≥2 子几何）；含网格类后代（mesh/bezier）时在**构建期自动烘焙**成三角网走光栅路径 |
-| `<scene bake={N}>` | CSG 烘焙分辨率：最长轴 N 格（默认 96，`bake={0}` 关闭烘焙保持解析 CSG） |
+| `<Union/Difference/Intersection>` | CSG 块（≥2 子几何，纯解析图元的递归布尔） |
 | `<AmbientLight/DirectionalLight/PointLight/Camera/Background>` | 灯光与相机 |
 | `<Joint name type axis at rpy q limit pitch>` | P1 关节（嵌套成父子树） |
 | `<Gear driver driven ratio offset>` | P2 齿轮耦合 |
 | `<Cam driver driven driverProfile drivenProfile>` | P3 凸轮接触求解（profile 是普通对象 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}`） |
 | `<Tag name>` | 标签注册表 |
-
-**CSG 自动烘焙**：CSG 子树里出现网格类叶（`mesh`/`bezier` 厚壳）时，解析路径要对每条光线做区间分类并对曲面算 winding（O(光线×面数)，实测 1.2M 光线 × 32 面 ≈ 20 s）。构建期用 `GeometryParams::bake`（marching tetrahedra，确定性）把该布尔烘焙成 `TrimeshGeometry`，主可见性转由光栅路径负责；`<scene bake={N}>` 控制网格密度。烘焙不可行时（无界、网格超限、字段不可判定）保持原 CSG。网格阴影测试（光线路径与光栅路径）带 1e8 光线/像素×面数预算：无 BVH，超预算的遮挡物跳过（确定性上限）。
 
 v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合选择器。需要时各自单独立项。
 
@@ -60,10 +57,10 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 - 平权验收（R2 时点，CGS 尚在）：orbit/assembly/画廊六场景的 JSX 版与原 CGS 版渲染**逐字节相同**（96×72 PNG）。R4 后 CGS 文件已删除，测试现为 JSX 冒烟。
 - 函数组件 + `map` + 三元控制流出 4 个对象。
 - CSS 类命中材质（color/roughness 断言）。
-- JSX 关节 + gear 推导 q，mesh 归属记录正确，报告含 joint/gear 行。
+- JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常。
 
 ## 5. 架构终态
 
-`.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 JS 执行结果翻译成它的调用。下游（渲染/报告/bake/URDF 互转）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）。
+`.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 JS 执行结果翻译成它的调用。下游（渲染/报告/URDF 互转）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）。

@@ -1,6 +1,6 @@
 use super::*;
 
-pub struct MeshParams {
+pub struct ObjectParams {
     pub geometry: Geometry,
     pub material: Material,
     pub position: [f64; 3],

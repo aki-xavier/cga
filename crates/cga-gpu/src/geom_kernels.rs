@@ -1,6 +1,6 @@
 use cga_core::{
     mat3_new, mat3_transpose, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry,
-    GeometryParams, Mat3, Multivector, TrimeshParams,
+    GeometryParams, Mat3, Multivector,
 };
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -354,30 +354,6 @@ pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
                 shift: sh,
             })
         }
-        Geometry::TrimeshGeometry(g) => {
-            let (ai, ti, af) = m.affine_from_motor(identity3());
-            let glo = g.lo;
-            let ghi = g.hi;
-            GeometryParams::TrimeshParams(TrimeshParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                v0: g.v0.clone(),
-                e1: g.e1.clone(),
-                e2: g.e2.clone(),
-                nrm: g.nrm.clone(),
-                lo: glo,
-                hi: ghi,
-            })
-        }
-        Geometry::BezierPatchGeometry(g) => {
-            let (ai, ti, af) = m.affine_from_motor(identity3());
-            let mut p = cga_core::BezierParams::tessellated(g);
-            p.a_inv3 = ai;
-            p.t_inv = ti;
-            p.a_fwd = af;
-            GeometryParams::BezierParams(p)
-        }
         Geometry::CsgGeometry(g) => {
             let mut ch: Vec<GeometryParams> = Vec::new();
             for c in &g.children {
@@ -464,6 +440,7 @@ pub fn csg_bounds(p: &CsgParams) -> Option<[[f64; 3]; 2]> {
     Some([bmin, bmax])
 }
 
+#[allow(dead_code)]
 pub(crate) fn to_f32_3(v: &[[f64; 3]]) -> Vec<f32> {
     let mut out = vec![0.0f32; v.len() * 3];
     for i in 0..v.len() {
@@ -474,21 +451,11 @@ pub(crate) fn to_f32_3(v: &[[f64; 3]]) -> Vec<f32> {
     out
 }
 
-pub(crate) fn tri_mlx(p: &TrimeshParams) -> (Array, Array, Array, Array) {
-    (
-        Array::from_slice(&to_f32_3(&p.v0), &[p.v0.len() as i32, 3]),
-        Array::from_slice(&to_f32_3(&p.e1), &[p.e1.len() as i32, 3]),
-        Array::from_slice(&to_f32_3(&p.e2), &[p.e2.len() as i32, 3]),
-        Array::from_slice(&to_f32_3(&p.nrm), &[p.nrm.len() as i32, 3]),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use cga_core::{
-        decompose_rigid, extrude, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry,
-        Multivector, TrimeshGeometry,
+        decompose_rigid, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry, Multivector,
     };
 
     fn tf_ray(x: f64, y: f64, z: f64) -> Array {
@@ -546,30 +513,6 @@ mod tests {
             [true, false]
         );
     }
-
-    #[test]
-    fn test_moved_mesh_contains() {
-        let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
-        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
-
-        assert_eq!(
-            tf_contains(
-                &g,
-                &Multivector::translator([5.0, 0.0, 0.0]),
-                &[[5.5, 0.4, 0.5], [5.5, 1.5, 0.5]]
-            ),
-            [true, false]
-        );
-        assert_eq!(
-            tf_contains(
-                &g,
-                &Multivector::identity(),
-                &[[0.5, 0.4, 0.5], [1.5, 0.5, 0.5]]
-            ),
-            [true, false]
-        );
-    }
-
     #[test]
     fn test_csg_moved_cone_contains() {
         let g = Geometry::CsgGeometry(CsgGeometry::new(
@@ -588,27 +531,6 @@ mod tests {
             [true, false]
         );
     }
-
-    #[test]
-    fn test_csg_moved_mesh_contains() {
-        let (verts, faces) = extrude(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], 1.0);
-        let g = Geometry::CsgGeometry(CsgGeometry::new(
-            CsgOp::Union,
-            vec![
-                Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-                Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            ],
-        ));
-        assert_eq!(
-            tf_contains(
-                &g,
-                &Multivector::translator([5.0, 0.0, 0.0]),
-                &[[5.5, 0.4, 0.5], [5.5, 1.5, 0.5]]
-            ),
-            [true, false]
-        );
-    }
-
     #[test]
     fn test_rotated_box_normal() {
         let g = Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0));
@@ -798,84 +720,5 @@ mod tests {
         let (t, _, m) = em_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
         assert!((f64::from(t) - 4.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn test_earclip_l_shape() {
-        let l = [
-            [0.0, 0.0],
-            [4.0, 0.0],
-            [4.0, 2.0],
-            [2.0, 2.0],
-            [2.0, 4.0],
-            [0.0, 4.0],
-        ];
-        assert_eq!(cga_core::triangulate(&l).len(), 4);
-    }
-
-    #[test]
-    fn test_extrude_hit_and_contains() {
-        let (verts, faces) = extrude(
-            &[
-                [0.0, 0.0],
-                [4.0, 0.0],
-                [4.0, 2.0],
-                [2.0, 2.0],
-                [2.0, 4.0],
-                [0.0, 4.0],
-            ],
-            1.5,
-        );
-        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
-        let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
-        assert!(m);
-        assert!((f64::from(t) - 3.5).abs() < 1e-5);
-        let (_, _, m2) = em_hit(&g, [3.0, 3.0, 5.0], [0.0, 0.0, -1.0]);
-        assert!(!m2);
-        assert_eq!(
-            em_contains(&g, &[[1.0, 0.9, 0.6], [3.0, 3.0, 0.75]]),
-            [true, false]
-        );
-    }
-
-    #[test]
-    fn test_loft_between_squares() {
-        let (verts, faces) = cga_core::loft(
-            &[
-                vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
-                vec![[0.4, 0.4], [1.6, 0.4], [1.6, 1.6], [0.4, 1.6]],
-            ],
-            &[0.0, 1.0],
-        );
-        assert_eq!(verts.len(), 8);
-        let g = Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces));
-        let (t, _, m) = em_hit(&g, [1.0, 1.0, 5.0], [0.0, 0.0, -1.0]);
-        assert!(m);
-        assert!((f64::from(t) - 4.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn test_obj_roundtrip() {
-        let (verts, faces) = extrude(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], 1.0);
-        cga_core::save_obj(
-            "/tmp/cga_em_obj.obj",
-            &[cga_core::ObjMesh {
-                vertices: verts.clone(),
-                faces: faces.clone(),
-                ..Default::default()
-            }],
-        );
-        let (v2, f2) = cga_core::load_obj("/tmp/cga_em_obj.obj").unwrap();
-        assert_eq!(v2.len(), verts.len());
-        assert_eq!(f2.len(), faces.len());
-        for i in 0..verts.len() {
-            assert!((v2[i][0] - verts[i][0]).abs() < 1e-9);
-            assert!((v2[i][1] - verts[i][1]).abs() < 1e-9);
-            assert!((v2[i][2] - verts[i][2]).abs() < 1e-9);
-        }
-        for i in 0..faces.len() {
-            assert_eq!(f2[i], faces[i]);
-        }
-        let _ = std::fs::remove_file("/tmp/cga_em_obj.obj");
     }
 }

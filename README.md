@@ -53,16 +53,13 @@ Eight gallery scenes (`examples/jsx/*.jsx` + `.css`). One `render_jsx` command p
       <img src="examples/gallery/assembly.png" width="440" alt="assembly.jsx associative assembly"><br>
       <sub><b>assembly.jsx</b> — v2/v3 showcase: <code>constrain</code> solves hole positions. <code>drill</code> cuts through. <code>face</code> mounts posts. <code>instances</code> gates the top beam. Method chaining throughout.</sub>
     </td>
-    <td align="center" width="50%">
-      <img src="examples/gallery/freeform.png" width="440" alt="freeform.jsx freeform surface"><br>
-      <sub><b>freeform.jsx</b> — bicubic Bézier surface shell. Slot cut into a thick-shell surface (CSG leaf).</sub>
-    </td>
   </tr>
 </table>
 
-| Interop | Kinematics |
-| --- | --- |
-| <img src="examples/helmet/demo_helmet.png" width="360" alt="DamagedHelmet glTF loaded and rendered"><br><sub>Load glTF <code>DamagedHelmet.glb</code> and render.</sub><br><img src="examples/gltf/demo_gltf.png" width="360" alt="extrude L-shape glTF round-trip render"><br><sub>Extrude L-shape → write <code>.glb</code> → read back → render.</sub> | <img src="examples/kinematics/kinematics.gif" width="360" alt="demo_kinematics kinematics animation"><br><sub><code>demo_kinematics</code> — gear pair (16:8 → −1:2). Crank–slider. Helical path <code>M(s)=M₀·exp(s·log(M₀⁻¹M₁))</code>. All written directly with motors.</sub> |
+## Kinematics
+
+<img src="examples/kinematics/kinematics.gif" width="360" alt="demo_kinematics kinematics animation"><br>
+<sub><code>demo_kinematics</code> — gear pair (16:8 → −1:2). Crank–slider. Helical path <code>M(s)=M₀·exp(s·log(M₀⁻¹M₁))</code>. All written directly with motors.</sub>
 
 ## Architecture
 
@@ -86,7 +83,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 208 tests pass.
+   Result: all 137 tests pass.
 
 2. Render the smoke scene:
 
@@ -107,8 +104,8 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 | Layer | Content |
 | --- | --- |
 | **CGA core** | 32-component multivector (plain `[f64; 32]`). Motor versor transforms (gp/reverse/log/velocity). exp/log/interpolation. Two incidence predicates: direct form `op`, dual form `ip`. |
-| **Render engine** | three.js naming: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
-| **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. **Mesh**: Möller–Trumbore batch intersection + extrude/loft + OBJ/glTF/GLB. |
+| **Render engine** | three.js naming: Scene / PerspectiveCamera / Object / Sphere·Plane·Cylinder·Box·Circle Geometry / Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
+| **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. No triangle meshes anywhere: every solid is an analytic primitive or a CSG of them. |
 | **MLX GPU** | Per-pixel vectorized analytic intersection. One kernel batch per full-resolution frame (mlx-rs / Metal). Camera space: X right, Y down, Z forward. |
 | **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `SceneRun`. See `docs/jsx-css-host.md`. |
 
@@ -149,11 +146,9 @@ cargo run --release -p cga-examples --bin render_jsx -- examples/jsx/orbit.jsx o
 Rules:
 
 - Ray tracing cost is `objects × rays × lights × (1 + secondary bounces)`. Per-object screen-space ray subsetting (frustum culling) now applies to primary rays, and per-object bounding-sphere subsetting to shadow rays: 500 primitives 5.9 s → 1.1 s, `building.jsx` 26.3 s → 3.0 s, `primitives.jsx` 4.6 s → 0.17 s. Culling is conservative (pixel-identical); `CGA_NO_CULL=1` renders in reference mode with culling off.
-- `<scene bake={N}>`: a boolean whose subtree contains a mesh leaf (`mesh` / thick `bezier`) is baked at build time into a triangle mesh (`GeometryParams::bake`, marching tetrahedra) and drawn by the raster path. `N` = grid cells along the longest axis (default 96); `bake={0}` keeps the analytic CSG. Without it such a boolean costs O(rays × faces) per frame (measured ≈ 20 s for 1.2 M rays × 32 faces); with it, `freeform.jsx` renders in ≈ 0.4 s.
-- Elements: primitives `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/bezier/extrude/loft/mesh`, modifiers `translate/rotate/scale/mirror/material`, CSG `union/difference/intersection`, lights, `camera`, `background`, `joint/gear/cam`, `tag/drill/instances/when`.
+- Elements: primitives `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid`, modifiers `translate/rotate/scale/mirror/material`, CSG `union/difference/intersection`, lights, `camera`, `background`, `joint/gear/cam`, `tag/drill/instances/when`.
 - `export default <element>` is the scene. Function components are plain JS functions. Control flow is real JS (`map`, ternaries).
 - CSS matches tag / `.class` / `#id` / `:root` / `scene`. Material keys: `color roughness metalness emissive opacity ior absorption map unlit`. Material inherits down the tree; inline props beat CSS rules; CSS cascades in source order.
-- `bezier(points={16 [x,y,z]}, thickness={0}, div={8})`: `thickness=0` is a render surface. `thickness>0` is a watertight thick shell; it can enter CSG and baking.
 - `torus(R, r, arc=2π)`: with `arc<2π` it is a partial arc-pipe (tube).
 - Constraint solving: `const [x] = solve([x0], [v => eq(…), v => le(…)])` — numeric residuals with `eq/le/ge` helpers; non-convergence is an explicit error.
 - Pose overrides: `run_jsx_pose(jsx, css, root, overrides)` / `report_jsx --set name=value`. Variables read `P.name`; 1-DOF joints match by name with `q` omitted.
@@ -177,7 +172,7 @@ Rules:
 | **Joints P2** | Gear coupling | `<Gear driver driven ratio offset />` ≡ URDF `mimic` + ratio: `q_driven = ratio·q_driver + offset`. Driver first, driven later with q omitted (document order). 1-DOF joints only. |
 | **Joints P3** | Cam contact solving | `<Cam driver driven driverProfile={…} drivenProfile={…} />` solves the driven q so the profiles touch without penetration. Profiles: `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}`, planar mechanisms only. No contact or multiple contacts are explicit errors. |
 | **Pose P4** | Pose overrides | `run_jsx_pose(jsx, css, root, overrides)` / `report_jsx --set name=value`: variables read `P.name`; joint overrides drive 1-DOF joints with q omitted. gear/cam chains re-derive. Report emits `pose name=value` lines. |
-| **URDF P5/P6** | URDF interop | `jsx_to_urdf` / `urdf_to_jsx` (urdf-rs). origin xyz/rpy ↔ `at`/`rpy` 1:1. gear ↔ `mimic`. helical/cylindrical/spherical decompose into 1-DOF series joints. Non-primitive link geometry bakes to watertight OBJ. `floating` is rejected explicitly. |
+| **URDF P5/P6** | URDF interop | `jsx_to_urdf` / `urdf_to_jsx` (urdf-rs). origin xyz/rpy ↔ `at`/`rpy` 1:1. gear ↔ `mimic`. helical/cylindrical/spherical decompose into 1-DOF series joints. Non-primitive link geometry (CSG) is rejected explicitly. `floating` is rejected explicitly. |
 | **Report** | Execution result text | `run.scene.report(…)` / `report_jsx` CLI: scene-level background/camera/light lines + one `object <i> …` line per object + `bounds` + geometry parameter tree + tag registry + joint/gear/cam lines + `summary`. Numbers normalized to six digits. |
 
 The gallery scene `assembly.jsx` (`examples/jsx/assembly.jsx`) exercises every v2/v3 feature together: `constrain` solves hole positions → `drill` cuts through → `face` face centers mount posts → `instances` counts and erects the top beam.
@@ -210,28 +205,6 @@ The gallery scene `assembly.jsx` (`examples/jsx/assembly.jsx`) exercises every v
 
 **Affine extension** — scale/mirror connect through the AffineGeometry ray inverse transform. Versors cannot express these two transform classes. Normals use the inverse-transpose transform. Mirrors are automatically correct when det<0. The context is a full 4×4 affine. Geometry landing points are decomposed into motor·linear by Newton polar decomposition. Any nesting order of `rotate` with `scale/mirror` is correct. See the mirror pair in the gallery `affine.jsx`.
 
-**Mesh and interop** — `MeshGeometry`: Möller–Trumbore batch intersection. Flat normals. No BVH. `modeling.rs`: extrude (ear-clipping triangulation of concave outlines) and loft (equal-point-count multi-section). `mesh_io.rs`: pure-stdlib OBJ read/write. `mesh_io_gltf.rs`: glTF/GLB read/write (node transforms/hierarchy/material colors).
-
-**Freeform surfaces (P3)** — `bezier(points=16, thickness, div)` is a rational bicubic Bézier patch. See the surface shell and the slotted surface in the gallery `freeform.jsx`. Its `crossings`/`contains`/`field`/`bounds` reuse the mesh MT kernel (uniform `div×div` tessellation; the analytic chord-height bound is asserted in tests). With `thickness>0` it stitches a watertight offset thick shell (top/bottom/side walls share indices; every edge asserted ×2) — a true solid that can enter CSG and baking. With `thickness=0` it is a render surface. CSG and baking reject it explicitly (same family as `circle`). Full example: `examples/jsx/freeform.jsx`. Measured constraint: CSG×mesh memory grows as O(rays × intersections × triangles); the JSX host therefore bakes mesh-containing booleans to a triangle mesh at build time (see the `bake` scene attribute) unless `bake={0}` opts out. The interval classifier samples (k+1) points per ray. `contains` evaluates in chunks under a 256 MB temporary budget to prevent OOM. A high `div` must be paired with low resolution/aa.
-
-**Baking** — `bake` turns any CSG implicit solid into a triangle mesh. **Pure CPU float64, no GPU dependency. Runs on Linux/CI.** Pipeline: signed field (same sign convention as the GPU `*_contains`) → marching tetrahedra (Kuhn six-tetrahedron subdivision) → bit-exact vertex welding + component-wise consistent orientation. **Watertightness is a constructive conclusion, not luck.** `topology_report()` puts boundary edges, non-manifold edges, and the Euler characteristic into CI assertions. Non-finite field values report an explicit error: export must not abstain. The image below is the `demo_bake` output. Left: implicit CSG original (analytically smooth). Right: baked mesh (visible facets).
-
-![Implicit CSG and baked mesh side by side](examples/bake/demo_bake.png)
-
-```text
-$ cargo run --release -p cga-examples --bin demo_bake
-topology: TopologyReport { vertices: 40868, faces: 81744, degenerate_faces: 0,
-  boundary_edges: 0, nonmanifold_edges: 0, inconsistent_edges: 0, euler: -4 }
-volume: 1.3911
-saved examples/bake/demo_bake.png + demo_bake.obj
-```
-
-```bash
-cargo run --release -p cga-examples --bin bake_jsx -- examples/jsx/mechanical.jsx out.obj 0.1
-```
-
-Note: a coarse step loses features finer than the step. Tangent/coplanar degeneracies inherit the CSG sampling semantics. Baked meshes suit simulation collision and preview. Exact STEP export is out of scope.
-
 ## Generation / headless rendering
 
 This is the library-level entry for programmatic callers (LLM codegen, external GUIs). `demo_lang` runs three things in one pass: generation → headless render → scene report.
@@ -251,10 +224,6 @@ std::fs::write("preview.png", out.png)?;
 // Scene report: deterministic line-by-line text of the execution result. An LLM verifier can assert it directly.
 let report = cga_gpu::run_jsx(&text, None, ".")
     .map(|r| r.scene.report(&r.camera, &r.tags, &r.kinematics))?;
-
-// Mesh baking: CSG → triangle mesh (pure CPU f64)
-let m = world_params.bake(0.1)?;
-let v = m.volume();
 ```
 
 Excerpt from `examples/lang/report.txt` (a `demo_lang` artifact). One geometry parameter tree per object + bounding box. Numbers normalized to six digits:
@@ -275,7 +244,7 @@ use cga_core::*;
 use cga_gpu::*;
 
 let mut scene = Scene::new(None);
-scene.add_mesh(Mesh::new(MeshParams {
+scene.add_object(Object::new(ObjectParams {
     geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
     material: Material::standard(MaterialParams {
         color: Color::from_hex(0xB0B0B0), roughness: 0.7, metalness: 0.0,
@@ -284,7 +253,7 @@ scene.add_mesh(Mesh::new(MeshParams {
     position: [0.0, 0.0, 0.0], rotation_axis: [0.0, 0.0, 1.0],
     rotation_angle: 0.0, motor: None,
 }));                                          // ground: dual plane blade (y=0)
-scene.add_mesh(Mesh::new(MeshParams {
+scene.add_object(Object::new(ObjectParams {
     geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
     material: Material::standard(MaterialParams {
         color: Color::from_hex(0xC0392B), roughness: 0.25, metalness: 0.25,
@@ -330,8 +299,7 @@ cargo run --release -p cga-examples --bin stereo_pair -- 7 examples/stereo 480 3
 - **Textures**: `material(map=...)` does analytic UV sampling. No mipmap. No filtering control.
 - **scale/mirror**: connected through the AffineGeometry ray inverse transform. Versors cannot express them. Blade semantics (meet/incidence predicates) do not apply to affinely deformed primitives.
 - **CSG**: classification uses intervals between crossings (no δ sampling). Tangencies/multiple roots take the discriminant-exact path. Undecidable cases report `Unknown` explicitly; no silent guessing. One material per node. `circle` is not a solid.
-- **Non-blade primitives**: cone/torus/ellipsoid/cyclide/mesh connect through ray inverse transforms. The ring cyclide is a smooth genus-1 surface. The spindle type self-intersects; CSG membership semantics degrade.
-- **Mesh**: brute-force O(N·F). No BVH. Flat normals. No texture coordinates. glTF import is currently limited to a single primitive. Inside/outside classification uses the generalized winding number: open meshes and globally reversed orientation work; mixed orientation is meaningless. In CSG composition, `contains` and `crossings` both evaluate in chunks under a 256 MB temporary budget (prevents OOM, at the cost of per-chunk GPU sync).
+- **Non-blade primitives**: cone/torus/ellipsoid/cyclide connect through ray inverse transforms. The ring cyclide is a smooth genus-1 surface. The spindle type self-intersects; CSG membership semantics degrade.
 - **Precision**: the algebra core is always CPU float64. The render kernels are float32 (MLX/Metal have no float64). Parameters end up near the origin after entering camera space.
 
 ## Potential robotics applications
@@ -355,23 +323,22 @@ crates/
     motors / primitives     motors, primitive incidence predicates and distances
     cyclide / geometry      Dupin cyclide, Geometry and camera parameters
     affine / affine_geom    affine extension (scale/mirror inverse transform + Newton polar decomposition)
-    csg_node / modeling     CSG tree, ear-clipping triangulation + extrude + loft
-    bake / mesh_io / gif    mesh baking (marching tetrahedra), OBJ, GIF89a encoding
+    csg_node / geometry     CSG tree, geometry params (+ identity_params), mat4 helpers
+    gif                     GIF89a encoding
   cga-gpu/                  mlx-rs/Metal GPU kernels
     mlxops / shading        scalar broadcast helpers, material lights and batched Blinn-Phong
-    scene / scene_graph     Mesh·Scene·PerspectiveCamera·OrbitControls, Vec3/Color
+    scene / scene_graph     Object·Scene·PerspectiveCamera·OrbitControls, Vec3/Color
     geometry_ops / geometry_extra / geom_kernels   blade analytic intersection (incl. cone/torus/ellipsoid/cyclide)
-    trimesh / csg / certify intersection, recursive CSG, certifiable root-finding and interval classification
-    texture / image_io / shading / mesh_raster     textures, PNG, GPU raster coverage (window batches + scatter z-buffer)
-    mesh_io_gltf            glTF/GLB read/write
-    renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction); raster/ray depth composite; meshes cast and receive shadows
+    csg / certify           recursive CSG booleans, certifiable root-finding and interval classification
+    texture / image_io / shading  textures, PNG, batched Blinn-Phong
+    renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction), per-object frustum culling
   cga-host/                 scene authoring host (no mlx dependency)
     scene_build / scene_report  scene builders, kinematics registry, scene report text
     jsx                     JSX+CSS scene host (swc compile → boa execute → SceneRun)
     jsx_gen                 structured-parameter → flat-JSX generators
     urdf                    URDF export/import (jsx_to_urdf / urdf_to_jsx, urdf-rs)
   cga-examples/             demo CLIs (src/bin/*.rs)
-examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
+examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; lang is the generation-pipeline showcase)
 docs/                       architecture diagram, robotics diagram, cross-platform plan
 ```
 
@@ -383,19 +350,15 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `demo_advantage` | `examples/advantage/advantage_{a,b,c}.png` three panels |
 | `demo_kinematics` | `examples/kinematics/kinematics.gif` |
 | `demo_csg` | `examples/csg/demo_csg.png` (union/difference/intersection side by side) |
-| `demo_bake` | `examples/bake/demo_bake.{png,obj}` (implicit CSG and watertight baked mesh side by side) |
 | `demo_lang` | `examples/lang/{generated_flange.jsx, demo_lang.png, report.txt}` (generate → headless render → report) |
-| `demo_gltf` | `examples/gltf/demo_gltf.{glb,png}` |
-| `demo_helmet` | `examples/helmet/demo_helmet.png` |
 | `render_jsx <file.jsx> [out.png] [w h aa]` | JSX(+CSS) → PNG |
-| `bake_jsx <file.jsx> [out.obj\|out.glb] [step]` | JSX → triangle mesh (unbounded planes are skipped automatically) |
 | `report_jsx <file.jsx> [--set name=value]` | JSX → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |
 
 ## Quality
 
-- `make test`: **all 208 tests pass** (cga-core 61 + cga-gpu 115 + cga-host 32, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the raster path (GPU-vs-CPU reference equivalence, double-sided open mesh, near-plane clipping, mesh shadow casting/receiving, transparent mesh blending, raster SSAA), the ray path (chunked trimesh intersection bitwise-equal to single shot), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/bake volume), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
-- Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg goldens have **RMSE = 0**.
+- `make test`: **all 137 tests pass** (cga-core 31 + cga-gpu 78 + cga-host 28, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports.
+- Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/csg goldens have **RMSE = 0**.
 
 ## License
 

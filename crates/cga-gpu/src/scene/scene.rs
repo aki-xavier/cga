@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub struct Scene {
-    pub objects: Vec<Mesh>,
+    pub objects: Vec<Object>,
     pub lights: Vec<Light>,
     pub background: Color,
 }
@@ -18,7 +18,7 @@ impl Scene {
         }
     }
 
-    pub fn add_mesh(&mut self, m: Mesh) {
+    pub fn add_object(&mut self, m: Object) {
         self.objects.push(m);
     }
 

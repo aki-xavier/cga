@@ -1,14 +1,14 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub struct Mesh {
+pub struct Object {
     pub base: Object3D,
     pub geometry: Geometry,
     pub material: Material,
 }
-impl Mesh {
-    pub fn new(p: MeshParams) -> Mesh {
-        Mesh {
+impl Object {
+    pub fn new(p: ObjectParams) -> Object {
+        Object {
             base: Object3D::new(
                 p.position,
                 p.rotation_axis,
@@ -21,14 +21,14 @@ impl Mesh {
         }
     }
 }
-impl std::ops::Deref for Mesh {
+impl std::ops::Deref for Object {
     type Target = Object3D;
 
     fn deref(&self) -> &Object3D {
         &self.base
     }
 }
-impl std::ops::DerefMut for Mesh {
+impl std::ops::DerefMut for Object {
     fn deref_mut(&mut self) -> &mut Object3D {
         &mut self.base
     }

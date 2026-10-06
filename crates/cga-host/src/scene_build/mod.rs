@@ -1,17 +1,15 @@
-//! Scene building: value types, builders, kinematics, face/bounds helpers, and
-//! the build-time CSG bake. Text parsing lives in the JSX host (crate::jsx).
+//! Scene building: value types, builders, kinematics, face/bounds helpers.
+//! Text parsing lives in the JSX host (crate::jsx).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use cga_core::{
-    clamp01, extrude, load_obj, loft, mat4_identity, mat4_mul, transform_point, validate_profile,
-    BezierPatchGeometry, BoxGeometry, CircleGeometry, ConeGeometry, CsgOp, CyclideGeometry,
-    CylinderGeometry, EllipsoidGeometry, Geometry, Multivector, PlaneGeometry, SphereGeometry,
-    TorusGeometry, TrimeshGeometry,
+    clamp01, mat4_identity, mat4_mul, transform_point, BoxGeometry, CircleGeometry, ConeGeometry,
+    CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry, Multivector,
+    PlaneGeometry, SphereGeometry, TorusGeometry,
 };
 
-use cga_gpu::mesh_io_gltf::{gltf_to_geometry, load_gltf};
 use cga_gpu::scene::Scene;
 use cga_gpu::scene_graph::{vec3_dot, Color};
 use cga_gpu::shading::{Material, MaterialParams};
@@ -271,7 +269,6 @@ fn validate_geometry_params(
         "sphere" | "circle" | "cylinder" => &["r"],
         "cone" => &["r", "h"],
         "torus" => &["R", "r"],
-        "extrude" => &["h"],
         _ => &[],
     };
     for k in pos_keys {
@@ -318,114 +315,9 @@ fn validate_geometry_params(
                 return Err(format!("build: cyclide.d must be > 0"));
             }
         }
-        "loft" => {
-            if let Some(ArgValue::List(raw)) = args.get("profiles") {
-                let mut m: i64 = -1;
-                for p in raw {
-                    if let ArgValue::List(pl) = p {
-                        if m >= 0 && pl.len() as i64 != m {
-                            return Err(format!(
-                                "build: loft profiles must share the same vertex count"
-                            ));
-                        }
-                        m = pl.len() as i64;
-                    }
-                }
-            }
-            let mut zs: Vec<f64> = Vec::new();
-            let zsraw = args.get("zs").cloned().unwrap_or(ArgValue::Num(0.0));
-            match zsraw {
-                ArgValue::Vec3(v3) => {
-                    zs = vec![v3.x, v3.y, v3.z];
-                }
-                ArgValue::List(zlist) => {
-                    for z in &zlist {
-                        zs.push(cgs_num(z, line, "loft.zs[i]")?);
-                    }
-                }
-                _ => {}
-            }
-            for i in 0..zs.len().saturating_sub(1) {
-                if zs[i] >= zs[i + 1] {
-                    return Err(format!("build: loft.zs must be strictly increasing"));
-                }
-            }
-        }
-        "bezier" => {
-            if arg_num(args, "thickness") < 0.0 {
-                return Err(format!("build: bezier.thickness must be >= 0"));
-            }
-            let div = arg_num(args, "div");
-            if div.fract() != 0.0 || div < 1.0 || div > 32.0 {
-                return Err(format!("build: bezier.div must be an integer in 1..=32"));
-            }
-            match args.get("points") {
-                Some(ArgValue::List(items)) if items.len() == 16 => {}
-                Some(ArgValue::List(items)) => {
-                    return Err(format!(
-                        "build: bezier.points needs 16 [x,y,z] control points, got {}",
-                        items.len()
-                    ));
-                }
-                _ => {
-                    return Err(format!(
-                        "build: bezier.points needs 16 [x,y,z] control points, got none"
-                    ));
-                }
-            }
-        }
         _ => {}
     }
     Ok(())
-}
-
-fn profile2d(v: &ArgValue, line: i32, what: &str) -> Result<Vec<[f64; 2]>, String> {
-    match v {
-        ArgValue::List(items) => {
-            if items.len() < 3 {
-                return Err(format!("build: {what} needs >= 3 [x,y] points"));
-            }
-            let mut pts: Vec<[f64; 2]> = Vec::new();
-            for p in items {
-                match p {
-                    ArgValue::List(pair) => {
-                        if pair.len() != 2 {
-                            return Err(format!("build: {what} items must be [x,y]"));
-                        }
-                        let x = cgs_num(&pair[0], line, what)?;
-                        let y = cgs_num(&pair[1], line, what)?;
-                        pts.push([x, y]);
-                    }
-                    _ => {
-                        return Err(format!("build: {what} items must be [x,y]"));
-                    }
-                }
-            }
-
-            validate_profile(&pts).map_err(|e| format!("build: {e}"))?;
-            Ok(pts)
-        }
-        _ => Err(format!("build: {what} needs a list")),
-    }
-}
-
-fn points16(v: &ArgValue, line: i32, what: &str) -> Result<Vec<[f64; 3]>, String> {
-    match v {
-        ArgValue::List(items) => {
-            if items.len() != 16 {
-                return Err(format!(
-                    "build: {what} needs 16 [x,y,z] control points, got {}",
-                    items.len()
-                ));
-            }
-            let mut pts: Vec<[f64; 3]> = Vec::with_capacity(16);
-            for p in items {
-                pts.push(cgs_vec3(p, line, what)?);
-            }
-            Ok(pts)
-        }
-        _ => Err(format!("build: {what} needs a list")),
-    }
 }
 
 fn sig_names(name: &str) -> Vec<&'static str> {
@@ -439,10 +331,6 @@ fn sig_names(name: &str) -> Vec<&'static str> {
         "torus" => vec!["R", "r"],
         "cyclide" => vec!["a", "b", "d"],
         "ellipsoid" => vec!["radii"],
-        "extrude" => vec!["profile", "h"],
-        "loft" => vec!["profiles", "zs"],
-        "bezier" => vec!["points"],
-        "mesh" => vec!["file"],
         "translate" => vec!["t"],
         "rotate" => vec!["axis", "angle"],
         "scale" => vec!["s"],
@@ -470,10 +358,6 @@ fn sig_defaults(name: &str) -> HashMap<String, ArgValue> {
         }
         "torus" => {
             m.insert("arc".to_string(), ArgValue::Num(std::f64::consts::TAU));
-        }
-        "bezier" => {
-            m.insert("thickness".to_string(), ArgValue::Num(0.0));
-            m.insert("div".to_string(), ArgValue::Num(8.0));
         }
         "directional_light" | "point_light" => {
             m.insert("intensity".to_string(), ArgValue::Num(1.0));
@@ -519,114 +403,15 @@ fn sig_defaults(name: &str) -> HashMap<String, ArgValue> {
     m
 }
 
-/// 一个几何树里是否有网格类后代（Trimesh / 曲面细分 Bezier）。
-/// 递归穿过 CSG 子节点与仿射包装（instances/drill 会包一层 AffineGeometry）。
-pub fn has_mesh_descendant(g: &Geometry) -> bool {
-    match g {
-        Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_) => true,
-        Geometry::CsgGeometry(c) => c.children.iter().any(has_mesh_descendant),
-        Geometry::AffineGeometry(a) => a.inner.iter().any(has_mesh_descendant),
-        _ => false,
-    }
-}
-
-/// CSG 含网格类后代时，光线路径要对每个光线做区间分类 + 曲面 winding
-/// （O(光线×面数)，实测 1.2M 光线 × 32 面 ≈ 20 s）。构建期把整棵布尔
-/// 烘焙成三角网（marching tetrahedra，`cells` 为最长轴网格数），改走光栅路径。
-/// 返回 None 表示不适用（无网格后代 / 无界 / 网格超限 / 字段不可判定），
-/// 调用方保持原 CSG（射线路径仍然正确，只是慢）。
-pub fn bake_csg_if_mesh(g: &Geometry, cells: usize) -> Option<Geometry> {
-    if !matches!(g, Geometry::CsgGeometry(_)) || !has_mesh_descendant(g) {
-        return None;
-    }
-    if cells == 0 {
-        return None;
-    }
-    let params = g.identity_params();
-    let [lo, hi] = params.bounds()?;
-    let span = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
-    if !(span > 0.0) || !span.is_finite() {
-        return None;
-    }
-    let step = span / cells as f64;
-    let mesh = params.bake(step).ok()?;
-    // marching tetrahedra 在等值面正好穿过网格节点时会输出零面积面
-    // （顶点重复），TrimeshGeometry 拒绝此类面——过滤掉（bake 的拓扑审计
-    // 同样把零面积面排除在计数外）。
-    let verts = &mesh.vertices;
-    let faces: Vec<[i32; 3]> = mesh
-        .faces
-        .iter()
-        .copied()
-        .filter(|f| {
-            if f[0] == f[1] || f[1] == f[2] || f[0] == f[2] {
-                return false;
-            }
-            let a = verts[f[0] as usize];
-            let b = verts[f[1] as usize];
-            let c = verts[f[2] as usize];
-            let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-            let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-            let cx = e1[1] * e2[2] - e1[2] * e2[1];
-            let cy = e1[2] * e2[0] - e1[0] * e2[2];
-            let cz = e1[0] * e2[1] - e1[1] * e2[0];
-            let cl = (cx * cx + cy * cy + cz * cz).sqrt();
-            cl >= 1e-12 // 与 TrimeshGeometry::new 的判据一致
-        })
-        .collect();
-    if faces.is_empty() {
-        return None;
-    }
-    Some(Geometry::TrimeshGeometry(TrimeshGeometry::new(
-        verts, &faces,
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bake_csg_if_mesh() {
-        // 4x4 控制网格（Bezier 面片要求 16 点）
-        let mut pts: Vec<[f64; 3]> = Vec::new();
-        for i in 0..4 {
-            for j in 0..4 {
-                pts.push([
-                    -1.0 + i as f64 * 2.0 / 3.0,
-                    0.15 * ((i as f64 - 1.5).powi(2) + (j as f64 - 1.5).powi(2)) / 2.25,
-                    -1.0 + j as f64 * 2.0 / 3.0,
-                ]);
-            }
-        }
-        let tool = Geometry::BezierPatchGeometry(BezierPatchGeometry::new(&pts, 0.6, 2));
-        let solid = Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0));
-        let csg_mesh = Geometry::CsgGeometry(cga_core::CsgGeometry::new(
-            CsgOp::Difference,
-            vec![solid.clone(), tool],
-        ));
-        // 含网格后代 → 烘焙成三角网
-        match bake_csg_if_mesh(&csg_mesh, 24) {
-            Some(Geometry::TrimeshGeometry(t)) => assert!(t.n_faces > 100, "面数 {}", t.n_faces),
-            other => panic!("应烘焙成 trimesh，得到 {other:?}"),
-        }
-        // 纯解析 CSG 不烘焙（射线路径精确且足够快）
-        let csg_analytic = Geometry::CsgGeometry(cga_core::CsgGeometry::new(
-            CsgOp::Difference,
-            vec![solid, Geometry::SphereGeometry(SphereGeometry::new(0.8))],
-        ));
-        assert!(bake_csg_if_mesh(&csg_analytic, 24).is_none());
-        // cells = 0 关闭烘焙
-        assert!(bake_csg_if_mesh(&csg_mesh, 0).is_none());
-    }
-
     fn geom_kind(g: &Geometry) -> &'static str {
         match g {
             Geometry::CsgGeometry(_) => "csg",
             Geometry::ConeGeometry(_) => "cone",
             Geometry::TorusGeometry(_) => "torus",
             Geometry::EllipsoidGeometry(_) => "ellipsoid",
-            Geometry::TrimeshGeometry(_) => "mesh",
             Geometry::SphereGeometry(_) => "sphere",
             Geometry::BoxGeometry(_) => "box",
             Geometry::CylinderGeometry(_) => "cylinder",
@@ -668,41 +453,13 @@ mod tests {
             <difference><box s={[2,2,2]} /><cylinder r={0.5} h={4} /></difference>\n    \
             <cone r={1} h={2} />\n    \
             <torus R={1} r={0.3} />\n    \
-            <ellipsoid radii={[1,2,3]} />\n    \
-            <extrude profile={[[0,0],[1,0],[1,1],[0,1]]} h={0.5} />\n    \
-            <loft profiles={[[[0,0],[1,0],[1,1],[0,1]], [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]]} zs={[0, 0.5]} />\n  \
+            <ellipsoid radii={[1,2,3]} />\n  \
             </scene>\n);";
         let sc = crate::jsx::run_jsx(text, None, "").unwrap().scene;
-        assert_eq!(sc.objects.len(), 6);
+        assert_eq!(sc.objects.len(), 4);
         assert_eq!(geom_kind(&sc.objects[0].geometry), "csg");
         assert_eq!(geom_kind(&sc.objects[1].geometry), "cone");
         assert_eq!(geom_kind(&sc.objects[2].geometry), "torus");
         assert_eq!(geom_kind(&sc.objects[3].geometry), "ellipsoid");
-        assert_eq!(geom_kind(&sc.objects[4].geometry), "mesh");
-        assert_eq!(geom_kind(&sc.objects[5].geometry), "mesh");
-    }
-
-    #[test]
-    fn test_jsx_gltf_mesh() {
-        let (verts, faces) = extrude(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], 1.0);
-        cga_gpu::save_glb(
-            "/tmp/cga_host.glb",
-            &[cga_gpu::GltfMeshIn {
-                vertices: verts,
-                faces,
-                transform: None,
-                color: None,
-            }],
-        );
-        let sc = crate::jsx::run_jsx(
-            "export default <mesh file=\"cga_host.glb\" />;",
-            None,
-            "/tmp",
-        )
-        .unwrap()
-        .scene;
-        assert_eq!(sc.objects.len(), 1);
-        assert_eq!(geom_kind(&sc.objects[0].geometry), "mesh");
-        let _ = std::fs::remove_file("/tmp/cga_host.glb");
     }
 }

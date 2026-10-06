@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 
 use crate::scene_build::{csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry};
 use cga_gpu::geom_kernels::geom_to_camera;
-use cga_gpu::scene::{Mesh, PerspectiveCamera, Scene};
+use cga_gpu::scene::{Object, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::{vec3_unit, Color};
 use cga_gpu::shading::{Light, LightKind, Material, MaterialKind};
 
@@ -144,15 +144,6 @@ fn fmt_geom(g: &Geometry) -> String {
             fmt_num(c.d),
             fmt_vec3(c.shift)
         ),
-        Geometry::TrimeshGeometry(t) => format!(
-            "trimesh(faces={}, lo={}, hi={})",
-            t.n_faces,
-            fmt_vec3(t.lo),
-            fmt_vec3(t.hi)
-        ),
-        Geometry::BezierPatchGeometry(b) => {
-            format!("bezier(thickness={}, div={})", fmt_num(b.thickness), b.div)
-        }
         Geometry::CsgGeometry(c) => {
             let kids: Vec<String> = c.children.iter().map(fmt_geom).collect();
             format!("{}({})", csg_op_name(c.op), kids.join(", "))
@@ -221,7 +212,7 @@ fn fmt_camera(c: &PerspectiveCamera) -> String {
     )
 }
 
-fn fmt_object(i: usize, m: &Mesh) -> String {
+fn fmt_object(i: usize, m: &Object) -> String {
     let (t, axis, angle) = frame_of(&m.motor().to_matrix());
     let prefix = fmt_prefix(t, axis, angle);
     let geom = fmt_frame(
@@ -310,7 +301,7 @@ pub fn scene_report(
         out.push_str(&fmt_object(i, m));
         out.push('\n');
         let params = geom_to_camera(&m.geometry, &m.motor());
-        match params.bounds() {
+        match cga_gpu::geometry_ops::geom_bounds(&params) {
             Some(b) => {
                 out.push_str(&format!(
                     "bounds {i} lo={} hi={}\n",
@@ -393,7 +384,7 @@ pub fn scene_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cga_gpu::scene::{Mesh, MeshParams};
+    use cga_gpu::scene::{Object, ObjectParams};
     use cga_gpu::scene_graph::Color;
     use cga_gpu::shading::MaterialKind;
     use cga_gpu::texture::Texture;
@@ -579,21 +570,6 @@ bbox_hi=[1,1.5,1]",
             "tag instances must not print material:\n{a}"
         );
     }
-
-    #[test]
-    fn test_report_trimesh() {
-        let rep = rep("export default <extrude profile={[[0,0],[2,0],[2,2],[0,2]]} h={3} />;");
-        assert_has(
-            &rep,
-            &format!("object 0 {DEF_MAT} trimesh(faces=12, lo=[0,0,0], hi=[2,2,3]);"),
-        );
-        assert_has(&rep, "bounds 0 lo=[0,0,0] hi=[2,2,3]");
-        assert_has(
-            &rep,
-            "summary objects=1 lights=0 no_bounds=0 bbox_lo=[0,0,0] bbox_hi=[2,2,3]",
-        );
-    }
-
     #[test]
     fn test_report_material_variants() {
         let rep = rep(
@@ -615,7 +591,7 @@ emissive=0x00FF00, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
 
         let mut sc = Scene::new(None);
         let tex = Texture::from_rgba(&vec![vec![vec![0.5; 4]; 3]; 2]);
-        sc.objects.push(Mesh::new(MeshParams {
+        sc.objects.push(Object::new(ObjectParams {
             geometry: Geometry::SphereGeometry(cga_core::SphereGeometry::new(1.0)),
             material: Material {
                 kind: MaterialKind::Standard,

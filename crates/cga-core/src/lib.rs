@@ -1,6 +1,9 @@
 pub mod util;
 pub use util::*;
 
+pub mod mat4;
+pub use mat4::*;
+
 #[allow(dead_code)]
 pub(crate) mod tables;
 
@@ -27,15 +30,6 @@ pub use affine_geom::*;
 
 pub mod csg_node;
 pub use csg_node::*;
-
-pub mod modeling;
-pub use modeling::*;
-
-pub mod mesh_io;
-pub use mesh_io::*;
-
-pub mod bake;
-pub use bake::*;
 
 pub mod gif;
 pub use gif::*;

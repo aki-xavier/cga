@@ -7,7 +7,6 @@ description = "cga GPU batch kernels (mlx-rs/Metal ray tracing)."
 cga-core = { path = "../cga-core" }
 mlx-rs = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-gltf = "1"
 
 inari = { version = "2.0.0", default-features = false }
 

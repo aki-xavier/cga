@@ -223,6 +223,3 @@ __marimo__/
 target/
 # CodeGraph index
 .codegraph/
-
-# demo_bake 的大网格输出（可由 demo_bake 重新生成）
-examples/bake/*.obj

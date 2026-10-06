@@ -22,7 +22,7 @@ fn render_panel(sc: Scene, cam_pos: [f64; 3], target: [f64; 3], name: &str) {
 
 fn panel_a() -> Scene {
     let mut sc = Scene::new(Some(Color::from_hex(0x101418)));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(1.2)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC0392B),
@@ -38,7 +38,7 @@ fn panel_a() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.4, -1.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xD4AC0D),
@@ -70,7 +70,7 @@ fn panel_a() -> Scene {
 
 fn panel_b() -> Scene {
     let mut sc = Scene::new(None);
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xB0B0B0),
@@ -86,7 +86,7 @@ fn panel_b() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.5, -1.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xD4AC0D),
@@ -102,7 +102,7 @@ fn panel_b() -> Scene {
         rotation_angle: 0.0,
         motor: None,
     }));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC0392B),
@@ -140,7 +140,7 @@ fn panel_c() -> Scene {
         Multivector::translator([2.0, 0.75, 1.0]).gp(&Multivector::rotor([0.0, 1.0, 0.0], 1.1));
     for i in 0..6 {
         let m = m0.interpolate(&m1, f64::from(i) / 5.0);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::SphereGeometry(SphereGeometry::new(0.16)),
             material: Material::standard(MaterialParams {
                 color: Color::from_hex(0x95A5A6),
@@ -157,7 +157,7 @@ fn panel_c() -> Scene {
             motor: Some(m),
         }));
     }
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::BoxGeometry(BoxGeometry::new(0.65, 0.65, 0.65)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x27AE60),

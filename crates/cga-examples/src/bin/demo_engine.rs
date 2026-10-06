@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 fn build_scene() -> Scene {
     let mut sc = Scene::new(None);
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xB0B0B0),
@@ -23,7 +23,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC0392B),
@@ -40,7 +40,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x2980B9),
@@ -57,7 +57,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::CylinderGeometry(CylinderGeometry::new(0.7, -1.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xD4AC0D),
@@ -74,7 +74,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::BoxGeometry(BoxGeometry::new(0.9, 0.9, 0.9)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x27AE60),
@@ -91,7 +91,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::CircleGeometry(CircleGeometry::new(0.9)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x8E44AD),
@@ -108,7 +108,7 @@ fn build_scene() -> Scene {
         motor: None,
     }));
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xAAD4FF),

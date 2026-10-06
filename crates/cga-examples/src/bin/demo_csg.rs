@@ -4,7 +4,7 @@ use cga_gpu::*;
 fn main() {
     let mut sc = Scene::new(None);
 
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x888888),
@@ -28,7 +28,7 @@ fn main() {
             Geometry::SphereGeometry(SphereGeometry::new(0.55)),
         ],
     ));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: diff,
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0xC0392B),
@@ -52,7 +52,7 @@ fn main() {
             Geometry::SphereGeometry(SphereGeometry::new(1.0)),
         ],
     ));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: inter,
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x2980B9),
@@ -76,7 +76,7 @@ fn main() {
             Geometry::SphereGeometry(SphereGeometry::new(0.9)),
         ],
     ));
-    sc.add_mesh(Mesh::new(MeshParams {
+    sc.add_object(Object::new(ObjectParams {
         geometry: un,
         material: Material::standard(MaterialParams {
             color: Color::from_hex(0x27AE60),

@@ -74,17 +74,13 @@ fn mat_to_rpy(m: [f64; 16]) -> [f64; 3] {
 #[derive(Debug)]
 pub struct UrdfExport {
     pub xml: String,
-    /// (relative filename, OBJ text) for baked links.
-    pub meshes: Vec<(String, String)>,
 }
 
-/// One mesh's visual: native URDF geometry or a baked OBJ reference.
+/// 一个对象的 visual：URDF 原生图元（sphere/box/cylinder/cone/torus）。非图元显式报错。
 struct Visual {
     origin_xyz: [f64; 3],
     origin_rpy: [f64; 3],
     geom: String,
-    mesh_file: Option<String>,
-    mesh_obj: Option<String>,
 }
 
 fn visual_of(
@@ -92,8 +88,6 @@ fn visual_of(
     mesh_idx: usize,
     link_world: [f64; 16],
     link: &str,
-    slot: usize,
-    step: f64,
 ) -> Result<Visual, String> {
     let m = &run.scene.objects[mesh_idx];
     let world = m.motor().to_matrix();
@@ -189,30 +183,12 @@ fn visual_of(
             origin_xyz: xyz,
             origin_rpy: rpy,
             geom: g,
-            mesh_file: None,
-            mesh_obj: None,
         });
     }
-    // Bake path: watertight OBJ in the link frame.
-    let baked = p
-        .bake(step)
-        .map_err(|e| format!("urdf: bake failed for link {link}: {e}"))?;
-    let mut obj = String::new();
-    for v in &baked.vertices {
-        let lv = xform_point(inv, *v);
-        obj.push_str(&format!("v {} {} {}\n", uf(lv[0]), uf(lv[1]), uf(lv[2])));
-    }
-    for f in &baked.faces {
-        obj.push_str(&format!("f {} {} {}\n", f[0] + 1, f[1] + 1, f[2] + 1));
-    }
-    let file = format!("meshes/{link}_{slot}.obj");
-    Ok(Visual {
-        origin_xyz: [0.0; 3],
-        origin_rpy: [0.0; 3],
-        geom: format!("<mesh filename=\"{file}\"/>"),
-        mesh_file: Some(file),
-        mesh_obj: Some(obj),
-    })
+    // 非图元几何（网格/曲面）已随网格支持一并移除：显式报错，不做静默兜底。
+    Err(format!(
+        "urdf: link {link} geometry is not an exportable primitive (only sphere/box/cylinder/cone/torus are)"
+    ))
 }
 
 fn world_origin(world: [f64; 16]) -> [f64; 3] {
@@ -262,30 +238,25 @@ fn joint_origin(j: &JointDef) -> String {
     format!("<origin xyz=\"{}\" rpy=\"{}\"/>", uv(j.at), uv(j.rpy))
 }
 
-/// Export a JSX scene's joint tree as URDF. `step` is the bake step for
-/// non-primitive link geometry.
+/// Export a JSX scene's joint tree as URDF. 非图元几何会显式报错（网格支持已移除）。
 pub fn jsx_to_urdf(
     jsx_src: &str,
     css_src: Option<&str>,
     asset_root: &str,
     robot: &str,
-    step: f64,
 ) -> Result<UrdfExport, String> {
     let run = run_jsx(jsx_src, css_src, asset_root)?;
     let kin = &run.kinematics;
     let mut xml = String::new();
     xml.push_str(&format!("<robot name=\"{robot}\">\n"));
-    let mut meshes: Vec<(String, String)> = Vec::new();
-
     let emit_link = |name: &str,
-                     mesh_ids: &[usize],
+                     object_ids: &[usize],
                      link_world: [f64; 16],
-                     meshes: &mut Vec<(String, String)>,
                      xml: &mut String|
      -> Result<(), String> {
         xml.push_str(&format!("  <link name=\"{name}\">\n"));
-        for (slot, &mi) in mesh_ids.iter().enumerate() {
-            let v = visual_of(&run, mi, link_world, name, slot, step)?;
+        for &mi in object_ids.iter() {
+            let v = visual_of(&run, mi, link_world, name)?;
             xml.push_str("    <visual>\n");
             xml.push_str(&format!(
                 "      <origin xyz=\"{}\" rpy=\"{}\"/>\n",
@@ -294,9 +265,6 @@ pub fn jsx_to_urdf(
             ));
             xml.push_str(&format!("      <geometry>{}\n", v.geom));
             xml.push_str("      </geometry>\n    </visual>\n");
-            if let (Some(f), Some(o)) = (v.mesh_file, v.mesh_obj) {
-                meshes.push((f, o));
-            }
         }
         xml.push_str("  </link>\n");
         Ok(())
@@ -311,22 +279,10 @@ pub fn jsx_to_urdf(
     let free: Vec<usize> = (0..run.scene.objects.len())
         .filter(|i| !owned.contains(i))
         .collect();
-    emit_link(
-        "base_link",
-        &free,
-        cga_core::mat4_identity(),
-        &mut meshes,
-        &mut xml,
-    )?;
+    emit_link("base_link", &free, cga_core::mat4_identity(), &mut xml)?;
 
     for j in &kin.joints {
-        emit_link(
-            &format!("{}_link", j.name),
-            &j.meshes,
-            j.world,
-            &mut meshes,
-            &mut xml,
-        )?;
+        emit_link(&format!("{}_link", j.name), &j.meshes, j.world, &mut xml)?;
     }
 
     let parent_link = |j: &JointDef| -> String {
@@ -475,11 +431,11 @@ pub fn jsx_to_urdf(
         }
     }
     xml.push_str("</robot>\n");
-    Ok(UrdfExport { xml, meshes })
+    Ok(UrdfExport { xml })
 }
 
 /// Import URDF as JSX scene text (flat, deterministic, `jsx_gen` style).
-/// Mesh references keep their basename under `mesh_prefix`.
+/// Object references keep their basename under `mesh_prefix`.
 pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     let robot: Robot =
         urdf_rs::read_from_string(xml).map_err(|e| format!("urdf: parse failed: {e}"))?;
@@ -531,7 +487,7 @@ pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn write_visuals(out: &mut String, link: &urdf_rs::Link, mesh_prefix: &str) -> Result<(), String> {
+fn write_visuals(out: &mut String, link: &urdf_rs::Link, _mesh_prefix: &str) -> Result<(), String> {
     for v in &link.visual {
         let xyz = [v.origin.xyz[0], v.origin.xyz[1], v.origin.xyz[2]];
         let rpy = [v.origin.rpy[0], v.origin.rpy[1], v.origin.rpy[2]];
@@ -570,9 +526,12 @@ fn write_visuals(out: &mut String, link: &urdf_rs::Link, mesh_prefix: &str) -> R
                 )
             }
             UGeometry::Sphere { radius } => format!("<sphere r={{ {} }} />", uf(*radius)),
-            UGeometry::Mesh { filename, .. } => {
-                let base = filename.rsplit('/').next().unwrap_or(filename);
-                format!("<mesh file=\"{mesh_prefix}{base}\" />")
+            UGeometry::Mesh { .. } => {
+                // 网格导入已移除：URDF 里的 <mesh> 引用无法转成图元，显式报错
+                return Err(
+                    "urdf: <mesh> visual geometry is not supported (mesh import was removed)"
+                        .to_string(),
+                );
             }
             _ => return Err("urdf: unsupported visual geometry".to_string()),
         };
@@ -680,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_arm() {
-        let e = jsx_to_urdf(ARM, None, "", "arm", 0.05).unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm").unwrap();
         let x = &e.xml;
         assert!(x.contains("<robot name=\"arm\">"), "{x}");
         assert!(
@@ -704,12 +663,11 @@ mod tests {
         assert!(x.contains("<sphere radius=\"0.08\"/>"), "{x}");
         assert!(x.contains("<parent link=\"shoulder_link\"/>"), "{x}");
         assert!(x.contains("<parent link=\"base_link\"/>"), "{x}");
-        assert!(e.meshes.is_empty(), "全原生几何，无烘焙");
     }
 
     #[test]
     fn test_p5_urdf_export_roundtrip_urdf_rs() {
-        let e = jsx_to_urdf(ARM, None, "", "arm", 0.05).unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm").unwrap();
         let robot = urdf_rs::read_from_string(&e.xml).expect("urdf-rs 读回应成功");
         assert_eq!(robot.joints.len(), 3);
         let sh = robot.joints.iter().find(|j| j.name == "shoulder").unwrap();
@@ -728,7 +686,6 @@ mod tests {
             None,
             "",
             "bot",
-            0.05,
         )
         .unwrap();
         assert!(
@@ -751,25 +708,16 @@ mod tests {
     }
 
     #[test]
-    fn test_p5_urdf_export_csg_bakes() {
+    fn test_p5_urdf_export_csg_is_rejected() {
+        // CSG 不是可导出的图元：显式报错（网格/烘焙支持已移除，不做静默兜底）
         let e = jsx_to_urdf(
             r#"export default <joint name="j" type="fixed"><difference><box s={[0.8,0.8,0.8]} /><sphere r={0.3} /></difference></joint>;"#,
             None,
             "",
             "bot",
-            0.1,
-        )
-        .unwrap();
-        assert!(
-            e.xml.contains("<mesh filename=\"meshes/j_link_0.obj\"/>"),
-            "{}",
-            e.xml
         );
-        assert_eq!(e.meshes.len(), 1);
-        let (name, obj) = &e.meshes[0];
-        assert_eq!(name, "meshes/j_link_0.obj");
-        assert!(obj.starts_with("v "), "OBJ 应有顶点");
-        assert!(obj.contains("\nf "), "OBJ 应有面");
+        let err = e.unwrap_err();
+        assert!(err.contains("not an exportable primitive"), "{err}");
     }
 
     #[test]
@@ -779,7 +727,6 @@ mod tests {
             None,
             "",
             "bot",
-            0.05,
         )
         .unwrap_err();
         assert_eq!(e, "urdf: joint j needs limit= for URDF export");

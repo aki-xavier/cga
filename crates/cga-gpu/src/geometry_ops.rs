@@ -523,8 +523,6 @@ pub fn geom_intersect(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array
         GeometryParams::TorusParams(p) => crate::torus_intersect(*p, o, d),
         GeometryParams::EllipsoidParams(p) => crate::ellipsoid_intersect(*p, o, d),
         GeometryParams::CyclideParams(p) => crate::cyclide_intersect(*p, o, d),
-        GeometryParams::TrimeshParams(p) => crate::trimesh_intersect(p, o, d),
-        GeometryParams::BezierParams(p) => crate::bezier_intersect(p, o, d),
         GeometryParams::CsgParams(p) => crate::csg_intersect(p, o, d),
         GeometryParams::AffineParams(p) => crate::affine_intersect(p, o, d),
     }
@@ -541,8 +539,6 @@ pub fn geom_shadow(p: &GeometryParams, o: &Array, d: &Array) -> (Array, Array) {
         GeometryParams::TorusParams(p) => crate::torus_shadow(*p, o, d),
         GeometryParams::EllipsoidParams(p) => crate::ellipsoid_shadow(*p, o, d),
         GeometryParams::CyclideParams(p) => crate::cyclide_shadow(*p, o, d),
-        GeometryParams::TrimeshParams(p) => crate::trimesh_shadow(p, o, d),
-        GeometryParams::BezierParams(p) => crate::bezier_shadow(p, o, d),
         GeometryParams::CsgParams(p) => crate::csg_shadow(p, o, d),
         GeometryParams::AffineParams(p) => crate::affine_shadow(p, o, d),
     }
@@ -559,8 +555,6 @@ pub fn geom_uv(p: &GeometryParams, pos: &Array, n: &Array) -> Array {
         GeometryParams::TorusParams(p) => crate::torus_uv(*p, pos, n),
         GeometryParams::EllipsoidParams(p) => crate::ellipsoid_uv(*p, pos, n),
         GeometryParams::CyclideParams(p) => crate::cyclide_uv(*p, pos, n),
-        GeometryParams::TrimeshParams(p) => crate::trimesh_uv(p, pos, n),
-        GeometryParams::BezierParams(p) => crate::bezier_uv(p, pos, n),
         GeometryParams::CsgParams(p) => crate::csg_uv(p, pos, n),
         GeometryParams::AffineParams(p) => crate::affine_uv(p, pos, n),
     }
@@ -604,8 +598,6 @@ pub fn geom_bounds(p: &GeometryParams) -> Option<[[f64; 3]; 2]> {
                 &p.a_fwd,
             ))
         }
-        GeometryParams::TrimeshParams(p) => Some(crate::affine_bounds(p.lo, p.hi, &p.a_fwd)),
-        GeometryParams::BezierParams(p) => Some(crate::affine_bounds(p.lo, p.hi, &p.a_fwd)),
         GeometryParams::CsgParams(p) => crate::csg_bounds(p),
         GeometryParams::AffineParams(p) => affine_bounds_from_inner(p),
     }

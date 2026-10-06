@@ -1,12 +1,11 @@
 use crate::geom_kernels::geom_to_camera;
 use crate::geometry_ops::{geom_bounds, geom_intersect, geom_shadow, geom_uv};
-use crate::mesh_raster::rasterize_meshes;
 use crate::mlxops::*;
-use crate::scene::{Mesh, PerspectiveCamera, Scene};
+use crate::scene::{PerspectiveCamera, Scene};
 use crate::scene_graph::{vec3_dot, vec3_unit};
 use crate::shading::{shade_batched, Light, LightKind};
 use crate::texture::WrapMode;
-use cga_core::{vec3_cross, Geometry, GeometryParams};
+use cga_core::{vec3_cross, GeometryParams};
 use mlx_rs::{ops, Array};
 
 pub mod truth;
@@ -46,12 +45,12 @@ fn outward(points: &Array, basis: &[[f64; 3]; 3], offset: &[f64; 3]) -> Array {
 mod tests {
     use super::*;
     use crate::image_io::save_frame_png;
-    use crate::scene::{Mesh, MeshParams, PerspectiveCamera};
+    use crate::scene::{Object, ObjectParams, PerspectiveCamera};
     use crate::scene_graph::{srgb_to_linear, Color};
     use crate::shading::{Light, Material, MaterialParams};
     use cga_core::{
         BoxGeometry, ConeGeometry, CyclideGeometry, EllipsoidGeometry, Geometry, PlaneGeometry,
-        SphereGeometry, TorusGeometry, TrimeshGeometry,
+        SphereGeometry, TorusGeometry,
     };
     use mlx_rs::Array;
 
@@ -80,7 +79,7 @@ mod tests {
 
     fn render_center(geom: Geometry, pos: [f64; 3], name: &str) -> [f32; 3] {
         let mut sc = Scene::new(None);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: geom,
             material: std_red_material(),
             position: pos,
@@ -146,7 +145,7 @@ mod tests {
     #[test]
     fn test_render_cyclide_nonempty() {
         let mut sc = Scene::new(None);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::CyclideGeometry(CyclideGeometry::new(
                 1.0,
                 0.98,
@@ -191,7 +190,7 @@ mod tests {
     #[test]
     fn test_render_torus_nonempty() {
         let mut sc = Scene::new(None);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::TorusGeometry(TorusGeometry::new(1.0, 0.3)),
             material: std_red_material(),
             position: [0.0, 0.0, 0.0],
@@ -227,54 +226,6 @@ mod tests {
         }
         assert!(nonbg > 100);
     }
-
-    #[test]
-    fn test_render_trimesh_nonempty() {
-        let mut sc = Scene::new(None);
-        let verts: [[f64; 3]; 4] = [
-            [0.0, 0.0, 1.0],
-            [1.0, 0.0, 0.0],
-            [-0.5, 0.866, 0.0],
-            [0.0, 0.0, -1.0],
-        ];
-        let faces: [[i32; 3]; 4] = [[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]];
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            material: std_red_material(),
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        sc.add_light(Light::directional(
-            Color::from_hex(0xFFFFFF),
-            0.8,
-            [0.5, 1.0, 0.5],
-        ));
-        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.3));
-        let mut cam = PerspectiveCamera::new(
-            40.0,
-            1.0,
-            0.1,
-            100.0,
-            [0.0, 0.0, 4.0],
-            [0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-        );
-        cam.look_at([0.0, 0.0, 0.0], None);
-        let img = Renderer::render_frame(sc, cam, 120, 120, 1);
-        ensure_artifacts();
-        save_frame_png(&format!("{}/trimesh.png", ARTIFACTS), &img);
-        let data = data_f32(&img);
-        let mut hit = 0;
-        for i in 0..120 * 120 {
-            if data[i * 4] > data[i * 4 + 2] + 20.0 {
-                hit += 1;
-            }
-        }
-        assert!(hit > 100);
-    }
-
     fn rq_linear_to_srgb255(lum: f64) -> i32 {
         let l = lum.clamp(0.0, 1.0);
         let s = if l <= 0.0031308 {
@@ -294,7 +245,7 @@ mod tests {
 
     fn rq_wall_scene() -> Scene {
         let mut sc = Scene::new(None);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 0.0, -1.0], -4.0)),
             material: Material::basic(Color::from_hex(0xCC3333), 1.0),
             position: [0.0, 0.0, 0.0],
@@ -334,41 +285,9 @@ mod tests {
         assert!(p[1] as i32 == 51);
         assert!(p[2] as i32 == 51);
     }
-
-    #[test]
-    fn test_render_ior1_invisible() {
-        let mut sc = rq_wall_scene();
-
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
-            material: Material::standard(MaterialParams {
-                color: Color::from_hex(0xAAD4FF),
-                roughness: 0.5,
-                metalness: 0.0,
-                emissive: Color::from_hex(0x000000),
-                opacity: 0.0,
-                ior: 1.0,
-                absorption: 0.0,
-            }),
-            position: [0.0, 0.0, 2.2],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        let mut r = Renderer::new(64, 64, 1, 3);
-        let cam = rq_head_on_cam();
-        let img_a = r.render(sc, cam);
-        let a = rq_px(&img_a, 64, 32, 32);
-        let img_b = r.render(rq_wall_scene(), cam);
-        let b = rq_px(&img_b, 64, 32, 32);
-        for i in 0..3 {
-            assert!((f64::from(a[i]) - f64::from(b[i])).abs() <= 1.0);
-        }
-    }
-
     fn rq_slab(depth: f64, absorption: f64) -> [f32; 3] {
         let mut sc = rq_wall_scene();
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::BoxGeometry(BoxGeometry::new(3.0, 3.0, depth)),
             material: Material::standard(MaterialParams {
                 color: Color::from_hex(0xFFFFFF),
@@ -407,7 +326,7 @@ mod tests {
 
     fn rq_shadow_scene(opacity: Option<f64>) -> Scene {
         let mut sc = Scene::new(None);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
             material: Material::standard(MaterialParams {
                 color: Color::from_hex(0xFFFFFF),
@@ -430,7 +349,7 @@ mod tests {
         ));
         sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.2));
         if let Some(o) = opacity {
-            sc.add_mesh(Mesh::new(MeshParams {
+            sc.add_object(Object::new(ObjectParams {
                 geometry: Geometry::SphereGeometry(SphereGeometry::new(0.5)),
                 material: Material::standard(MaterialParams {
                     color: Color::from_hex(0xFFFFFF),
@@ -472,166 +391,6 @@ mod tests {
         let want = rq_linear_to_srgb255(0.2);
         assert!((f64::from(p[0]) - f64::from(want)).abs() <= 2.0);
     }
-
-    #[test]
-    fn test_render_trimesh_casts_shadow() {
-        // D2：网格遮挡物在光线追踪的平面上投出本影。
-        let mut sc = rq_shadow_scene(None);
-        let verts: [[f64; 3]; 4] = [
-            [1.5, 1.5, 2.5],
-            [2.5, 1.5, 2.5],
-            [2.5, 1.5, 3.5],
-            [1.5, 1.5, 3.5],
-        ];
-        let faces: [[i32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            material: std_red_material(),
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        let mut r = Renderer::new(96, 96, 1, 3);
-        let img = r.render(sc, rq_shadow_cam());
-        let p = rq_px(&img, 96, 48, 48);
-        let want = rq_linear_to_srgb255(0.2);
-        assert!((f64::from(p[0]) - f64::from(want)).abs() <= 2.0);
-    }
-
-    #[test]
-    fn test_render_trimesh_visible_through_glass() {
-        // D3：折射光线（depth>0）里网格参与求交——透过玻璃球可见网格墙。
-        let mut sc = Scene::new(None); // 天蓝背景：无网格时中心 = 蓝
-        let verts: [[f64; 3]; 4] = [
-            [-4.0, -4.0, 4.0],
-            [4.0, -4.0, 4.0],
-            [4.0, 4.0, 4.0],
-            [-4.0, 4.0, 4.0],
-        ];
-        let faces: [[i32; 3]; 2] = [[0, 2, 1], [0, 3, 2]]; // 法线朝 -z（向相机）
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            material: Material::basic(Color::from_hex(0xCC3333), 1.0),
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
-            material: Material::standard(MaterialParams {
-                color: Color::from_hex(0xAAD4FF),
-                roughness: 0.5,
-                metalness: 0.0,
-                emissive: Color::from_hex(0x000000),
-                opacity: 0.0,
-                ior: 1.5,
-                absorption: 0.0,
-            }),
-            position: [0.0, 0.0, 2.2],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        let mut r = Renderer::new(64, 64, 1, 3);
-        let img = r.render(sc, rq_head_on_cam());
-        let p = rq_px(&img, 64, 32, 32);
-        assert!(
-            p[0] > p[2] + 60.0,
-            "中心像素应为折射所见红墙，得到 {p:?}（无 D3 时是天蓝背景）"
-        );
-    }
-
-    #[test]
-    fn test_render_mesh_receives_shadow() {
-        // D1：光栅表面接收阴影——网格地面在光线盒子下方只剩环境光。
-        let mut sc = Scene::new(None);
-        let verts: [[f64; 3]; 4] = [
-            [-20.0, 0.0, -20.0],
-            [20.0, 0.0, -20.0],
-            [20.0, 0.0, 20.0],
-            [-20.0, 0.0, 20.0],
-        ];
-        let faces: [[i32; 3]; 2] = [[0, 2, 1], [0, 3, 2]]; // 法线 +y（朝上）
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            material: Material::standard(MaterialParams {
-                color: Color::from_hex(0xFFFFFF),
-                roughness: 1.0,
-                metalness: 0.0,
-                emissive: Color::from_hex(0x000000),
-                opacity: 1.0,
-                ior: 1.5,
-                absorption: 0.0,
-            }),
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
-            material: std_red_material(),
-            position: [2.0, 1.5, 3.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        sc.add_light(Light::directional(
-            Color::from_hex(0xFFFFFF),
-            0.8,
-            [0.0, 1.0, 0.0],
-        ));
-        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.2));
-        let mut r = Renderer::new(96, 96, 1, 3);
-        let img = r.render(sc, rq_shadow_cam());
-        let p = rq_px(&img, 96, 48, 48);
-        let want = rq_linear_to_srgb255(0.2);
-        assert!(
-            (f64::from(p[0]) - f64::from(want)).abs() <= 2.0,
-            "网格地面本影应只剩环境光：p={p:?} want≈{want}"
-        );
-    }
-
-    #[test]
-    fn test_render_transparent_mesh_blends() {
-        // D4：半透明网格与光线结果 alpha 混合（无折射近似）。
-        let mut sc = rq_wall_scene(); // 光线红墙（204,51,51）
-        let verts: [[f64; 3]; 4] = [
-            [-1.5, -1.5, 2.0],
-            [1.5, -1.5, 2.0],
-            [1.5, 1.5, 2.0],
-            [-1.5, 1.5, 2.0],
-        ];
-        let faces: [[i32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
-        sc.add_mesh(Mesh::new(MeshParams {
-            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-            material: Material::basic(Color::from_hex(0xFFFFFF), 0.5),
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: None,
-        }));
-        let mut r = Renderer::new(64, 64, 1, 3);
-        let img = r.render(sc, rq_head_on_cam());
-        let p = rq_px(&img, 64, 32, 32);
-        // 线性空间混合：0.5·1.0 + 0.5·lin(wall)
-        let wl = [
-            srgb_to_linear(204.0 / 255.0),
-            srgb_to_linear(51.0 / 255.0),
-            srgb_to_linear(51.0 / 255.0),
-        ];
-        for c in 0..3 {
-            let want = rq_linear_to_srgb255(0.5 + 0.5 * wl[c]);
-            assert!(
-                (f64::from(p[c]) - f64::from(want)).abs() <= 2.0,
-                "通道 {c}：p={} want≈{want}",
-                p[c]
-            );
-        }
-    }
-
     #[test]
     fn test_render_object_straddling_frame_edge() {
         // 剔除保守性：球心在画面外、只有一部分进入视野时，可见部分必须照常着色。
@@ -640,7 +399,7 @@ mod tests {
         let cam0 = rq_head_on_cam(); // 原点朝 +z，fov 40
                                      // 球心放到画面右侧之外，但球体仍覆盖画面右缘
         let off = 2.0;
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::SphereGeometry(SphereGeometry::new(1.2)),
             material: std_red_material(),
             position: [off, 0.0, 3.0],
@@ -663,35 +422,5 @@ mod tests {
             "画面左缘应被球（红）覆盖，得到 {lr}/{lg}/{lb}"
         );
         assert!(rb > rr, "画面右缘应仍是天空背景，得到 {rr}/../{rb}");
-    }
-
-    #[test]
-    fn test_render_raster_antialiasing() {
-        // D7：光栅边缘参与 SSAA——斜边三角形在 aa=2 时边缘有过渡像素，aa=1 全硬边。
-        let mk = || {
-            let mut sc = Scene::new(None);
-            let verts: [[f64; 3]; 3] = [[-1.5, -1.5, 3.0], [0.3, -1.5, 3.0], [-1.5, 1.5, 3.0]];
-            let faces: [[i32; 3]; 1] = [[0, 1, 2]];
-            sc.add_mesh(Mesh::new(MeshParams {
-                geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
-                material: Material::basic(Color::from_hex(0xFFFFFF), 1.0),
-                position: [0.0, 0.0, 0.0],
-                rotation_axis: [0.0, 0.0, 1.0],
-                rotation_angle: 0.0,
-                motor: None,
-            }));
-            sc
-        };
-        let mid_count = |aa: i32| {
-            let mut r = Renderer::new(64, 64, aa, 3);
-            let img = r.render(mk(), rq_head_on_cam());
-            let d = data_f32(&img);
-            // 严格处于背景(≈135)与白色(255)之间的像素数
-            (0..64 * 64)
-                .filter(|&i| d[i * 4] > 145.0 && d[i * 4] < 245.0)
-                .count()
-        };
-        let (n1, n2) = (mid_count(1), mid_count(2));
-        assert!(n2 > n1, "aa=2 应有更多过渡像素：aa1={n1} aa2={n2}");
     }
 }

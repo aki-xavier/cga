@@ -33,7 +33,7 @@ use crate::scene_build::{
     cam_solve, joint_motion, rpy4, ArgValue, Builders, CamProfile, CamRel, CamSolved, Driven,
     GearRel, JointDef, JointKind, Kinematics, TagInstance, TagRegistry,
 };
-use cga_gpu::scene::{Mesh, MeshParams, PerspectiveCamera, Scene};
+use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::Color;
 use cga_gpu::shading::Light;
 
@@ -51,8 +51,7 @@ function h(tag, props, ...children) {
 }
 const Fragment = 'fragment';
 const Sphere='sphere',Plane='plane',Cylinder='cylinder',Box='box',Circle='circle',Cone='cone',
-Torus='torus',Cyclide='cyclide',Ellipsoid='ellipsoid',Bezier='bezier',Extrude='extrude',
-Loft='loft',Mesh='mesh',Translate='translate',Rotate='rotate',Scale='scale',Mirror='mirror',
+Torus='torus',Cyclide='cyclide',Ellipsoid='ellipsoid',Translate='translate',Rotate='rotate',Scale='scale',Mirror='mirror',
 Material='material',Union='union',Difference='difference',Intersection='intersection',
 AmbientLight='ambient_light',DirectionalLight='directional_light',PointLight='point_light',
 Camera='camera',Background='background',Scene='scene',Joint='joint',Gear='gear',Cam='cam',
@@ -608,8 +607,6 @@ struct Builder {
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
     pose: HashMap<String, f64>,
-    /// 含网格后代的 CSG 构建期烘焙网格数（最长轴），0 = 关闭（保持射线路径）。
-    bake_cells: usize,
 }
 
 fn mat4_mul(a: [f64; 16], b: [f64; 16]) -> [f64; 16] {
@@ -669,7 +666,7 @@ impl Builder {
         } else {
             cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
         };
-        scene.add_mesh(Mesh::new(MeshParams {
+        scene.add_object(Object::new(ObjectParams {
             geometry: g2,
             material: mat,
             position: [0.0, 0.0, 0.0],
@@ -701,12 +698,6 @@ impl Builder {
                         scene.background = Color::from_hex(b as i32);
                     } else if let Some(c) = p_str(el, "background")? {
                         scene.background = parse_hex(&c)?;
-                    }
-                    if let Some(bc) = p_num(el, "bake")? {
-                        if bc < 0.0 {
-                            return Err(format!("JSX: scene bake must be >= 0, got {bc}"));
-                        }
-                        self.bake_cells = bc as usize;
                     }
                 }
                 for c in &el.children {
@@ -748,9 +739,6 @@ impl Builder {
                 };
                 let material = self.material_for(el, mat)?;
                 let geo = cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids));
-                // 含网格后代的布尔：构建期烘焙成三角网 → 走光栅路径
-                let geo =
-                    crate::scene_build::bake_csg_if_mesh(&geo, self.bake_cells).unwrap_or(geo);
                 self.emit(scene, geo, cga_core::mat4_identity(), material);
                 Ok(())
             }
@@ -1680,7 +1668,6 @@ pub fn run_jsx_pose(
         pending_tags: Vec::new(),
         rules,
         pose: pose.iter().cloned().collect(),
-        bake_cells: 96,
     };
     b.walk(
         &root,
@@ -1751,7 +1738,6 @@ mod tests {
             "mechanical",
             "primitives",
             "affine",
-            "freeform",
             "assembly",
         ] {
             let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
@@ -1764,46 +1750,6 @@ mod tests {
             assert!(out.png.len() > 1000, "{name}: 非空渲染");
         }
     }
-
-    #[test]
-    fn csg_with_bezier_is_baked() {
-        // 含曲面的布尔在构建期烘焙成三角网（走光栅）；bake={0} 保持 CSG（射线）
-        let mut pts: Vec<String> = Vec::new();
-        for i in 0..4 {
-            for j in 0..4 {
-                let x = -1.0 + i as f64 * 2.0 / 3.0;
-                let z = -1.0 + j as f64 * 2.0 / 3.0;
-                pts.push(format!("[{x:.4},0,{z:.4}]"));
-            }
-        }
-        let body = |bake: &str| {
-            format!(
-                "const CTRL = [{}];\nexport default (<scene{bake}><difference>\
-                 <box s={{[2,2,2]}} /><bezier points={{CTRL}} thickness={{0.6}} div={{2}} />\
-                 </difference></scene>);",
-                pts.join(",")
-            )
-        };
-        let run = crate::jsx::run_jsx(&body(""), None, ".").expect("run_jsx");
-        assert!(
-            matches!(
-                run.scene.objects[0].geometry,
-                cga_core::Geometry::TrimeshGeometry(_)
-            ),
-            "默认应烘焙：{:?}",
-            run.scene.objects[0].geometry
-        );
-        let run0 = crate::jsx::run_jsx(&body(" bake={0}"), None, ".").expect("run_jsx");
-        assert!(
-            matches!(
-                run0.scene.objects[0].geometry,
-                cga_core::Geometry::CsgGeometry(_)
-            ),
-            "bake=0 应保持 CSG：{:?}",
-            run0.scene.objects[0].geometry
-        );
-    }
-
     #[test]
     fn renders_generated_flange() {
         let text = crate::gen_flange_assembly(

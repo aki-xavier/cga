@@ -4,7 +4,6 @@ use super::*;
 pub enum Geometry {
     AffineGeometry(AffineGeometry),
     CsgGeometry(CsgGeometry),
-    TrimeshGeometry(TrimeshGeometry),
     ConeGeometry(ConeGeometry),
     CyclideGeometry(CyclideGeometry),
     EllipsoidGeometry(EllipsoidGeometry),
@@ -14,5 +13,4 @@ pub enum Geometry {
     CylinderGeometry(CylinderGeometry),
     BoxGeometry(BoxGeometry),
     CircleGeometry(CircleGeometry),
-    BezierPatchGeometry(BezierPatchGeometry),
 }

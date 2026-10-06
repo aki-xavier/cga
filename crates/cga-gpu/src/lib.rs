@@ -28,20 +28,8 @@ pub use image_io::*;
 pub mod renderer;
 pub use renderer::*;
 
-pub mod mesh_raster;
-pub use mesh_raster::*;
-
 pub mod csg;
 pub use csg::*;
-
-pub mod trimesh;
-pub use trimesh::*;
-
-pub mod bezier;
-pub use bezier::*;
-
-pub mod mesh_io_gltf;
-pub use mesh_io_gltf::*;
 
 pub mod tol;
 

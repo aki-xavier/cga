@@ -47,7 +47,7 @@ mod tests {
     use crate::image_io::save_frame_png;
     use crate::scene_graph::Color;
     use crate::{
-        Light, Material, MaterialParams, Mesh, MeshParams, PerspectiveCamera, Renderer, Scene,
+        Light, Material, MaterialParams, Object, ObjectParams, PerspectiveCamera, Renderer, Scene,
     };
     use cga_core::{BoxGeometry, Geometry};
 
@@ -88,7 +88,7 @@ mod tests {
             absorption: 0.0,
         });
         mat.map = Some(tex);
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::BoxGeometry(BoxGeometry::new(1.0, 1.0, 1.0)),
             material: mat,
             position: [0.0, 0.0, 0.0],

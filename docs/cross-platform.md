@@ -8,8 +8,7 @@
 | 层 | 平台依赖 | 可移植性 |
 | --- | --- | --- |
 | `cga-core`（代数核心） | 纯 Rust f64，无外部依赖 | 已跨平台，含 WASM |
-| `bake`（网格烘焙） | 纯 CPU f64 | 已跨平台，Linux/CI 可运行 |
-| 场景宿主 / 场景报告 / glTF / PNG | 纯 stdlib Rust | 已跨平台 |
+| 场景宿主 / 场景报告 / PNG | 纯 stdlib Rust | 已跨平台 |
 | **逐像素内核（`cga-gpu`）** | **mlx-rs → MLX C++ → Metal，仅 Apple Silicon** | **唯一锁定点** |
 
 结论：跨平台问题 = 替换 `cga-gpu` 里 13 个文件的 MLX 调用面。其余全部已经可移植。
@@ -54,7 +53,7 @@
 ## 4. 推荐路线：先抽 trait，再三后端
 
 1. **抽出 `GpuOps` trait**。把 `mlxops.rs` + 约 30 个算子定义成 trait。MLX 作为 macOS 后端原样保留。预期结果：行为零变化，236 个测试与 RMSE = 0 金样全部保持。
-2. **实现 ndarray + rayon 后端**。解锁 Linux/Windows/CI。无头渲染、报告、bake、全部测试可在 GitHub Linux runner 跑。作为正确性后端，性能可接受（`demo_bake` 已证明 CPU 路径可行）。
+2. **实现 ndarray + rayon 后端**。解锁 Linux/Windows/CI。无头渲染、报告、全部测试可在 GitHub Linux runner 跑。作为正确性后端，性能可接受。
 3. **实现 GPU 通用后端**。优先 CubeCL（保持 Rust 表达、一条源码到四个图形 API）。若其成熟度不达标，退到 wgpu/WGSL 手写 kernel。浏览器演示是该后端的副产品（cga-core 编译到 WASM 无阻碍）。
 
 关键设计约束：trait 粒度停留在"逐算子"会让 CPU 后端慢。可接受的折中——CPU 后端定位为 CI/正确性后端；性能后端（MLX、CubeCL/wgpu）在 trait 内部自由融合算子。

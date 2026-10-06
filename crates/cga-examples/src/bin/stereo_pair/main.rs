@@ -101,7 +101,7 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
     ];
     for (i, (_, normal, distance)) in room.iter().enumerate() {
         let color = if i == 1 { 0xBFC5CC } else { 0x9AA0A6 };
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry: Geometry::PlaneGeometry(PlaneGeometry::new(*normal, *distance)),
             material: mat(color, 0.85, Some(block_texture(256, 2, 4, rng))),
             position: [0.0, 0.0, 0.0],
@@ -155,7 +155,7 @@ fn build_scene(rng: &mut Rng) -> (Scene, Vec<Placement>) {
             }
         };
         let at = [x, y, z];
-        sc.add_mesh(Mesh::new(MeshParams {
+        sc.add_object(Object::new(ObjectParams {
             geometry,
             material: mat(color, rng.range(0.45, 0.85), map),
             position: at,
