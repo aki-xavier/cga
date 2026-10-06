@@ -1,0 +1,10 @@
+:root { background: #87A8C8; }
+.slab { color: #C9C4BC; roughness: 0.85; }
+.brick { color: #B87462; roughness: 0.9; map: url("../cgs/assets/brick.png"); }
+.glass { color: #7FB2D9; roughness: 0.12; metalness: 0.55; emissive: #0E1A26; }
+.penthouse { color: #B8B3AB; roughness: 0.85; }
+.canopy { color: #8A8F94; roughness: 0.35; metalness: 0.7; }
+.entrance { color: #2C3E50; roughness: 0.2; metalness: 0.3; }
+.ground { color: #9AA08E; roughness: 0.95; }
+.trunk { color: #6B4A2F; roughness: 0.9; }
+.crown { color: #4E7A3A; roughness: 0.85; }

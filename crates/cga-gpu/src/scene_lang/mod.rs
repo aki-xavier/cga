@@ -333,7 +333,7 @@ fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
     out
 }
 
-fn transform_bbox(b: [[f64; 3]; 2], m: [f64; 16]) -> [[f64; 3]; 2] {
+pub(crate) fn transform_bbox(b: [[f64; 3]; 2], m: [f64; 16]) -> [[f64; 3]; 2] {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
     for i in 0..8 {
@@ -351,7 +351,7 @@ fn transform_bbox(b: [[f64; 3]; 2], m: [f64; 16]) -> [[f64; 3]; 2] {
     [lo, hi]
 }
 
-fn parse_face_key(key: &str, line: i32, what: &str) -> Result<(usize, f64), String> {
+pub(crate) fn parse_face_key(key: &str, line: i32, what: &str) -> Result<(usize, f64), String> {
     let ok =
         key.len() == 2 && matches!(&key[..1], "+" | "-") && matches!(&key[1..], "x" | "y" | "z");
     if !ok {
@@ -376,7 +376,7 @@ fn face_key_str(axis: usize, sign: f64) -> String {
     )
 }
 
-fn face_local(geo: &Geometry, axis: usize, sign: f64) -> Option<([f64; 3], [f64; 3])> {
+pub(crate) fn face_local(geo: &Geometry, axis: usize, sign: f64) -> Option<([f64; 3], [f64; 3])> {
     let mut k = [0.0, 0.0, 0.0];
     k[axis] = sign;
     match geo {
@@ -437,7 +437,7 @@ fn face_local(geo: &Geometry, axis: usize, sign: f64) -> Option<([f64; 3], [f64;
     }
 }
 
-fn transform_normal(m: [f64; 16], n: [f64; 3]) -> [f64; 3] {
+pub(crate) fn transform_normal(m: [f64; 16], n: [f64; 3]) -> [f64; 3] {
     let inv = mat4_inv(m);
     let mut w = [0.0; 3];
     for r in 0..3 {

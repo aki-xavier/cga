@@ -528,7 +528,7 @@ impl SceneLoader {
         }
     }
 
-    fn local_bounds(&self, geo: &Geometry) -> Option<[[f64; 3]; 2]> {
+    pub(crate) fn local_bounds(&self, geo: &Geometry) -> Option<[[f64; 3]; 2]> {
         crate::geometry_ops::geom_bounds(&geo.identity_params())
     }
 
@@ -1689,15 +1689,15 @@ impl SceneLoader {
                 self.constrain_stmt(scope, t.line)?;
                 return Ok(());
             }
-            if name == "joint" {
+            if name == "joint" && !self.modules.contains_key(name) {
                 self.joint_stmt(ctx, mat, scope, t.line)?;
                 return Ok(());
             }
-            if name == "gear" {
+            if name == "gear" && !self.modules.contains_key(name) {
                 self.gear_stmt(scope, t.line)?;
                 return Ok(());
             }
-            if name == "cam" {
+            if name == "cam" && !self.modules.contains_key(name) {
                 self.cam_stmt(scope, t.line)?;
                 return Ok(());
             }
@@ -2247,7 +2247,7 @@ impl SceneLoader {
         Ok((pos, kw))
     }
 
-    fn resolve(
+    pub(crate) fn resolve(
         &self,
         name: &str,
         pos: Vec<CgsValue>,

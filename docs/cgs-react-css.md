@@ -2,6 +2,7 @@
 # JSX + CSS 场景宿主：React 模式的 CGS 前端
 
 状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-gpu/src/jsx/`、CLI `render_jsx`。
+R2 平权已完成：drill / instances / when 门控 / solve（constrain）/ pose / 惰性查询（face/fnrm/center/lo/hi/size/xdir/ydir/zdir + vadd/vsub/vscale/polar）全部可用；画廊 8 场景全部有 JSX 版且渲染逐字节一致。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
 ## 1. 技术栈与管线
@@ -39,7 +40,17 @@
 | `<Cam driver driven driverProfile drivenProfile>` | P3 凸轮接触求解（profile 是普通对象 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}`） |
 | `<Tag name>` | 标签注册表 |
 
-v1 边界（显式不做）：`drill`、`instances()` 集合选择、`constrain` 方程块、pose 覆盖、CSS 后代/子代组合选择器。需要时各自单独立项。
+v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合选择器。需要时各自单独立项。
+
+已平权的 CGS 高级特性（JSX 形态）：
+
+| CGS | JSX |
+| --- | --- |
+| `constrain(x) { lhs == rhs; } solve;` | `const [x] = solve([x0], [v => eq(...), v => le(...)])`（数值残差 + Levenberg-GN） |
+| `drill(r=…, through=…, axis=…)` | `<Drill r through axis from to />`（through 吃 tag 名或元素值） |
+| `instances("n")` + `if(len(…)==k)` | `<Instances of="n"/>` 重放 + `<When of="n" count={k}>` 门控 |
+| `face/fnrm/center/lo/hi/size/xdir…` | 同名惰性查询函数（prop 位置解析；向量运算用 `vadd/vsub/vscale`） |
+| `--set` / `cgs_pose` | `run_jsx_pose` + 全局 `P` 约定（`P.x` 读覆盖）+ 关节名覆盖 |
 
 ## 4. 验收
 

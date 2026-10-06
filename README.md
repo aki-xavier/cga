@@ -114,6 +114,8 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 
 ## CGS scene language (OpenSCAD style)
 
+Note: the JSX+CSS host is the recommended authoring frontend (see `docs/cgs-react-css.md`; gallery scenes exist in both forms with byte-identical renders). The CGS text syntax is frozen — no new features.
+
 Scene example:
 
 ```text

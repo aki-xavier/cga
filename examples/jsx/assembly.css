@@ -1,0 +1,5 @@
+:root { background: #2B3138; }
+.ground { color: #3A4046; roughness: 0.9; }
+.plate { color: #707A8A; roughness: 0.4; metalness: 0.3; }
+.post { color: #9BA1A6; roughness: 0.3; metalness: 0.8; }
+.beam { color: #C8A24A; roughness: 0.35; metalness: 0.6; }

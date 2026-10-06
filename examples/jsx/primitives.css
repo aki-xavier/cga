@@ -1,0 +1,11 @@
+:root { background: #2B3138; }
+.ground { color: #3A4046; roughness: 0.9; }
+.red { color: #C0392B; roughness: 0.25; metalness: 0.2; }
+.green { color: #27AE60; roughness: 0.5; }
+.gold { color: #D4AC0D; roughness: 0.35; metalness: 0.25; }
+.blue { color: #2980B9; roughness: 0.3; }
+.purple { color: #8E44AD; roughness: 0.3; }
+.teal { color: #16A085; roughness: 0.25; }
+.pink { color: #E91E63; roughness: 0.3; }
+.orange { color: #D35400; roughness: 0.25; }
+.crimson { color: #C2185B; roughness: 0.4; }

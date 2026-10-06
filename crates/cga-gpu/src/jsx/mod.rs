@@ -57,6 +57,25 @@ Material='material',Union='union',Difference='difference',Intersection='intersec
 AmbientLight='ambient_light',DirectionalLight='directional_light',PointLight='point_light',
 Camera='camera',Background='background',Scene='scene',Joint='joint',Gear='gear',Cam='cam',
 Tag='tag';
+const Drill='drill',Instances='instances',When='when';
+const __isQ = (v) => v && typeof v === 'object' && !Array.isArray(v) && v.__q;
+const vadd = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vadd', a, b } : a.map((x, i) => x + b[i]);
+const vsub = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vsub', a, b } : a.map((x, i) => x - b[i]);
+const vscale = (a, s) => __isQ(a) ? { __q: 'vscale', a, s } : a.map((x) => x * s);
+const face = (of, key) => ({ __q: 'face', of, key });
+const fnrm = (of, key) => ({ __q: 'fnrm', of, key });
+const center = (of) => ({ __q: 'center', of });
+const lo = (of) => ({ __q: 'lo', of });
+const hi = (of) => ({ __q: 'hi', of });
+const size = (of) => ({ __q: 'size', of });
+const xdir = (of) => ({ __q: 'xdir', of });
+const ydir = (of) => ({ __q: 'ydir', of });
+const zdir = (of) => ({ __q: 'zdir', of });
+const polar = (r, a) => [r * Math.cos(a), r * Math.sin(a), 0];
+const instances = (name) => h('instances', { of: name });
+const eq = (a, b) => a - b;
+const le = (a, b) => Math.max(0, a - b);
+const ge = (a, b) => Math.max(0, b - a);
 function __dump(v) {
   if (v === null || v === undefined) return null;
   if (Array.isArray(v)) return v.map(__dump);
@@ -159,12 +178,170 @@ fn compile_jsx(src: &str) -> Result<String, String> {
     })
 }
 
+/// boa host: `solve([x0, ...], [v => residual, ...])` — Levenberg-damped
+/// Gauss–Newton with a numeric Jacobian (JSX-side constrain). Residuals come
+/// from prelude helpers: eq/le/ge.
+fn solve_host(
+    _: &boa_engine::JsValue,
+    args: &[boa_engine::JsValue],
+    ctx: &mut Context,
+) -> boa_engine::JsResult<boa_engine::JsValue> {
+    use boa_engine::value::TryIntoJs;
+    use boa_engine::{js_string, JsNativeError};
+    let bad = |m: &str| JsNativeError::typ().with_message(m.to_string());
+    let read_f64_array =
+        |v: &boa_engine::JsValue, ctx: &mut Context| -> Result<Vec<f64>, boa_engine::JsError> {
+            let o = v
+                .as_object()
+                .ok_or_else(|| boa_engine::JsError::from(bad("JSX: solve needs arrays")))?;
+            let n = o.get(js_string!("length"), ctx)?.to_number(ctx)? as usize;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                out.push(o.get(i, ctx)?.to_number(ctx)?);
+            }
+            Ok(out)
+        };
+    let init = read_f64_array(
+        args.first()
+            .ok_or_else(|| bad("JSX: solve needs (init array, residuals)"))?,
+        ctx,
+    )
+    .map_err(|e| e)?;
+    let fns: Vec<boa_engine::JsObject> = match args.get(1).and_then(|v| v.as_object()) {
+        Some(o) => {
+            let n = o.get(js_string!("length"), ctx)?.to_number(ctx)? as usize;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let f = o.get(i, ctx)?;
+                out.push(
+                    f.as_callable()
+                        .ok_or_else(|| bad("JSX: solve residual is not a function"))?,
+                );
+            }
+            out
+        }
+        None => return Err(bad("JSX: solve residuals must be an array of functions").into()),
+    };
+    let n = init.len();
+    let m = fns.len();
+    let eval = |v: &[f64], ctx: &mut Context| -> Result<Vec<f64>, boa_engine::JsError> {
+        let arr = v.to_vec().try_into_js(ctx)?;
+        fns.iter()
+            .map(|f| {
+                f.call(&boa_engine::JsValue::undefined(), &[arr.clone()], ctx)
+                    .and_then(|r| r.to_number(ctx))
+            })
+            .collect()
+    };
+    let mut v = init;
+    let mut r = eval(&v, ctx)?;
+    let mut lambda = 1e-6f64;
+    for _ in 0..100 {
+        let rmax = r.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        if rmax < 1e-9 {
+            return Ok(v.clone().try_into_js(ctx)?);
+        }
+        // 数值雅可比
+        let mut j = vec![vec![0.0f64; n]; m];
+        for c in 0..n {
+            let h = 1e-7 * (1.0 + v[c].abs());
+            let mut vp = v.clone();
+            vp[c] += h;
+            let rp = eval(&vp, ctx)?;
+            for (row, jr) in j.iter_mut().enumerate() {
+                jr[c] = (rp[row] - r[row]) / h;
+            }
+        }
+        // Levenberg：试步 → 变好接受，变差加阻尼重试
+        let mut accepted = false;
+        for _ in 0..20 {
+            // 解 (JᵀJ + λI) δ = −Jᵀr
+            let mut a = vec![vec![0.0f64; n]; n];
+            let mut b = vec![0.0f64; n];
+            for row in 0..m {
+                for c1 in 0..n {
+                    b[c1] -= j[row][c1] * r[row];
+                    for c2 in 0..n {
+                        a[c1][c2] += j[row][c1] * j[row][c2];
+                    }
+                }
+            }
+            for c in 0..n {
+                a[c][c] += lambda;
+            }
+            // 高斯消元
+            let mut ok = true;
+            for c in 0..n {
+                let mut piv = c;
+                for rr in c + 1..n {
+                    if a[rr][c].abs() > a[piv][c].abs() {
+                        piv = rr;
+                    }
+                }
+                if a[piv][c].abs() < 1e-18 {
+                    ok = false;
+                    break;
+                }
+                a.swap(c, piv);
+                b.swap(c, piv);
+                for rr in c + 1..n {
+                    let f = a[rr][c] / a[c][c];
+                    for cc in c..n {
+                        a[rr][cc] -= f * a[c][cc];
+                    }
+                    b[rr] -= f * b[c];
+                }
+            }
+            if !ok {
+                lambda *= 4.0;
+                continue;
+            }
+            let mut d = vec![0.0f64; n];
+            for c in (0..n).rev() {
+                let mut s = b[c];
+                for cc in c + 1..n {
+                    s -= a[c][cc] * d[cc];
+                }
+                d[c] = s / a[c][c];
+            }
+            let vt: Vec<f64> = v.iter().zip(&d).map(|(x, dx)| x + dx).collect();
+            let rt = eval(&vt, ctx)?;
+            let rmax_t = rt.iter().fold(0.0f64, |a2, b2| a2.max(b2.abs()));
+            if rmax_t < rmax {
+                v = vt;
+                r = rt;
+                lambda = (lambda / 4.0).max(1e-12);
+                accepted = true;
+                break;
+            }
+            lambda *= 4.0;
+            if !lambda.is_finite() || lambda > 1e12 {
+                break;
+            }
+        }
+        if !accepted {
+            break;
+        }
+    }
+    Err(JsNativeError::typ()
+        .with_message("JSX: solve did not converge".to_string())
+        .into())
+}
+
 /// boa executes the compiled module; the scene element tree comes back as
 /// JSON (all prop values are numbers/strings/bools/arrays/objects).
-fn eval_js(js: &str) -> Result<Value, String> {
+fn eval_js(js: &str, pose: &[(String, f64)]) -> Result<Value, String> {
+    let pose_json = serde_json::to_string(&pose.iter().cloned().collect::<HashMap<String, f64>>())
+        .map_err(|e| format!("JSX: pose serialization failed: {e}"))?;
     let mut ctx = Context::default();
+    ctx.register_global_callable(
+        boa_engine::js_string!("solve"),
+        2,
+        boa_engine::NativeFunction::from_fn_ptr(solve_host),
+    )
+    .map_err(|e| format!("JSX: host setup failed: {e}"))?;
     ctx.eval(Source::from_bytes(&format!(
-        "{PRELUDE}{js}\nglobalThis.__out = JSON.stringify(__dump(__scene));"
+        "{PRELUDE}\nconst P = {pose_json};\n{js}\nglobalThis.__out = JSON.stringify(__dump(__scene));"
     )))
     .map_err(|e| format!("JSX eval: {e}"))?;
     let out = ctx
@@ -429,6 +606,7 @@ struct Builder {
     tags: TagRegistry,
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
+    pose: HashMap<String, f64>,
 }
 
 fn mat4_mul(a: [f64; 16], b: [f64; 16]) -> [f64; 16] {
@@ -473,9 +651,9 @@ impl Builder {
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
         let g2 = if crate::scene_graph::is_identity3(lin) {
-            geo
+            geo.clone()
         } else {
-            cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo, lin))
+            cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
         };
         scene.add_mesh(Mesh::new(MeshParams {
             geometry: g2,
@@ -491,11 +669,10 @@ impl Builder {
                 j.meshes.push(idx);
             }
         }
-        let _ = world;
         for (name, entry) in self.pending_tags.clone() {
             let rel = mat4_mul(mat4_inv(entry), world);
             self.tags.entry(name).or_default().push(TagInstance {
-                geo: scene.objects[idx].geometry.clone(),
+                geo: geo.clone(),
                 world,
                 rel,
             });
@@ -561,7 +738,7 @@ impl Builder {
                 self.emit(
                     scene,
                     cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids)),
-                    ctx,
+                    cga_core::mat4_identity(),
                     material,
                 );
                 Ok(())
@@ -625,6 +802,32 @@ impl Builder {
             "joint" => self.joint_el(el, ctx, mat, scene, cam),
             "gear" => self.gear_el(el),
             "cam" => self.cam_el(el),
+            "drill" => {
+                let (geo, w) = self.drill_cutter(el, ctx)?;
+                let material = self.material_for(el, mat)?;
+                self.emit(scene, geo, w, material);
+                Ok(())
+            }
+            "instances" => {
+                let name = p_str(el, "of")?.ok_or_else(|| "JSX: instances needs of".to_string())?;
+                for inst in self.instances_of(&name)? {
+                    let material = self.material_for(el, mat)?;
+                    self.emit(scene, inst.geo.clone(), inst.world, material);
+                }
+                Ok(())
+            }
+            "when" => {
+                let of = p_str(el, "of")?.ok_or_else(|| "JSX: when needs of".to_string())?;
+                let count =
+                    p_num(el, "count")?.ok_or_else(|| "JSX: when needs count".to_string())?;
+                let n = self.tags.get(&of).map(|v| v.len()).unwrap_or(0);
+                if (n as f64 - count).abs() < 1e-9 {
+                    for c in &el.children {
+                        self.walk(c, ctx, mat, scene, cam)?;
+                    }
+                }
+                Ok(())
+            }
             _ => self.primitive_el(el, ctx, mat, scene),
         }
     }
@@ -656,6 +859,25 @@ impl Builder {
                 Ok(())
             }
             _ => {
+                if el.tag == "drill" {
+                    let (geo, w) = self.drill_cutter(el, ctx)?;
+                    let (motor, lin) = cga_core::decompose_rigid(w);
+                    kids.push(cga_core::Geometry::AffineGeometry(
+                        cga_core::AffineGeometry::with_motor(geo, motor, lin),
+                    ));
+                    return Ok(());
+                }
+                if el.tag == "instances" {
+                    let name =
+                        p_str(el, "of")?.ok_or_else(|| "JSX: instances needs of".to_string())?;
+                    for inst in self.instances_of(&name)? {
+                        let (motor, lin) = cga_core::decompose_rigid(inst.world);
+                        kids.push(cga_core::Geometry::AffineGeometry(
+                            cga_core::AffineGeometry::with_motor(inst.geo.clone(), motor, lin),
+                        ));
+                    }
+                    return Ok(());
+                }
                 let geo = self.build_geo(el)?;
                 let (motor, lin) = cga_core::decompose_rigid(ctx);
                 kids.push(cga_core::Geometry::AffineGeometry(
@@ -678,21 +900,22 @@ impl Builder {
         Ok(())
     }
 
-    fn modifier_matrix(&self, el: &El) -> Result<[f64; 16], String> {
+    fn modifier_matrix(&mut self, el: &El) -> Result<[f64; 16], String> {
         Ok(match el.tag.as_str() {
-            "translate" => translate4(p_vec3(el, "t")?.unwrap_or([0.0; 3])),
+            "translate" => translate4(self.p_vec3_lazy(el, "t")?.unwrap_or([0.0; 3])),
             "rotate" => {
-                let ax = p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
+                let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
                 let ang = p_num(el, "angle")?.unwrap_or(0.0);
                 Multivector::rotor(ax, ang).to_matrix()
             }
             "scale" => {
-                let s = p_num(el, "s")?;
-                let sv = p_vec3(el, "s")?;
-                let v = match (s, sv) {
-                    (Some(x), None) => [x, x, x],
-                    (None, Some(v)) => v,
-                    _ => [1.0, 1.0, 1.0],
+                let v = match prop(el, "s") {
+                    None => [1.0, 1.0, 1.0],
+                    Some(Value::Number(_)) => {
+                        let x = p_num(el, "s")?.unwrap_or(1.0);
+                        [x, x, x]
+                    }
+                    Some(_) => self.p_vec3_lazy(el, "s")?.unwrap_or([1.0, 1.0, 1.0]),
                 };
                 let mut m = cga_core::mat4_identity();
                 m[0] = v[0];
@@ -701,7 +924,7 @@ impl Builder {
                 m
             }
             _ => {
-                let ax = p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
+                let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
                 let n = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt();
                 if n < 1e-12 {
                     return Err("JSX: mirror axis must be nonzero".to_string());
@@ -738,6 +961,10 @@ impl Builder {
             }
             args.insert(k.clone(), cgs_of(v));
         }
+        let args = self
+            .loader
+            .resolve(&el.tag, Vec::new(), args, 0)
+            .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))?;
         self.loader
             .build_geometry(&el.tag, &args, 0)
             .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))
@@ -779,7 +1006,7 @@ impl Builder {
             return Err("JSX: joint.axis must be nonzero".to_string());
         }
         let axis = [axis[0] / an, axis[1] / an, axis[2] / an];
-        let at = p_vec3(el, "at")?.unwrap_or([0.0; 3]);
+        let at = self.p_vec3_lazy(el, "at")?.unwrap_or([0.0; 3]);
         let rpy = p_vec3(el, "rpy")?.unwrap_or([0.0; 3]);
         let limit: Option<[f64; 2]> = match p_num_list(el, "limit")? {
             Some(l) if l.len() == 2 => Some([l[0], l[1]]),
@@ -844,6 +1071,19 @@ impl Builder {
                 let arity = kind.q_arity();
                 if arity == 0 {
                     Vec::new()
+                } else if let Some(&o) = self.pose.get(&name) {
+                    if p_num(el, "q")?.is_some() {
+                        return Err(format!(
+                            "JSX: joint {name} has a pose override, q must be omitted"
+                        ));
+                    }
+                    if !kind.is_1dof() {
+                        return Err(format!(
+                            "JSX: pose override needs a 1-DOF joint, got {}",
+                            kind.name()
+                        ));
+                    }
+                    vec![o]
                 } else if let Some(x) = p_num(el, "q")? {
                     if arity != 1 {
                         return Err(format!(
@@ -1015,14 +1255,384 @@ fn parse_hex(s: &str) -> Result<Color, String> {
     Ok(Color::from_hex(v))
 }
 
+// ---- R2 平权块：惰性查询 / drill / instances / when / solve / pose ----
+
+impl Builder {
+    /// Element → (raw geometry, transform) for queries and drill targets.
+    /// Element targets are evaluated in the identity frame (they are
+    /// top-level definitions by convention).
+    fn el_geometry(
+        &mut self,
+        el: &El,
+        m: [f64; 16],
+    ) -> Result<(cga_core::Geometry, [f64; 16]), String> {
+        match el.tag.as_str() {
+            "translate" | "rotate" | "scale" | "mirror" => {
+                let m2 = mat4_mul(m, self.modifier_matrix(el)?);
+                if el.children.len() != 1 {
+                    return Err(format!(
+                        "JSX: {} query target needs exactly one child",
+                        el.tag
+                    ));
+                }
+                self.el_geometry(&el.children[0], m2)
+            }
+            "material" => {
+                if el.children.len() != 1 {
+                    return Err(format!(
+                        "JSX: {} query target needs exactly one child",
+                        el.tag
+                    ));
+                }
+                self.el_geometry(&el.children[0], m)
+            }
+            "union" | "difference" | "intersection" => {
+                let mut kids = Vec::new();
+                for c in &el.children {
+                    self.collect_geom(c, m, &mut kids)?;
+                }
+                let op = match el.tag.as_str() {
+                    "union" => cga_core::CsgOp::Union,
+                    "difference" => cga_core::CsgOp::Difference,
+                    _ => cga_core::CsgOp::Intersection,
+                };
+                Ok((
+                    cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids)),
+                    cga_core::mat4_identity(),
+                ))
+            }
+            _ => Ok((self.build_geo(el)?, m)),
+        }
+    }
+
+    /// (transform, world bounds) of a query target: tag name or element.
+    fn query_target(
+        &mut self,
+        of: &Value,
+        what: &str,
+    ) -> Result<([f64; 16], Option<[[f64; 3]; 2]>), String> {
+        match of {
+            Value::String(s) => {
+                let insts = match self.tags.get(s) {
+                    Some(list) if !list.is_empty() => list,
+                    _ => return Err(format!("JSX: unknown reference \"{s}\"")),
+                };
+                let mut acc: Option<[[f64; 3]; 2]> = None;
+                for i in insts {
+                    if let Some(b) = self
+                        .loader
+                        .local_bounds(&i.geo)
+                        .map(|b| crate::scene_lang::transform_bbox(b, i.world))
+                    {
+                        acc = Some(match acc {
+                            None => b,
+                            Some(a) => [
+                                [
+                                    a[0][0].min(b[0][0]),
+                                    a[0][1].min(b[0][1]),
+                                    a[0][2].min(b[0][2]),
+                                ],
+                                [
+                                    a[1][0].max(b[1][0]),
+                                    a[1][1].max(b[1][1]),
+                                    a[1][2].max(b[1][2]),
+                                ],
+                            ],
+                        });
+                    }
+                }
+                Ok((insts[0].world, acc))
+            }
+            Value::Object(_) => {
+                let el = to_el(of)?;
+                let (geo, m4) = self.el_geometry(&el, cga_core::mat4_identity())?;
+                let b = self
+                    .loader
+                    .local_bounds(&geo)
+                    .map(|b| crate::scene_lang::transform_bbox(b, m4));
+                Ok((m4, b))
+            }
+            _ => Err(format!("JSX: {what} needs a reference name or element")),
+        }
+    }
+
+    fn face_of(
+        &mut self,
+        of: &Value,
+        key: &str,
+        what: &str,
+    ) -> Result<([f64; 3], [f64; 3]), String> {
+        let (axis, sign) = crate::scene_lang::parse_face_key(key, 0, what)?;
+        let (m, p, n) = match of {
+            Value::String(s) => {
+                let insts = self
+                    .tags
+                    .get(s)
+                    .filter(|l| !l.is_empty())
+                    .ok_or_else(|| format!("JSX: unknown reference \"{s}\""))?;
+                let (p, n) = crate::scene_lang::face_local(&insts[0].geo, axis, sign)
+                    .ok_or_else(|| format!("JSX: {what}: reference has no finite bounds"))?;
+                (insts[0].world, p, n)
+            }
+            Value::Object(_) => {
+                let el = to_el(of)?;
+                let (geo, m4) = self.el_geometry(&el, cga_core::mat4_identity())?;
+                let (p, n) = crate::scene_lang::face_local(&geo, axis, sign)
+                    .ok_or_else(|| format!("JSX: {what}: reference has no finite bounds"))?;
+                (m4, p, n)
+            }
+            _ => return Err(format!("JSX: {what} needs a reference name or element")),
+        };
+        Ok((
+            cga_core::transform_point(m, p),
+            crate::scene_lang::transform_normal(m, n),
+        ))
+    }
+
+    /// Resolve a prop value to a point: plain [x,y,z] or a lazy query node.
+    fn resolve_vec3(&mut self, v: &Value, what: &str) -> Result<[f64; 3], String> {
+        match v {
+            Value::Array(a) if a.len() == 3 => {
+                let mut out = [0.0; 3];
+                for i in 0..3 {
+                    if a[i].is_object() {
+                        let o = a[i].as_object().unwrap();
+                        if o.contains_key("__q") {
+                            // 标量查询不支持；保持简单：惰性节点只在整向量位置出现
+                            return Err(format!("JSX: {what}: nested query in vector component"));
+                        }
+                    }
+                    out[i] = a[i]
+                        .as_f64()
+                        .ok_or_else(|| format!("JSX: {what}[{i}] must be a number"))?;
+                }
+                Ok(out)
+            }
+            Value::Object(o) if o.contains_key("__q") => self.eval_lazy(o, what),
+            _ => Err(format!("JSX: {what} must be [x, y, z] or a query, got {v}")),
+        }
+    }
+
+    fn eval_lazy(
+        &mut self,
+        o: &serde_json::Map<String, Value>,
+        what: &str,
+    ) -> Result<[f64; 3], String> {
+        let q = o["__q"].as_str().unwrap_or("");
+        match q {
+            "vadd" | "vsub" => {
+                let a = self.resolve_vec3(&o["a"], what)?;
+                let b = self.resolve_vec3(&o["b"], what)?;
+                let s = if q == "vadd" { 1.0 } else { -1.0 };
+                Ok([a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]])
+            }
+            "vscale" => {
+                let a = self.resolve_vec3(&o["a"], what)?;
+                let s = o["s"].as_f64().unwrap_or(1.0);
+                Ok([a[0] * s, a[1] * s, a[2] * s])
+            }
+            "face" | "fnrm" => {
+                let key = o["key"].as_str().unwrap_or("+z");
+                let (p, n) = self.face_of(&o["of"], key, q)?;
+                Ok(if q == "face" { p } else { n })
+            }
+            "xdir" | "ydir" | "zdir" => {
+                let (m, _) = self.query_target(&o["of"], q)?;
+                let col = match q {
+                    "xdir" => [m[0], m[4], m[8]],
+                    "ydir" => [m[1], m[5], m[9]],
+                    _ => [m[2], m[6], m[10]],
+                };
+                let n = (col[0] * col[0] + col[1] * col[1] + col[2] * col[2]).sqrt();
+                if n < 1e-12 {
+                    return Err(format!("JSX: {q} is degenerate"));
+                }
+                Ok([col[0] / n, col[1] / n, col[2] / n])
+            }
+            _ => {
+                let (_, b) = self.query_target(&o["of"], q)?;
+                let b = b.ok_or_else(|| format!("JSX: {q}: reference has no finite bounds"))?;
+                Ok(match q {
+                    "center" => [
+                        (b[0][0] + b[1][0]) / 2.0,
+                        (b[0][1] + b[1][1]) / 2.0,
+                        (b[0][2] + b[1][2]) / 2.0,
+                    ],
+                    "lo" => b[0],
+                    "hi" => b[1],
+                    "size" => [b[1][0] - b[0][0], b[1][1] - b[0][1], b[1][2] - b[0][2]],
+                    _ => return Err(format!("JSX: unknown query {q}")),
+                })
+            }
+        }
+    }
+
+    /// p_vec3 的惰性版：先按数组解析，失败再按查询节点解析。
+    fn p_vec3_lazy(&mut self, el: &El, key: &str) -> Result<Option<[f64; 3]>, String> {
+        match prop(el, key) {
+            None => Ok(None),
+            Some(v) => self.resolve_vec3(v, key).map(Some),
+        }
+    }
+
+    /// drill 切刀：几何 + 世界变换（语义对齐 CGS drill_stmt）。
+    fn drill_cutter(
+        &mut self,
+        el: &El,
+        ctx: [f64; 16],
+    ) -> Result<(cga_core::Geometry, [f64; 16]), String> {
+        let r = p_num(el, "r")?.ok_or_else(|| "JSX: drill needs r=".to_string())?;
+        if !(r > 0.0) {
+            return Err("JSX: drill.r must be > 0".to_string());
+        }
+        let ax = match p_num(el, "axis")? {
+            Some(a) if a == 0.0 || a == 1.0 || a == 2.0 => a as usize,
+            Some(_) => return Err("JSX: drill.axis must be 0, 1 or 2 (X/Y/Z)".to_string()),
+            None => return Err("JSX: drill needs axis= (0/1/2)".to_string()),
+        };
+        // through：tag 名或元素
+        let (rel, fbox): ([f64; 16], Option<[[f64; 3]; 2]>) = match prop(el, "through") {
+            Some(Value::String(s)) => {
+                let insts = match self.tags.get(s) {
+                    Some(list) if !list.is_empty() => list.clone(),
+                    _ => return Err(format!("JSX: unknown reference \"{s}\"")),
+                };
+                let rel0 = insts[0].rel;
+                let f = mat4_mul(ctx, rel0);
+                let finv = mat4_inv(f);
+                let mut acc: Option<[[f64; 3]; 2]> = None;
+                for i in &insts {
+                    if let Some(b) = self
+                        .loader
+                        .local_bounds(&i.geo)
+                        .map(|b| crate::scene_lang::transform_bbox(b, i.world))
+                    {
+                        acc = Some(match acc {
+                            None => b,
+                            Some(a) => [
+                                [
+                                    a[0][0].min(b[0][0]),
+                                    a[0][1].min(b[0][1]),
+                                    a[0][2].min(b[0][2]),
+                                ],
+                                [
+                                    a[1][0].max(b[1][0]),
+                                    a[1][1].max(b[1][1]),
+                                    a[1][2].max(b[1][2]),
+                                ],
+                            ],
+                        });
+                    }
+                }
+                let b = acc.ok_or_else(|| "JSX: drill target has no finite bounds".to_string())?;
+                (rel0, Some(crate::scene_lang::transform_bbox(b, finv)))
+            }
+            Some(v @ Value::Object(_)) => {
+                let t = to_el(v)?;
+                let (geo, m4) = self.el_geometry(&t, cga_core::mat4_identity())?;
+                let b = self
+                    .loader
+                    .local_bounds(&geo)
+                    .ok_or_else(|| "JSX: drill target has no finite bounds".to_string())?;
+                (m4, Some(b))
+            }
+            Some(_) => {
+                return Err("JSX: drill.through needs a reference name or geometry".to_string())
+            }
+            None => (cga_core::mat4_identity(), None),
+        };
+        // from/to：数字或 "name:key" 面引用
+        let end = |v: Option<&Value>| -> Result<Option<f64>, String> {
+            let f = mat4_mul(ctx, rel);
+            match v {
+                None => Ok(None),
+                Some(Value::Number(n)) => Ok(n.as_f64()),
+                Some(Value::String(s)) => {
+                    let (nm, key) = s
+                        .split_once(':')
+                        .ok_or_else(|| "JSX: drill face ref must be \"name:key\"".to_string())?;
+                    let (axis, sign) = crate::scene_lang::parse_face_key(key, 0, "drill")?;
+                    if axis != ax {
+                        return Err(format!(
+                            "JSX: drill face key \"{key}\" does not match axis={ax}"
+                        ));
+                    }
+                    let insts = self
+                        .tags
+                        .get(nm)
+                        .filter(|l| !l.is_empty())
+                        .ok_or_else(|| format!("JSX: unknown reference \"{nm}\""))?;
+                    let (p_local, _) = crate::scene_lang::face_local(&insts[0].geo, axis, sign)
+                        .ok_or_else(|| {
+                            "JSX: drill face reference has no finite bounds".to_string()
+                        })?;
+                    let p_world = cga_core::transform_point(insts[0].world, p_local);
+                    Ok(Some(cga_core::transform_point(mat4_inv(f), p_world)[ax]))
+                }
+                _ => Err("JSX: drill from/to must be a number or \"name:key\"".to_string()),
+            }
+        };
+        let a0 = match end(prop(el, "from"))? {
+            Some(x) => x,
+            None => fbox
+                .map(|b| b[0][ax])
+                .ok_or_else(|| "JSX: drill needs through=<name or geometry>".to_string())?,
+        };
+        let a1 = match end(prop(el, "to"))? {
+            Some(x) => x,
+            None => fbox
+                .map(|b| b[1][ax])
+                .ok_or_else(|| "JSX: drill needs through=<name or geometry>".to_string())?,
+        };
+        if !(a1 > a0) {
+            return Err(format!(
+                "JSX: drill extent must be non-empty ({a0} .. {a1})"
+            ));
+        }
+        let center = (a0 + a1) / 2.0;
+        let rmat = match ax {
+            0 => Multivector::rotor([0.0, 1.0, 0.0], std::f64::consts::FRAC_PI_2).to_matrix(),
+            1 => Multivector::rotor([1.0, 0.0, 0.0], -std::f64::consts::FRAC_PI_2).to_matrix(),
+            _ => cga_core::mat4_identity(),
+        };
+        let mut off = [0.0, 0.0, 0.0];
+        off[ax] = center;
+        let f = mat4_mul(ctx, rel);
+        let w = mat4_mul(mat4_mul(f, translate4(off)), rmat);
+        Ok((
+            cga_core::Geometry::CylinderGeometry(cga_core::CylinderGeometry::new(r, a1 - a0)),
+            w,
+        ))
+    }
+
+    fn instances_of(&self, name: &str) -> Result<Vec<TagInstance>, String> {
+        self.tags
+            .get(name)
+            .filter(|l| !l.is_empty())
+            .cloned()
+            .ok_or_else(|| format!("JSX: unknown reference \"{name}\""))
+    }
+}
+
 /// Evaluate a JSX scene (+ optional CSS) into a `CgsRun`.
 pub fn run_jsx(
     jsx_src: &str,
     css_src: Option<&str>,
     asset_root: &str,
 ) -> Result<crate::CgsRun, String> {
+    run_jsx_pose(jsx_src, css_src, asset_root, &[])
+}
+
+/// JSX scene with pose overrides: injected as the `P` global for JS
+/// variables, and matched by name for 1-DOF joints whose `q` is omitted.
+pub fn run_jsx_pose(
+    jsx_src: &str,
+    css_src: Option<&str>,
+    asset_root: &str,
+    pose: &[(String, f64)],
+) -> Result<crate::CgsRun, String> {
     let js = compile_jsx(jsx_src)?;
-    let v = eval_js(&js)?;
+    let v = eval_js(&js, pose)?;
     let root = to_el(&v)?;
     let rules = match css_src {
         Some(c) => parse_css(c)?,
@@ -1050,6 +1660,7 @@ pub fn run_jsx(
         tags: TagRegistry::new(),
         pending_tags: Vec::new(),
         rules,
+        pose: pose.iter().cloned().collect(),
     };
     b.walk(
         &root,
@@ -1071,11 +1682,15 @@ pub fn run_jsx(
         c.look_at([0.0, 0.0, 0.0], None);
         c
     });
+    let mut kin = b.kin;
+    let mut ps: Vec<(String, f64)> = pose.to_vec();
+    ps.sort_by(|a, b| a.0.cmp(&b.0));
+    kin.pose = ps;
     Ok(crate::CgsRun {
         scene,
         camera: cam,
         tags: b.tags,
-        kinematics: b.kin,
+        kinematics: kin,
     })
 }
 
@@ -1182,9 +1797,95 @@ export default (
     fn test_jsx_errors() {
         let e = run_jsx("export default <sphere", None, "").unwrap_err();
         assert!(e.starts_with("JSX line 1: "), "{e}");
-        let e = run_jsx("export default <frob r={1} />;", None, "").unwrap_err();
+        let e = run_jsx("export default <frob />;", None, "").unwrap_err();
         assert!(e.contains("unknown primitive frob"), "{e}");
+        // 带未知参数的未知元素与 CGS 一致先报参数错。
+        let e = run_jsx("export default <frob r={1} />;", None, "").unwrap_err();
+        assert!(e.contains("frob has no parameter r"), "{e}");
         let e = run_jsx("const a = 1;", None, "").unwrap_err();
         assert_eq!(e, "JSX: scene file must end with export default <element>");
+    }
+
+    #[test]
+    fn test_jsx_assembly_parity_with_cgs() {
+        // v2/v3 汇演场景的 JSX 版：solve/drill/face/tag/instances 门控全走过。
+        let jsx = include_str!("../../../../examples/jsx/assembly.jsx");
+        let css = include_str!("../../../../examples/jsx/assembly.css");
+        let cgs = include_str!("../../../../examples/cgs/assembly.cgs");
+        let a = crate::render_cgs_png(cgs, "examples/cgs", 96, 72, 1).expect("cgs render");
+        let b = render_jsx_png(jsx, Some(css), "examples/jsx", 96, 72, 1).expect("jsx render");
+        assert_eq!(a.png, b.png, "assembly JSX 与 CGS 渲染必须逐字节一致");
+    }
+
+    #[test]
+    fn test_jsx_gallery_parity() {
+        // 画廊六场景：JSX+CSS 版与 CGS 版渲染逐字节一致。
+        for name in [
+            "grid",
+            "building",
+            "mechanical",
+            "primitives",
+            "affine",
+            "freeform",
+        ] {
+            let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
+                .unwrap_or_else(|_| panic!("read {name}.jsx"));
+            let css = std::fs::read_to_string(format!("../../examples/jsx/{name}.css"))
+                .unwrap_or_else(|_| panic!("read {name}.css"));
+            let cgs = std::fs::read_to_string(format!("../../examples/cgs/{name}.cgs"))
+                .unwrap_or_else(|_| panic!("read {name}.cgs"));
+            let a = crate::render_cgs_png(&cgs, "../../examples/cgs", 96, 72, 1)
+                .unwrap_or_else(|e| panic!("cgs {name}: {e}"));
+            let b = render_jsx_png(&jsx, Some(&css), "../../examples/jsx", 96, 72, 1)
+                .unwrap_or_else(|e| panic!("jsx {name}: {e}"));
+            assert_eq!(a.png, b.png, "{name}: JSX 与 CGS 渲染必须逐字节一致");
+        }
+    }
+
+    #[test]
+    fn test_jsx_solve_and_pose() {
+        // solve: 线性方程一步收敛。
+        let run = run_jsx(
+            r#"const [x] = solve([0.0], [v => eq(v[0], 0.42)]);
+export default <translate t={[x, 0, 0]}><sphere r={0.1} /></translate>;"#,
+            None,
+            "",
+        )
+        .expect("run");
+        let m = run.scene.objects[0].base.motor().to_matrix();
+        assert!((m[3] - 0.42).abs() < 1e-6, "solve 应得 x=0.42: {}", m[3]);
+
+        // solve 不收敛 → 显式错误。
+        let e = run_jsx(
+            r#"const [x] = solve([0.0], [v => v[0] * v[0] + 1]);
+export default <sphere r={0.1} />;"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.contains("did not converge"), "{e}");
+
+        // pose：关节级覆盖 + 报告 pose 行。
+        let run = run_jsx_pose(
+            r#"export default <joint name="j" type="revolute"><sphere r={0.1} /></joint>;"#,
+            None,
+            "",
+            &[("j".to_string(), 0.7)],
+        )
+        .expect("run");
+        assert!((run.kinematics.joints[0].q[0] - 0.7).abs() < 1e-12);
+        let rep = run.scene.report(&run.camera, &run.tags, &run.kinematics);
+        assert!(rep.contains("pose j=0.7"), "{rep}");
+
+        // 变量级覆盖：P 约定。
+        let run = run_jsx_pose(
+            r#"export default <translate t={[P.x ?? 0, 0, 0]}><sphere r={0.1} /></translate>;"#,
+            None,
+            "",
+            &[("x".to_string(), 3.0)],
+        )
+        .expect("run");
+        let m = run.scene.objects[0].base.motor().to_matrix();
+        assert!((m[3] - 3.0).abs() < 1e-9, "P.x 覆盖应得 3: {}", m[3]);
     }
 }
