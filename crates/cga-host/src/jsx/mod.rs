@@ -37,40 +37,13 @@ use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::Color;
 use cga_gpu::shading::Light;
 
-/// 元素名常量与查询辅助（旧路径与 React 路径共用）。
-const PRELUDE_COMMON: &str = r#"
-const Sphere='sphere',Plane='plane',Cylinder='cylinder',Box='box',Circle='circle',Cone='cone',
-Torus='torus',Cyclide='cyclide',Ellipsoid='ellipsoid',Translate='translate',Rotate='rotate',Scale='scale',Mirror='mirror',
-Material='material',Union='union',Difference='difference',Intersection='intersection',
-AmbientLight='ambient_light',DirectionalLight='directional_light',PointLight='point_light',
-Camera='camera',Background='background',Scene='scene',Joint='joint',Gear='gear',Cam='cam',
-Tag='tag';
-const Drill='drill',Instances='instances',When='when';
-const __isQ = (v) => v && typeof v === 'object' && !Array.isArray(v) && v.__q;
-const vadd = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vadd', a, b } : a.map((x, i) => x + b[i]);
-const vsub = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vsub', a, b } : a.map((x, i) => x - b[i]);
-const vscale = (a, s) => __isQ(a) ? { __q: 'vscale', a, s } : a.map((x) => x * s);
-const face = (of, key) => ({ __q: 'face', of, key });
-const fnrm = (of, key) => ({ __q: 'fnrm', of, key });
-const center = (of) => ({ __q: 'center', of });
-const lo = (of) => ({ __q: 'lo', of });
-const hi = (of) => ({ __q: 'hi', of });
-const size = (of) => ({ __q: 'size', of });
-const xdir = (of) => ({ __q: 'xdir', of });
-const ydir = (of) => ({ __q: 'ydir', of });
-const zdir = (of) => ({ __q: 'zdir', of });
-const polar = (r, a) => [r * Math.cos(a), r * Math.sin(a), 0];
-const instances = (name) => h('instances', { of: name });
-const eq = (a, b) => a - b;
-const le = (a, b) => Math.max(0, a - b);
-const ge = (a, b) => Math.max(0, b - a);
-"#;
-
-/// React 路径：JSX 编译成 `React.createElement`，函数组件由 React 渲染（hooks 可用）。
-const PRELUDE_REACT: &str = r#"
-const h = React.createElement;
-const Fragment = React.Fragment;
-"#;
+/// 场景预置：元素名常量 + 查询辅助 + `h`/`Fragment`（`scene-prelude.js`），
+/// 以及运动副 React 组件 `Revolute`/`Prismatic`/`Gear`/`Cam`…（`kinematics-pairs.js`）。
+/// 编译期嵌入，按顺序拼接后注入到每个模块源码最前面。
+const PRELUDE: &str = concat!(
+    include_str!("../../assets/scene-prelude.js"),
+    include_str!("../../assets/kinematics-pairs.js"),
+);
 
 /// swc: parse JSX, rewrite `export default` → `const __scene`, strip .css
 /// imports, transform JSX → h() calls, print JS.
@@ -1036,7 +1009,10 @@ impl Builder {
                 if arity == 0 {
                     Vec::new()
                 } else if let Some(&o) = self.pose.get(&name) {
-                    if p_num(el, "q")?.is_some() {
+                    let has_q = prop(el, "q")
+                        .map(|v| !matches!(v, Value::Null))
+                        .unwrap_or(false);
+                    if has_q {
                         return Err(format!(
                             "JSX: joint {name} has a pose override, q must be omitted"
                         ));
@@ -1048,26 +1024,38 @@ impl Builder {
                         ));
                     }
                     vec![o]
-                } else if let Some(x) = p_num(el, "q")? {
-                    if arity != 1 {
-                        return Err(format!(
-                            "JSX: {} joint q must be {}",
-                            kind.name(),
-                            kind.q_shape()
-                        ));
-                    }
-                    vec![x]
-                } else if let Some(l) = p_num_list(el, "q")? {
-                    if l.len() != arity {
-                        return Err(format!(
-                            "JSX: {} joint q must be {}",
-                            kind.name(),
-                            kind.q_shape()
-                        ));
-                    }
-                    l
                 } else {
-                    vec![0.0; arity]
+                    // q 允许单数（1-DOF）或数组（多 DOF）；不要用 p_num 探类型，
+                    // 它对数组会直接报错，导致多 DOF 关节无法书写。
+                    match prop(el, "q") {
+                        None | Some(Value::Null) => vec![0.0; arity],
+                        Some(Value::Number(_)) => {
+                            if arity != 1 {
+                                return Err(format!(
+                                    "JSX: {} joint q must be {}",
+                                    kind.name(),
+                                    kind.q_shape()
+                                ));
+                            }
+                            vec![p_num(el, "q")?.unwrap_or(0.0)]
+                        }
+                        Some(Value::Array(_)) => {
+                            let l = p_num_list(el, "q")?.unwrap_or_default();
+                            if l.len() != arity {
+                                return Err(format!(
+                                    "JSX: {} joint q must be {}",
+                                    kind.name(),
+                                    kind.q_shape()
+                                ));
+                            }
+                            l
+                        }
+                        Some(v) => {
+                            return Err(format!(
+                                "JSX: {name} q must be a number or number list, got {v}"
+                            ))
+                        }
+                    }
                 }
             }
         };
@@ -1602,23 +1590,47 @@ pub fn run_jsx_pose(
     asset_root: &str,
     pose: &[(String, f64)],
 ) -> Result<crate::SceneRun, String> {
+    run_jsx_pose_sandbox(
+        jsx_src,
+        css_src,
+        asset_root,
+        pose,
+        crate::react::Sandbox::from_env(),
+    )
+}
+
+/// 同 [`run_jsx_pose`]，并可选沙箱隔离（见 [`crate::react::Sandbox`]）。
+pub fn run_jsx_pose_sandbox(
+    jsx_src: &str,
+    css_src: Option<&str>,
+    asset_root: &str,
+    pose: &[(String, f64)],
+    sandbox: crate::react::Sandbox,
+) -> Result<crate::SceneRun, String> {
     let js = compile_jsx(jsx_src)?;
-    let v = eval_js_react(&js, pose)?;
+    let v = eval_js_react(&js, pose, sandbox)?;
     build_scene_run(&v, css_src, asset_root, pose)
 }
 
 /// React 路径：真 React 渲染（hooks/状态/副作用可用），把已提交的场景实例树快照成
-/// `{t,p,c}` JSON——与旧元素树同形，于是场景构建一行都不用改。
-fn eval_js_react(js: &str, pose: &[(String, f64)]) -> Result<Value, String> {
+/// `{t,p,c}` JSON——与旧元素树同形，于是场景构建一行都不用改。用帧事务一次取下快照。
+fn eval_js_react(
+    js: &str,
+    pose: &[(String, f64)],
+    sandbox: crate::react::Sandbox,
+) -> Result<Value, String> {
     use crate::react;
-    let module = format!("{PRELUDE_REACT}{PRELUDE_COMMON}\n{js}");
+    let module = format!("{PRELUDE}{js}");
     let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
-    let dump = react::with_session(react::Runtime::from_env(), |sess| {
+    react::with_session(react::Runtime::from_env(), |sess| {
         sess.register_global("solve", 2, solve_host)?;
         sess.unmount()?; // 清掉上一个场景（顺带跑其副作用清理）
-        sess.begin(&module, &pose_map)?;
-        let stats = sess.drain()?;
-        if stats.errors > 0 {
+        let out = sess.frame(react::FrameAction::Mount {
+            src: &module,
+            pose: &pose_map,
+            sandbox,
+        })?;
+        if out.stats.errors > 0 {
             let detail = sess
                 .logs()?
                 .into_iter()
@@ -1628,13 +1640,11 @@ fn eval_js_react(js: &str, pose: &[(String, f64)]) -> Result<Value, String> {
                 .join("\n");
             return Err(format!("JSX: 渲染期异常:\n{detail}"));
         }
-        let errors = sess.errors()?;
-        if !errors.is_empty() {
-            return Err(format!("JSX: React 错误: {}", errors.join("; ")));
+        if !out.errors.is_empty() {
+            return Err(format!("JSX: React 错误: {}", out.errors.join("; ")));
         }
-        sess.snapshot()
-    })?;
-    serde_json::from_str(&dump).map_err(|e| format!("JSX: 场景序列化失败: {e}"))
+        Ok(out.snapshot)
+    })
 }
 
 /// 由 `{t,p,c}` 树构建场景（CSS 匹配、材质继承、惰性查询解析都在这里）。
@@ -1780,14 +1790,38 @@ impl SceneSession {
         asset_root: &str,
         pose: &[(String, f64)],
     ) -> Result<SceneSession, String> {
+        SceneSession::open_pose_sandbox(
+            jsx_src,
+            css_src,
+            asset_root,
+            pose,
+            crate::react::Sandbox::from_env(),
+        )
+    }
+
+    /// 同 [`SceneSession::open_pose`]，并可选沙箱隔离（见 [`crate::react::Sandbox`]）。
+    pub fn open_pose_sandbox(
+        jsx_src: &str,
+        css_src: Option<&str>,
+        asset_root: &str,
+        pose: &[(String, f64)],
+        sandbox: crate::react::Sandbox,
+    ) -> Result<SceneSession, String> {
         let js = compile_jsx(jsx_src)?;
-        let module = format!("{PRELUDE_REACT}{PRELUDE_COMMON}\n{js}");
+        let module = format!("{PRELUDE}{js}");
         let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
-        let mut react = crate::react::ReactSession::new(crate::react::Runtime::from_env())?;
+        let mut react = crate::react::ReactSession::new_with(
+            crate::react::Runtime::from_env(),
+            crate::react::SessionOptions { sandbox },
+        )?;
         react.register_global("solve", 2, solve_host)?;
-        react.begin(&module, &pose_map)?;
-        let stats = react.drain()?;
-        if stats.errors > 0 {
+        // 首帧由帧事务一次完成：挂载 + drain + 快照。
+        let out = react.frame(crate::react::FrameAction::Mount {
+            src: &module,
+            pose: &pose_map,
+            sandbox,
+        })?;
+        if out.stats.errors > 0 {
             let detail = react
                 .logs()?
                 .into_iter()
@@ -1804,8 +1838,16 @@ impl SceneSession {
             pose: pose_map,
             run: None,
         };
-        sess.rebuild()?;
+        sess.build_from(&out.snapshot)?;
         Ok(sess)
+    }
+
+    /// 从一份 `{t,p,c}` 快照构建 `SceneRun`（CSS 匹配、材质继承、惰性查询都会重跑）。
+    fn build_from(&mut self, v: &Value) -> Result<(), String> {
+        let pose: Vec<(String, f64)> = self.pose.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let run = build_scene_run(v, self.css.as_deref(), &self.asset_root, &pose)?;
+        self.run = Some(run);
+        Ok(())
     }
 
     /// 从当前实例树重建 `SceneRun`（CSS 匹配、材质继承、惰性查询都会重跑）。
@@ -1813,10 +1855,7 @@ impl SceneSession {
         let dump = self.react.snapshot()?;
         let v: Value =
             serde_json::from_str(&dump).map_err(|e| format!("JSX: 场景序列化失败: {e}"))?;
-        let pose: Vec<(String, f64)> = self.pose.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        let run = build_scene_run(&v, self.css.as_deref(), &self.asset_root, &pose)?;
-        self.run = Some(run);
-        Ok(())
+        self.build_from(&v)
     }
 
     pub fn run(&self) -> &crate::SceneRun {
@@ -1825,55 +1864,61 @@ impl SceneSession {
             .expect("SceneSession: rebuild 之前没有场景")
     }
 
-    /// 推入宿主输入（props 监听）→ 重渲染 → 跑到静止 → 重建场景。
+    /// 推入宿主输入（props 监听）→ 重渲染 → 跑到静止 → 重建场景（一帧事务，单次跨线程）。
     pub fn set_input(&mut self, json: &str) -> Result<crate::react::DrainStats, String> {
-        let stats = self.react.apply_input(json)?;
-        self.rebuild()?;
-        Ok(stats)
+        let out = self
+            .react
+            .frame(crate::react::FrameAction::Input { json })?;
+        self.build_from(&out.snapshot)?;
+        Ok(out.stats)
     }
 
-    /// 事件派发 → 跑到静止 → 重建场景。
+    /// 事件派发 → 跑到静止 → 重建场景（一帧事务，单次跨线程）。
     pub fn dispatch(
         &mut self,
         id: i64,
         prop: &str,
         payload_json: &str,
     ) -> Result<crate::react::DispatchOutcome, String> {
-        let out = self.react.dispatch(id, prop, payload_json)?;
-        self.react.drain()?;
-        self.rebuild()?;
-        Ok(out)
+        let out = self.react.frame(crate::react::FrameAction::Event {
+            id,
+            prop,
+            payload: payload_json,
+        })?;
+        self.build_from(&out.snapshot)?;
+        Ok(out.dispatch.unwrap_or_default())
     }
 
     pub fn instances(&mut self) -> Result<Vec<crate::react::InstanceInfo>, String> {
-        self.react.instances()
+        self.react.instances().map_err(String::from)
     }
 
     /// 当前已提交实例树的 `{t,p,c}` JSON（调试 / 测试用）。
     pub fn snapshot(&mut self) -> Result<String, String> {
-        self.react.snapshot()
+        self.react.snapshot().map_err(String::from)
     }
 
     pub fn counters(&mut self) -> Result<crate::react::Counters, String> {
-        self.react.counters()
+        self.react.counters().map_err(String::from)
     }
 
     pub fn reset_counters(&mut self) -> Result<(), String> {
-        self.react.reset_counters()
+        self.react.reset_counters().map_err(String::from)
     }
 
+    /// 跑到静止并重建场景（一帧事务）。
     pub fn drain(&mut self) -> Result<crate::react::DrainStats, String> {
-        let stats = self.react.drain()?;
-        self.rebuild()?;
-        Ok(stats)
+        let out = self.react.frame(crate::react::FrameAction::None)?;
+        self.build_from(&out.snapshot)?;
+        Ok(out.stats)
     }
 
     pub fn errors(&mut self) -> Result<Vec<String>, String> {
-        self.react.errors()
+        self.react.errors().map_err(String::from)
     }
 
     pub fn logs(&mut self) -> Result<Vec<crate::react::LogEntry>, String> {
-        self.react.logs()
+        self.react.logs().map_err(String::from)
     }
 
     /// 重建当前场景并渲染。
@@ -2205,5 +2250,87 @@ export default <sphere r={0.1} />;"#,
         .expect("run");
         let m = run.scene.objects[0].base.motor().to_matrix();
         assert!((m[3] - 3.0).abs() < 1e-9, "P.x 覆盖应得 3: {}", m[3]);
+    }
+
+    #[test]
+    fn jsx_sandbox_renders_and_clears_author_globals() {
+        // 沙箱模式不影响正常渲染；作者全局在帧后被清理。
+        let run = run_jsx_pose_sandbox(
+            r#"globalThis.leak = 1; export default <sphere r={1} />;"#,
+            None,
+            "",
+            &[],
+            crate::react::Sandbox::On,
+        )
+        .expect("sandbox run");
+        assert_eq!(run.scene.objects.len(), 1, "沙箱下照常渲染");
+    }
+
+    #[test]
+    fn test_jsx_joint_pair_components() {
+        // 低副（平移/旋转）与高副（齿轮）用 React 组件写法，语义与 <joint>/<gear> 相同。
+        let run = run_jsx(
+            r#"export default (
+  <scene>
+    <Revolute name="a" axis={[0,0,1]} q={0.4}><sphere r={0.1} /></Revolute>
+    <Gear driver="a" driven="b" ratio={-0.5} />
+    <Prismatic name="b" axis={[0,0,1]}><box s={[0.1,0.1,0.1]} /></Prismatic>
+  </scene>
+);"#,
+            None,
+            "",
+        )
+        .expect("run");
+        let k = &run.kinematics;
+        assert_eq!(k.joints.len(), 2);
+        assert_eq!(k.joints[0].kind, JointKind::Revolute);
+        assert_eq!(k.joints[1].kind, JointKind::Prismatic);
+        assert!((k.joints[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
+        assert_eq!(k.joints[0].meshes, vec![0], "Revolute 拥有 mesh 0");
+        assert_eq!(k.joints[1].meshes, vec![1], "Prismatic 拥有 mesh 1");
+
+        // 高副 <Cam> 组件转发到 cam 元素（此处验证确实进入了 cam 分支）。
+        let e = run_jsx(
+            r#"export default <scene><Cam driver="a" driven="b"
+                 driverProfile={{kind:"plane",n:[0,1,0],d:0}}
+                 drivenProfile={{kind:"plane",n:[0,1,0],d:0}} /></scene>;"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("unknown joint a"),
+            "Cam 组件应进入 cam 校验: {e}"
+        );
+    }
+
+    #[test]
+    fn test_jsx_multi_dof_joint_q_arrays() {
+        // 多自由度关节的 q 是数组（cylindrical [qr,qp] / spherical / planar [x,y,theta]）。
+        let run = run_jsx(
+            r#"export default (
+  <scene>
+    <Cylindrical name="c" axis={[0,0,1]} q={[0.4,0.2]}><sphere r={0.1} /></Cylindrical>
+    <Spherical name="s" q={[0.1,0.2,0.3]}><sphere r={0.1} /></Spherical>
+    <Planar name="p" axis={[0,0,1]} q={[0.1,0.2,0.3]}><sphere r={0.1} /></Planar>
+  </scene>
+);"#,
+            None,
+            "",
+        )
+        .expect("run");
+        let k = &run.kinematics;
+        assert_eq!(k.joints[0].q, vec![0.4, 0.2], "cylindrical q");
+        assert_eq!(k.joints[1].q, vec![0.1, 0.2, 0.3], "spherical q");
+        assert_eq!(k.joints[2].q, vec![0.1, 0.2, 0.3], "planar q");
+
+        // 数量不符仍显式报错。
+        let e = run_jsx(
+            r#"export default <scene><Cylindrical name="c" q={[1,2,3]} /></scene>;"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.contains("q must be [qr, qp]"), "{e}");
     }
 }

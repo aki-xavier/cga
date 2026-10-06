@@ -10,6 +10,14 @@
 //   - Dev 构建额外要求性能追踪 / View Transition / test selector 那一组键
 //
 // 加载顺序：react-shim.js → react-runtime.*.js → react-host.js
+//
+// 与 Rust 的桥（见 src/react/mod.rs）：
+//   - 唯一 RPC 入口 `__sess.call(payloadJson)`：payload = {"m": 方法名, "a": 参数对象}，
+//     返回结构化信封字符串 {"ok":true,"value":…} / {"ok":false,"kind","message","stack"}。
+//   - 帧事务 `frame({action})`：mount / input / event / none，内部一次做完
+//     重渲染 + drain + 快照，避免多次跨线程往返。
+//   - `schema()` 报告 `{t,p,c}` 快照契约版本，Rust 建会话时断言。
+//   - sandbox：可选隔离——冻结宿主全局，并在每帧后清掉作者新增的全局。
 (function () {
   'use strict';
 
@@ -24,6 +32,71 @@
   globalThis.React = React;
   globalThis.h = React.createElement;
   globalThis.Fragment = React.Fragment;
+
+  // ---- 结构化信封（跨语言错误契约）---------------------------------------
+  // 宿主只把字符串送回 Rust：成功 {ok:true,value}，失败 {ok:false,kind,message,stack}。
+  // kind: 'syntax'（模块编译失败）/ 'runtime'（渲染或作者代码）/ 'internal'（宿主自身）。
+  const errorInfo = (e) => {
+    const message = e !== null && typeof e === 'object' && e.message !== undefined
+      ? String(e.message)
+      : String(e);
+    const stack = e !== null && typeof e === 'object' && e.stack !== undefined ? String(e.stack) : '';
+    let kind = 'runtime';
+    if (e !== null && typeof e === 'object' && e.cgaKind) kind = String(e.cgaKind);
+    else if (e !== null && typeof e === 'object' && e.name === 'SyntaxError') kind = 'syntax';
+    return { kind, message, stack };
+  };
+  const envelope = (fn) => {
+    try {
+      return JSON.stringify({ ok: true, value: fn() });
+    } catch (e) {
+      return JSON.stringify(Object.assign({ ok: false }, errorInfo(e)));
+    }
+  };
+
+  // ---- 沙箱：冻结宿主全局 + 每帧清理作者新增全局 --------------------------
+  // 场景代码（可能是 LLM 生成的）在 new Function 里以全局作用域求值，能读写 globalThis。
+  // 沙箱模式做两件事：宿主能力（__sess / React / CGA_*）在模块求值前变为不可写、不可配置；
+  // 模块或渲染期间作者新增的全局，在每帧结束（drain 之后）被删除。注意这是纵深防御，
+  // 不是硬边界（作者仍可在单帧内读到非冻结的全局）。
+  const HOST_GLOBALS = [
+    'CGA_REACT', 'CGA_SCHED', 'CGA_REACT_HOST', '__sess', '__cga_run',
+    'React', 'h', 'Fragment', 'HostInput',
+    'console', 'setTimeout', 'clearTimeout', 'queueMicrotask', 'performance',
+  ];
+  let sandboxBase = null;
+  const protectGlobal = (name) => {
+    const d = Object.getOwnPropertyDescriptor(globalThis, name);
+    if (!d || !d.configurable || d.get || d.set) return;
+    try {
+      Object.defineProperty(globalThis, name, {
+        value: d.value,
+        writable: false,
+        enumerable: d.enumerable,
+        configurable: false,
+      });
+    } catch (_) {
+      /* 已是不可配置或环境限制，忽略 */
+    }
+  };
+  const sandboxBegin = () => {
+    for (const name of HOST_GLOBALS) protectGlobal(name);
+    sandboxBase = new Set(Object.getOwnPropertyNames(globalThis));
+  };
+  const sandboxSweep = () => {
+    if (sandboxBase === null) return 0;
+    let removed = 0;
+    for (const name of Object.getOwnPropertyNames(globalThis)) {
+      if (sandboxBase.has(name)) continue;
+      try {
+        delete globalThis[name];
+        removed++;
+      } catch (_) {
+        /* 不可配置的宿主属性不允许删除 */
+      }
+    }
+    return removed;
+  };
 
   // 场景属性：剥掉 React 自己管理的东西（children 在树结构里，ref 由 React 持有）。
   const sceneProps = (p) => {
@@ -284,6 +357,7 @@
     // 根包装组件与当前根元素。Root 的身份在会话内固定，于是每次 update 都重渲染
     // 同一个组件类型，React 只 diff 它返回的元素树（组件身份不丢，hook 状态得以保留）。
     let rootElement = null;
+    let sandboxOn = false;
     const Root = function __CgaRoot() {
       return React.createElement(InputCtx.Provider, { value: input }, rootElement);
     };
@@ -304,15 +378,19 @@
     const session = {
       version: R.version,
       rootTag: tag,
+      schema: 1,
       // 根元素由 begin() 装填。用一层稳定的 Root 组件包起来：每次 update 都渲染同一个
       // 组件类型，React 只重渲染它返回的元素树（组件身份不丢，hook 状态得以保留）。
       moduleFactory: null,
 
-      begin(moduleSrc, pose) {
+      begin(moduleSrc, pose, sandbox) {
         const P = pose || {};
+        sandboxOn = !!sandbox;
+        if (sandboxOn) sandboxBegin();
         session.moduleFactory = new Function('P', moduleSrc + '\n;return __scene;');
         rootElement = session.moduleFactory(P);
         renderRoot();
+        if (sandboxOn) sandboxSweep();
         return true;
       },
       update() {
@@ -385,7 +463,9 @@
         return true;
       },
       drain(maxRounds) {
-        return S.drain(maxRounds);
+        const r = S.drain(maxRounds);
+        if (sandboxOn) sandboxSweep();
+        return r;
       },
 
       // 快照：与旧元素树同形 {t,p,c}；文本节点跳过（当前场景用 props 表达文字）。
@@ -410,6 +490,30 @@
         if (out.length === 1) return JSON.stringify(out[0]);
         return JSON.stringify({ t: 'fragment', p: {}, c: out });
       },
+
+      // 帧事务：一次做完"动作 + 重渲染 + drain + 快照"，只跨线程一次。
+      // action: 'mount'（首帧，带 src/pose/sandbox）/ 'input'（带 input JSON）/
+      //         'event'（带 id/prop/payload JSON）/ 'none'（只 drain 当前状态）。
+      frame(a) {
+        a = a || {};
+        let dispatchOut = null;
+        if (a.action === 'mount') {
+          session.begin(a.src, a.pose, a.sandbox);
+        } else if (a.action === 'input') {
+          session.setInput(a.input);
+          session.update();
+        } else if (a.action === 'event') {
+          dispatchOut = JSON.parse(session.dispatch(a.id, a.prop, a.payload));
+        }
+        const stats = session.drain();
+        return {
+          snapshot: JSON.parse(session.snapshot()),
+          stats,
+          dispatch: dispatchOut,
+          errors: JSON.parse(session.errors()),
+        };
+      },
+
       ids() {
         const walk = (n, acc) => {
           acc.push(n.id);
@@ -442,33 +546,51 @@
         return S.clearLogs();
       },
     };
+
+    // 方法表：Rust 只认 `__sess.call(payloadJson)` 一个入口，payload = {m, a}。
+    // 复用了返回 JSON *字符串* 的会话方法时，这里 parse 成结构化值——信封本身就是
+    // JSON，值应当是对象/数组，而不是再套一层字符串。
+    const HANDLERS = {
+      schema: () => session.schema,
+      version: () => session.version,
+      begin: (a) => session.begin(a.src, a.pose, a.sandbox),
+      update: () => session.update(),
+      setInput: (a) => session.setInput(a.json),
+      dispatch: (a) => JSON.parse(session.dispatch(a.id, a.prop, a.payload)),
+      drain: (a) => session.drain(a && a.maxRounds != null ? a.maxRounds : undefined),
+      snapshot: () => JSON.parse(session.snapshot()),
+      ids: () => JSON.parse(session.ids()),
+      counters: () => JSON.parse(session.counters()),
+      resetCounters: () => session.resetCounters(),
+      errors: () => JSON.parse(session.errors()),
+      logs: () => JSON.parse(session.logs()),
+      instances: () => JSON.parse(session.instances()),
+      unmount: () => session.unmount(),
+      frame: (a) => session.frame(a),
+    };
+    session.call = (payloadJson) =>
+      envelope(() => {
+        const req = payloadJson ? JSON.parse(payloadJson) : {};
+        const handler = HANDLERS[req.m];
+        if (!handler) {
+          const e = new Error('unknown host call: ' + req.m);
+          e.cgaKind = 'internal';
+          throw e;
+        }
+        return handler(req.a || {});
+      });
     return session;
   }
 
   globalThis.CGA_REACT_HOST = {
     version: R.version,
+    schema: 1,
     createSession,
     // 供宿主在派发事件时临时加高优先级（P2 事件驱动用）
     lanes: R.lanes,
   };
 
-  // 宿主唯一的求值入口：异常（含语法错误）转成 '__CGA_ERR__…' 文本返回，
-  // Rust 侧只处理字符串，不接触引擎级异常对象。
-  // 注意：boa 里 Error 的 stack 不含 message，必须自己拼上。
-  const describe = (e) => {
-    if (e !== null && typeof e === 'object') {
-      const msg = e.message === undefined ? '' : String(e.message);
-      const st = e.stack === undefined ? '' : String(e.stack);
-      if (msg && st.indexOf(msg) === -1) return msg + '\n' + st;
-      return st || msg || String(e);
-    }
-    return String(e);
-  };
-  globalThis.__cga_run = (fn) => {
-    try {
-      return '__CGA_OK__' + String(fn());
-    } catch (e) {
-      return '__CGA_ERR__' + describe(e);
-    }
-  };
+  // 宿主唯一的求值入口（原始表达式 / 测试驱动用）：异常（含语法错误）转成结构化信封。
+  // 注意：boa 里 Error 的 stack 不含 message，errorInfo 会自动拼上。
+  globalThis.__cga_run = (fn) => envelope(fn);
 })();

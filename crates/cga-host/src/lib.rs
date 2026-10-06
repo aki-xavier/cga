@@ -2,7 +2,10 @@
 pub use cga_gpu::RenderMode;
 
 pub mod react;
-pub use react::{DrainStats, ReactSession, Runtime};
+pub use react::{
+    DrainStats, ErrorKind, FrameAction, FrameOutcome, Owned, Pooled, ReactError, ReactSession,
+    Runtime, Sandbox, SessionOptions, SCENE_SCHEMA,
+};
 
 pub mod scene_build;
 pub use scene_build::*;

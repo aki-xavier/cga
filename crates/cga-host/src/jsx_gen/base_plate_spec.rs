@@ -24,7 +24,7 @@ impl Default for BasePlateSpec {
 impl BasePlateSpec {
     pub fn generate(&self) -> String {
         let mut out = format!(
-            "      <difference color={{0x{:06X}}} roughness={{0.5}} metalness={{0.6}}>\n        <box s={{[{}, {}, {}]}} />\n",
+            "      <Difference color={{0x{:06X}}} roughness={{0.5}} metalness={{0.6}}>\n        <Box s={{[{}, {}, {}]}} />\n",
             self.color,
             fmt_num(self.size),
             fmt_num(self.thick),
@@ -33,7 +33,7 @@ impl BasePlateSpec {
         for i in 0..4 {
             let a = i as f64 * std::f64::consts::PI / 2.0 + std::f64::consts::PI / 4.0;
             out.push_str(&format!(
-                "        <rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><translate t={{[{}, 0.0, 0.0]}}><rotate axis={{[1.0, 0.0, 0.0]}} angle={{ {} }}><cone r={{ {} }} h={{ {} }} /></rotate></translate></rotate>\n",
+                "        <Rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><Translate t={{[{}, 0.0, 0.0]}}><Rotate axis={{[1.0, 0.0, 0.0]}} angle={{ {} }}><Cone r={{ {} }} h={{ {} }} /></Rotate></Translate></Rotate>\n",
                 fmt_num(a),
                 fmt_num(self.hole_offset),
                 fmt_num(std::f64::consts::PI / 2.0),
@@ -41,7 +41,7 @@ impl BasePlateSpec {
                 fmt_num(self.sink_h)
             ));
         }
-        out.push_str("      </difference>\n");
+        out.push_str("      </Difference>\n");
         out
     }
 }
