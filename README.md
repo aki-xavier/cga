@@ -237,12 +237,12 @@ This is the library-level entry for programmatic callers (LLM codegen, external 
 ![Flange assembly generated and headlessly rendered by gen_flange_assembly](examples/lang/demo_lang.png)
 
 ```rust
-// CGS generation: structured parameters → line-by-line flat source (no for, deterministic, diffable, parseable by construction)
+// Generation: structured parameters → flat JSX source (deterministic, diffable, parseable by construction)
 let text = cga_gpu::gen_flange_assembly(
     &FlangeSpec::default(), &BoltCircleSpec::default(),
     &GearSpec::default(), &BasePlateSpec::default());
 
-// Headless rendering: CGS text → PNG bytes. No window, no CLI.
+// Headless rendering: JSX scene → PNG bytes. No window, no CLI.
 let out = cga_gpu::render_jsx_png(&text, None, ".", 640, 480, 2)?;
 std::fs::write("preview.png", out.png)?;
 
@@ -380,13 +380,12 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `demo_kinematics` | `examples/kinematics/kinematics.gif` |
 | `demo_csg` | `examples/csg/demo_csg.png` (union/difference/intersection side by side) |
 | `demo_bake` | `examples/bake/demo_bake.{png,obj}` (implicit CSG and watertight baked mesh side by side) |
-| `demo_lang` | `examples/lang/{generated_flange.cgs, demo_lang.png, report.txt}` (generate → headless render → report) |
+| `demo_lang` | `examples/lang/{generated_flange.jsx, demo_lang.png, report.txt}` (generate → headless render → report) |
 | `demo_gltf` | `examples/gltf/demo_gltf.{glb,png}` |
 | `demo_helmet` | `examples/helmet/demo_helmet.png` |
-| `render_cgs <file.cgs> [out.png] [w h aa] [--set name=value]` | CGS → PNG |
 | `render_jsx <file.jsx> [out.png] [w h aa]` | JSX(+CSS) → PNG |
-| `bake_cgs <file.cgs> [out.obj\|out.glb] [step]` | CGS → triangle mesh (unbounded planes are skipped automatically) |
-| `report_cgs <file.cgs> [--set name=value]` | CGS → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
+| `bake_jsx <file.jsx> [out.obj\|out.glb] [step]` | JSX → triangle mesh (unbounded planes are skipped automatically) |
+| `report_jsx <file.jsx> [--set name=value]` | JSX → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |
 
 ## Quality
