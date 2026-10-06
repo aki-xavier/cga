@@ -10,7 +10,6 @@
 //! deterministic, parseable by construction).
 
 use cga_core::GeometryParams;
-use urdf_rs::{Geometry as UGeometry, JointType, Robot};
 
 use crate::jsx::run_jsx;
 use crate::scene_build::{JointDef, JointKind, Kinematics, SceneRun};
@@ -74,13 +73,17 @@ fn mat_to_rpy(m: [f64; 16]) -> [f64; 3] {
 #[derive(Debug)]
 pub struct UrdfExport {
     pub xml: String,
+    /// (相对文件名, STL 字节) —— 非图元链接几何的三角化产物。
+    pub meshes: Vec<(String, Vec<u8>)>,
 }
 
-/// 一个对象的 visual：URDF 原生图元（sphere/box/cylinder/cone/torus）。非图元显式报错。
+/// 一个对象的 visual：URDF 原生图元，或（非图元）三角化后的 STL 引用。
 struct Visual {
     origin_xyz: [f64; 3],
     origin_rpy: [f64; 3],
     geom: String,
+    mesh_file: Option<String>,
+    mesh_data: Option<Vec<u8>>,
 }
 
 fn visual_of(
@@ -88,6 +91,8 @@ fn visual_of(
     mesh_idx: usize,
     link_world: [f64; 16],
     link: &str,
+    slot: usize,
+    step: f64,
 ) -> Result<Visual, String> {
     let m = &run.scene.objects[mesh_idx];
     let world = m.motor().to_matrix();
@@ -183,12 +188,28 @@ fn visual_of(
             origin_xyz: xyz,
             origin_rpy: rpy,
             geom: g,
+            mesh_file: None,
+            mesh_data: None,
         });
     }
-    // 非图元几何（网格/曲面）已随网格支持一并移除：显式报错，不做静默兜底。
-    Err(format!(
-        "urdf: link {link} geometry is not an exportable primitive (only sphere/box/cylinder/cone/torus are)"
-    ))
+    // 非图元几何（解析 CSG 等）：导出方向三角化成 STL，放链接坐标系（origin 归零）。
+    let baked = p
+        .bake(step)
+        .map_err(|e| format!("urdf: bake failed for link {link}: {e}"))?;
+    let verts: Vec<[f64; 3]> = baked
+        .vertices
+        .iter()
+        .map(|v| xform_point(inv, *v))
+        .collect();
+    let data = cga_core::stl_binary(&verts, &baked.faces);
+    let file = format!("meshes/{link}_{slot}.stl");
+    Ok(Visual {
+        origin_xyz: [0.0; 3],
+        origin_rpy: [0.0; 3],
+        geom: format!("<mesh filename=\"{file}\"/>"),
+        mesh_file: Some(file),
+        mesh_data: Some(data),
+    })
 }
 
 fn world_origin(world: [f64; 16]) -> [f64; 3] {
@@ -238,25 +259,29 @@ fn joint_origin(j: &JointDef) -> String {
     format!("<origin xyz=\"{}\" rpy=\"{}\"/>", uv(j.at), uv(j.rpy))
 }
 
-/// Export a JSX scene's joint tree as URDF. 非图元几何会显式报错（网格支持已移除）。
+/// Export a JSX scene's joint tree as URDF. `step` 是非图元链接几何三角化的网格步长
+/// （导出方向；导入不提供）。
 pub fn jsx_to_urdf(
     jsx_src: &str,
     css_src: Option<&str>,
     asset_root: &str,
     robot: &str,
+    step: f64,
 ) -> Result<UrdfExport, String> {
     let run = run_jsx(jsx_src, css_src, asset_root)?;
     let kin = &run.kinematics;
     let mut xml = String::new();
     xml.push_str(&format!("<robot name=\"{robot}\">\n"));
+    let mut meshes: Vec<(String, Vec<u8>)> = Vec::new();
     let emit_link = |name: &str,
                      object_ids: &[usize],
                      link_world: [f64; 16],
+                     meshes: &mut Vec<(String, Vec<u8>)>,
                      xml: &mut String|
      -> Result<(), String> {
         xml.push_str(&format!("  <link name=\"{name}\">\n"));
-        for &mi in object_ids.iter() {
-            let v = visual_of(&run, mi, link_world, name)?;
+        for (slot, &mi) in object_ids.iter().enumerate() {
+            let v = visual_of(&run, mi, link_world, name, slot, step)?;
             xml.push_str("    <visual>\n");
             xml.push_str(&format!(
                 "      <origin xyz=\"{}\" rpy=\"{}\"/>\n",
@@ -265,6 +290,9 @@ pub fn jsx_to_urdf(
             ));
             xml.push_str(&format!("      <geometry>{}\n", v.geom));
             xml.push_str("      </geometry>\n    </visual>\n");
+            if let (Some(f), Some(d)) = (v.mesh_file, v.mesh_data) {
+                meshes.push((f, d));
+            }
         }
         xml.push_str("  </link>\n");
         Ok(())
@@ -279,10 +307,22 @@ pub fn jsx_to_urdf(
     let free: Vec<usize> = (0..run.scene.objects.len())
         .filter(|i| !owned.contains(i))
         .collect();
-    emit_link("base_link", &free, cga_core::mat4_identity(), &mut xml)?;
+    emit_link(
+        "base_link",
+        &free,
+        cga_core::mat4_identity(),
+        &mut meshes,
+        &mut xml,
+    )?;
 
     for j in &kin.joints {
-        emit_link(&format!("{}_link", j.name), &j.meshes, j.world, &mut xml)?;
+        emit_link(
+            &format!("{}_link", j.name),
+            &j.meshes,
+            j.world,
+            &mut meshes,
+            &mut xml,
+        )?;
     }
 
     let parent_link = |j: &JointDef| -> String {
@@ -431,194 +471,13 @@ pub fn jsx_to_urdf(
         }
     }
     xml.push_str("</robot>\n");
-    Ok(UrdfExport { xml })
-}
-
-/// Import URDF as JSX scene text (flat, deterministic, `jsx_gen` style).
-/// URDF → JSX。`<mesh>` visual 跳过（网格支持已移除），其余图元原样平移。
-pub fn urdf_to_jsx(xml: &str) -> Result<String, String> {
-    let robot: Robot =
-        urdf_rs::read_from_string(xml).map_err(|e| format!("urdf: parse failed: {e}"))?;
-    let mut out = String::new();
-    out.push_str(&format!("// from URDF robot \"{}\"\n", robot.name));
-    out.push_str("export default (\n  <scene>\n");
-
-    // Topological order: joints whose parent link is already emitted.
-    let mut emitted_links: Vec<String> = Vec::new();
-    let child_links: std::collections::BTreeSet<String> =
-        robot.joints.iter().map(|j| j.child.link.clone()).collect();
-    let mut queue: Vec<String> = robot
-        .links
-        .iter()
-        .map(|l| l.name.clone())
-        .filter(|n| !child_links.contains(n))
-        .collect();
-    let mut remaining: Vec<&urdf_rs::Joint> = robot.joints.iter().collect();
-    let mut body = String::new();
-    while !remaining.is_empty() {
-        let mut progress = false;
-        let mut next: Vec<&urdf_rs::Joint> = Vec::new();
-        for j in remaining {
-            if !queue.contains(&j.parent.link) {
-                next.push(j);
-                continue;
-            }
-            progress = true;
-            write_joint(&mut body, &robot, j)?;
-            emitted_links.push(j.child.link.clone());
-            queue.push(j.child.link.clone());
-        }
-        if !progress {
-            return Err(format!(
-                "urdf: joint tree has a cycle or a mimic-order problem at {}",
-                next[0].name
-            ));
-        }
-        remaining = next;
-    }
-    // Root-link visuals at top level.
-    for l in &robot.links {
-        if !child_links.contains(&l.name) {
-            write_visuals(&mut body, l)?;
-        }
-    }
-    out.push_str(&body);
-    out.push_str("  </scene>\n);\n");
-    Ok(out)
-}
-
-fn write_visuals(out: &mut String, link: &urdf_rs::Link) -> Result<(), String> {
-    for v in &link.visual {
-        // 网格 visual 跳过：URDF 里常见的 <mesh> 引用不再阻断导入，只是不产生对象
-        // （网格支持已移除，无法转成图元）。
-        if matches!(v.geometry, UGeometry::Mesh { .. }) {
-            continue;
-        }
-        let xyz = [v.origin.xyz[0], v.origin.xyz[1], v.origin.xyz[2]];
-        let rpy = [v.origin.rpy[0], v.origin.rpy[1], v.origin.rpy[2]];
-        let mut prefix = String::new();
-        let mut suffix = String::new();
-        if xyz != [0.0; 3] {
-            prefix.push_str(&format!(
-                "<translate t={{[{}]}}>",
-                uv(xyz).replace(' ', ", ")
-            ));
-            suffix.push_str("</translate>");
-        }
-        if rpy != [0.0; 3] {
-            let (ax, ang) = rpy_axis_angle(rpy);
-            if ang.abs() > 1e-12 {
-                prefix.push_str(&format!(
-                    "<rotate axis={{[{}]}} angle={{ {} }}>",
-                    uv(ax).replace(' ', ", "),
-                    uf(ang)
-                ));
-                suffix = format!("</rotate>{suffix}");
-            }
-        }
-        let stmt = match &v.geometry {
-            UGeometry::Box { size } => format!(
-                "<box s={{[{}, {}, {}]}} />",
-                uf(size[0]),
-                uf(size[1]),
-                uf(size[2])
-            ),
-            UGeometry::Cylinder { radius, length } => {
-                format!(
-                    "<cylinder r={{ {} }} h={{ {} }} />",
-                    uf(*radius),
-                    uf(*length)
-                )
-            }
-            UGeometry::Sphere { radius } => format!("<sphere r={{ {} }} />", uf(*radius)),
-            _ => return Err("urdf: unsupported visual geometry".to_string()),
-        };
-        out.push_str(&format!("    {prefix}{stmt}{suffix}\n"));
-    }
-    Ok(())
-}
-
-fn rpy_axis_angle(rpy: [f64; 3]) -> ([f64; 3], f64) {
-    let (cr, sr) = (rpy[0].cos(), rpy[0].sin());
-    let (cp, sp) = (rpy[1].cos(), rpy[1].sin());
-    let (cy, sy) = (rpy[2].cos(), rpy[2].sin());
-    // R = Rz(y)·Ry(p)·Rx(r), row-major 3×3.
-    let r = [
-        cy * cp,
-        cy * sp * sr - sy * cr,
-        cy * sp * cr + sy * sr,
-        sy * cp,
-        sy * sp * sr + cy * cr,
-        sy * sp * cr - cy * sr,
-        -sp,
-        cp * sr,
-        cp * cr,
-    ];
-    let tr = r[0] + r[4] + r[8];
-    let ang = ((tr - 1.0) / 2.0).clamp(-1.0, 1.0).acos();
-    if ang.abs() < 1e-12 {
-        return ([0.0, 0.0, 1.0], 0.0);
-    }
-    let s = 2.0 * ang.sin();
-    (
-        [(r[7] - r[5]) / s, (r[2] - r[6]) / s, (r[3] - r[1]) / s],
-        ang,
-    )
-}
-
-fn write_joint(out: &mut String, robot: &Robot, j: &urdf_rs::Joint) -> Result<(), String> {
-    let ty = match j.joint_type {
-        JointType::Revolute => "revolute",
-        JointType::Continuous => "continuous",
-        JointType::Prismatic => "prismatic",
-        JointType::Fixed => "fixed",
-        JointType::Planar => "planar",
-        _ => return Err(format!("urdf: floating joint {} is not supported", j.name)),
-    };
-    let at = [j.origin.xyz[0], j.origin.xyz[1], j.origin.xyz[2]];
-    let rpy = [j.origin.rpy[0], j.origin.rpy[1], j.origin.rpy[2]];
-    let axis = [j.axis.xyz[0], j.axis.xyz[1], j.axis.xyz[2]];
-    // mimic → gear：紧随被驱动关节之前（JSX 走文档序，driver 已先于它发射）。
-    if let Some(m) = &j.mimic {
-        out.push_str(&format!(
-            "    <gear driver=\"{}\" driven=\"{}\" ratio={{ {} }} offset={{ {} }} />\n",
-            m.joint,
-            j.name,
-            uf(m.multiplier.unwrap_or(1.0)),
-            uf(m.offset.unwrap_or(0.0))
-        ));
-    }
-    let mut args = format!(
-        "name=\"{}\" type=\"{}\" at={{[{}]}} rpy={{[{}]}}",
-        j.name,
-        ty,
-        uv(at).replace(' ', ", "),
-        uv(rpy).replace(' ', ", ")
-    );
-    if ty != "fixed" {
-        args.push_str(&format!(" axis={{[{}]}}", uv(axis).replace(' ', ", ")));
-    }
-    if ty == "revolute" || ty == "prismatic" {
-        args.push_str(&format!(
-            " limit={{[{}, {}]}}",
-            uf(j.limit.lower),
-            uf(j.limit.upper)
-        ));
-    }
-    out.push_str(&format!("    <joint {args}>\n"));
-    let link = robot
-        .links
-        .iter()
-        .find(|l| l.name == j.child.link)
-        .ok_or_else(|| format!("urdf: unknown link {}", j.child.link))?;
-    write_visuals(out, link)?;
-    out.push_str("    </joint>\n");
-    Ok(())
+    Ok(UrdfExport { xml, meshes })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use urdf_rs::JointType;
 
     const ARM: &str = r#"export default (
   <scene>
@@ -637,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_arm() {
-        let e = jsx_to_urdf(ARM, None, "", "arm").unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm", 0.08).unwrap();
         let x = &e.xml;
         assert!(x.contains("<robot name=\"arm\">"), "{x}");
         assert!(
@@ -665,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_p5_urdf_export_roundtrip_urdf_rs() {
-        let e = jsx_to_urdf(ARM, None, "", "arm").unwrap();
+        let e = jsx_to_urdf(ARM, None, "", "arm", 0.08).unwrap();
         let robot = urdf_rs::read_from_string(&e.xml).expect("urdf-rs 读回应成功");
         assert_eq!(robot.joints.len(), 3);
         let sh = robot.joints.iter().find(|j| j.name == "shoulder").unwrap();
@@ -684,6 +543,7 @@ mod tests {
             None,
             "",
             "bot",
+                0.08,
         )
         .unwrap();
         assert!(
@@ -706,16 +566,28 @@ mod tests {
     }
 
     #[test]
-    fn test_p5_urdf_export_csg_is_rejected() {
-        // CSG 不是可导出的图元：显式报错（网格/烘焙支持已移除，不做静默兜底）
+    fn test_p5_urdf_export_csg_bakes_to_stl() {
+        // 非图元（解析 CSG）链接几何：导出方向三角化成 STL，文件写进 UrdfExport.meshes
         let e = jsx_to_urdf(
             r#"export default <joint name="j" type="fixed"><difference><box s={[0.8,0.8,0.8]} /><sphere r={0.3} /></difference></joint>;"#,
             None,
             "",
             "bot",
+            0.08,
+        )
+        .unwrap();
+        assert!(
+            e.xml.contains("<mesh filename=\"meshes/j_link_0.stl\"/>"),
+            "{}",
+            e.xml
         );
-        let err = e.unwrap_err();
-        assert!(err.contains("not an exportable primitive"), "{err}");
+        assert_eq!(e.meshes.len(), 1);
+        let (name, data) = &e.meshes[0];
+        assert_eq!(name, "meshes/j_link_0.stl");
+        assert!(data.len() > 84, "二进制 STL 至少有头 + 面数");
+        let n = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+        assert!(n > 10, "应有多面：{n}");
+        assert_eq!(data.len(), 84 + n * 50, "二进制 STL 尺寸 = 84 + 50×面数");
     }
 
     #[test]
@@ -725,84 +597,9 @@ mod tests {
             None,
             "",
             "bot",
+            0.08,
         )
         .unwrap_err();
         assert_eq!(e, "urdf: joint j needs limit= for URDF export");
-    }
-
-    #[test]
-    fn test_p6_urdf_import_roundtrip() {
-        let xml = r#"<robot name="two_link">
-  <link name="base"/>
-  <link name="upper">
-    <visual><origin xyz="0 0 0.2" rpy="0 0 0"/><geometry><cylinder radius="0.05" length="0.4"/></geometry></visual>
-  </link>
-  <joint name="hip" type="revolute">
-    <parent link="base"/><child link="upper"/>
-    <origin xyz="0.1 0 0.3" rpy="0 0 1.570796"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-1.5" upper="1.5" effort="10" velocity="1"/>
-  </joint>
-</robot>"#;
-        let jsx = urdf_to_jsx(xml).unwrap();
-        assert!(
-            jsx.contains("<joint name=\"hip\" type=\"revolute\""),
-            "{jsx}"
-        );
-        assert!(jsx.contains("at={[0.1, 0, 0.3]}"), "{jsx}");
-        assert!(jsx.contains("limit={[-1.5, 1.5]}"), "{jsx}");
-        assert!(jsx.contains("<cylinder r={ 0.05 } h={ 0.4 } />"), "{jsx}");
-        // 往返：生成的 JSX 可运行，关节树一致。
-        let run = run_jsx(&jsx, None, "").unwrap();
-        assert_eq!(run.kinematics.joints.len(), 1);
-        let j = &run.kinematics.joints[0];
-        assert_eq!(j.name, "hip");
-        assert_eq!(j.kind, JointKind::Revolute);
-        assert!((j.at[0] - 0.1).abs() < 1e-9 && (j.at[2] - 0.3).abs() < 1e-9);
-        assert!((j.rpy[2] - 1.570796).abs() < 1e-6);
-        assert_eq!(j.limit, Some([-1.5, 1.5]));
-        assert_eq!(run.scene.objects.len(), 1, "圆柱体应进场景");
-    }
-
-    #[test]
-    fn test_p6_urdf_import_skips_mesh_visual() {
-        // <mesh> visual 跳过（网格支持已移除），其余图元照常导入
-        let xml = r#"<robot name="x">
-  <link name="base">
-    <visual><origin xyz="0 0 0" rpy="0 0 0"/><geometry><mesh filename="package://p/meshes/a.stl"/></geometry></visual>
-    <visual><origin xyz="0 0 0.1" rpy="0 0 0"/><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
-  </link>
-</robot>"#;
-        let jsx = urdf_to_jsx(xml).unwrap();
-        assert!(jsx.contains("<box s={[0.2, 0.2, 0.2]} />"), "{jsx}");
-        assert!(!jsx.contains("mesh"), "网格 visual 不应出现在输出里：{jsx}");
-        // 生成的 JSX 可运行：只有一个盒子对象
-        let run = run_jsx(&jsx, None, "").unwrap();
-        assert_eq!(run.scene.objects.len(), 1);
-    }
-
-    #[test]
-    fn test_p6_urdf_import_mesh_only_link_skipped() {
-        // 只有网格 visual 的链接：不产生对象，也不报错
-        let xml = r#"<robot name="x">
-  <link name="base">
-    <visual><geometry><mesh filename="a.dae"/></geometry></visual>
-  </link>
-</robot>"#;
-        let jsx = urdf_to_jsx(xml).unwrap();
-        let run = run_jsx(&jsx, None, "").unwrap();
-        assert!(run.scene.objects.is_empty());
-    }
-
-    #[test]
-    fn test_p6_urdf_import_floating_rejected() {
-        let xml = r#"<robot name="x">
-  <link name="a"/><link name="b"/>
-  <joint name="j" type="floating"><parent link="a"/><child link="b"/></joint>
-</robot>"#;
-        assert_eq!(
-            urdf_to_jsx(xml).unwrap_err(),
-            "urdf: floating joint j is not supported"
-        );
     }
 }

@@ -83,7 +83,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 137 tests pass.
+   Result: all 154 tests pass.
 
 2. Render the smoke scene:
 
@@ -105,7 +105,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 | --- | --- |
 | **CGA core** | 32-component multivector (plain `[f64; 32]`). Motor versor transforms (gp/reverse/log/velocity). exp/log/interpolation. Two incidence predicates: direct form `op`, dual form `ip`. |
 | **Render engine** | three.js naming: Scene / PerspectiveCamera / Object / Sphere·Plane·Cylinder·Box·Circle Geometry / Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
-| **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. No triangle meshes anywhere: every solid is an analytic primitive or a CSG of them. |
+| **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. No triangle meshes as scene representation: every solid is an analytic primitive or a CSG of them. Triangles appear only on export (STL / URDF mesh links). |
 | **MLX GPU** | Per-pixel vectorized analytic intersection. One kernel batch per full-resolution frame (mlx-rs / Metal). Camera space: X right, Y down, Z forward. |
 | **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `SceneRun`. See `docs/jsx-css-host.md`. |
 
@@ -148,6 +148,7 @@ Rules:
 - Measured ray-tracing cost model (pure analytic, `bench_ray`): cost ≈ `objects × rays × (1 + lights)` plus CSG child count and refraction recursion. At 640×480 aa=1 with 2 lights: 1 object 15 ms, 100 objects 205 ms, 500 objects 1.0 s, 1000 objects 2.1 s (≈2 ms/object); a light's shadow pass adds ≈0.85 ms per object-light; torus/cyclide cost ≈4× sphere/box (per-ray quartic solves); a glass sphere (Whitted recursion) 56 ms vs 8 ms opaque, but the recursion itself is now subset to the pixels that need it (a partially glass-covered frame no longer pays full-frame reflection/refraction). Per-object screen-space culling keeps off-screen objects cheap (500 mostly off-screen 0.70 s vs 1.04 s visible); `CGA_NO_CULL=1` renders in reference mode.
 - CSG evaluates by collecting child crossings, sorting, and testing membership at interval samples — cost `rays × children × samples`, so children are now culled the same way objects are: each child's crossings and membership are evaluated only on the rays that can reach its bounding sphere (per-child ray subsets, conservative). `box − N spheres` at 640×480 aa=1: 16 ms (N=1), 25 ms (4), 83 ms (16), 460 ms (64) — previously 16/32/220/2775 ms. Membership for a convex child (sphere/box/cylinder/cone/ellipsoid, optionally affine-wrapped) is decided from that child's own two crossings (`t_lo ≤ s ≤ t_hi`) instead of evaluating the analytic predicate at every interval sample — bit-identical for clean crossings, with the certified predicate kept for tangencies and non-convex children (torus/cyclide/nested CSG). `CGA_CSG_TIME=1` prints the stage split (crossings / sort+samples / membership / total).
 - Current scenes at 640×480 aa=2 (1280×720 aa=2, CLI end-to-end incl. JSX build + PNG): grid 82 ms (172), affine 105 ms (205), assembly 163 ms (429), primitives 165 ms (514), orbit 320 ms (n/a), building 1.3 s (n/a), mechanical 2.2 s. `building` is CSG + object bound (114 objects), `mechanical` is CSG bound (two `<difference>` nodes; the remaining cost is element-wise work on the dense ray×interval sample grid — sample compaction is the open lever).
+- Interop is **export only**: `export_stl <scene.jsx> [out.stl] [step] [--ascii]` and `export_urdf <scene.jsx> [out.urdf] [--name R] [step]` (the latter also writes `meshes/*.stl`). Solids are tessellated on demand by `GeometryParams::bake` (certified marching tetrahedra); unbounded geometry (planes, infinite cylinders) and circles are skipped and reported.
 - Elements: primitives `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid`, modifiers `translate/rotate/scale/mirror/material`, CSG `union/difference/intersection`, lights, `camera`, `background`, `joint/gear/cam`, `tag/drill/instances/when`.
 - `export default <element>` is the scene. Function components are plain JS functions. Control flow is real JS (`map`, ternaries).
 - CSS matches tag / `.class` / `#id` / `:root` / `scene`. Material keys: `color roughness metalness emissive opacity ior absorption map unlit`. Material inherits down the tree; inline props beat CSS rules; CSS cascades in source order.
@@ -174,7 +175,7 @@ Rules:
 | **Joints P2** | Gear coupling | `<Gear driver driven ratio offset />` ≡ URDF `mimic` + ratio: `q_driven = ratio·q_driver + offset`. Driver first, driven later with q omitted (document order). 1-DOF joints only. |
 | **Joints P3** | Cam contact solving | `<Cam driver driven driverProfile={…} drivenProfile={…} />` solves the driven q so the profiles touch without penetration. Profiles: `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}`, planar mechanisms only. No contact or multiple contacts are explicit errors. |
 | **Pose P4** | Pose overrides | `run_jsx_pose(jsx, css, root, overrides)` / `report_jsx --set name=value`: variables read `P.name`; joint overrides drive 1-DOF joints with q omitted. gear/cam chains re-derive. Report emits `pose name=value` lines. |
-| **URDF P5/P6** | URDF interop | `jsx_to_urdf` / `urdf_to_jsx` (urdf-rs). origin xyz/rpy ↔ `at`/`rpy` 1:1. gear ↔ `mimic`. helical/cylindrical/spherical decompose into 1-DOF series joints. Non-primitive link geometry (CSG) is rejected explicitly on export; a `<mesh>` visual is skipped on import. `floating` is rejected explicitly. |
+| **URDF P5** | URDF export | `jsx_to_urdf` (urdf-rs). origin xyz/rpy ↔ `at`/`rpy` 1:1. gear ↔ `mimic`. helical/cylindrical/spherical decompose into 1-DOF series joints. Non-primitive link geometry (CSG) is tessellated to `meshes/<link>_<slot>.stl` and referenced as `<mesh>`. **Export only — no import.** `floating` is rejected explicitly. |
 | **Report** | Execution result text | `run.scene.report(…)` / `report_jsx` CLI: scene-level background/camera/light lines + one `object <i> …` line per object + `bounds` + geometry parameter tree + tag registry + joint/gear/cam lines + `summary`. Numbers normalized to six digits. |
 
 The gallery scene `assembly.jsx` (`examples/jsx/assembly.jsx`) exercises every v2/v3 feature together: `constrain` solves hole positions → `drill` cuts through → `face` face centers mount posts → `instances` counts and erects the top beam.
@@ -326,7 +327,7 @@ crates/
     cyclide / geometry      Dupin cyclide, Geometry and camera parameters
     affine / affine_geom    affine extension (scale/mirror inverse transform + Newton polar decomposition)
     csg_node / geometry     CSG tree, geometry params (+ identity_params), mat4 helpers
-    gif                     GIF89a encoding
+    stl / gif               STL encoding (export), GIF89a encoding
   cga-gpu/                  mlx-rs/Metal GPU kernels
     mlxops / shading        scalar broadcast helpers, material lights and batched Blinn-Phong
     scene / scene_graph     Object·Scene·PerspectiveCamera·OrbitControls, Vec3/Color
@@ -338,7 +339,7 @@ crates/
     scene_build / scene_report  scene builders, kinematics registry, scene report text
     jsx                     JSX+CSS scene host (swc compile → boa execute → SceneRun)
     jsx_gen                 structured-parameter → flat-JSX generators
-    urdf                    URDF export/import (jsx_to_urdf / urdf_to_jsx, urdf-rs)
+    export / urdf           STL export (bake → binary/ASCII) + URDF export (mesh links, export only)
   cga-examples/             demo CLIs (src/bin/*.rs)
 examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; lang is the generation-pipeline showcase)
 docs/                       architecture diagram, robotics diagram, cross-platform plan
@@ -353,13 +354,15 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `demo_kinematics` | `examples/kinematics/kinematics.gif` |
 | `demo_csg` | `examples/csg/demo_csg.png` (union/difference/intersection side by side) |
 | `demo_lang` | `examples/lang/{generated_flange.jsx, demo_lang.png, report.txt}` (generate → headless render → report) |
+| `export_stl <file.jsx> [out.stl] [step] [--ascii]` | JSX → STL（实体三角化；平面/无限长圆柱/圆跳过并列出） |
+| `export_urdf <file.jsx> [out.urdf] [--name R] [step]` | JSX 关节树 → URDF（+ `meshes/*.stl`） |
 | `render_jsx <file.jsx> [out.png] [w h aa]` | JSX(+CSS) → PNG |
 | `report_jsx <file.jsx> [--set name=value]` | JSX → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |
 
 ## Quality
 
-- `make test`: **all 137 tests pass** (cga-core 31 + cga-gpu 78 + cga-host 28, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports.
+- `make test`: **all 154 tests pass** (cga-core 44 + cga-gpu 79 + cga-host 31, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, baked-mesh watertightness/volume/topology. the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export, STL export (binary/ASCII layout, non-solid skipping, world-space placement), scene reports.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/csg goldens have **RMSE = 0**.
 
 ## License
