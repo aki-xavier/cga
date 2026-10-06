@@ -10,11 +10,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 gltf = "1"
 
 inari = { version = "2.0.0", default-features = false }
-urdf-rs = "0.10.0"
-boa_engine = "0.22.0"
-swc_core = { version = "81.0.2", features = ["common", "ecma_ast", "ecma_parser", "ecma_codegen", "ecma_transforms_react", "ecma_visit"] }
-lightningcss = "1.0.0-alpha.72"
-serde_json = "1.0.151"
 
 [lints]
 workspace = true

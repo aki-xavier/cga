@@ -520,6 +520,7 @@ version = "0.1.0"
 dependencies = [
  "cga-core",
  "cga-gpu",
+ "cga-host",
  "clap",
  "mlx-rs",
  "rand 0.9.5",
@@ -529,13 +530,21 @@ dependencies = [
 name = "cga-gpu"
 version = "0.1.0"
 dependencies = [
- "boa_engine",
  "cga-core",
  "gltf",
  "image",
  "inari",
- "lightningcss",
  "mlx-rs",
+]
+
+[[package]]
+name = "cga-host"
+version = "0.1.0"
+dependencies = [
+ "boa_engine",
+ "cga-core",
+ "cga-gpu",
+ "lightningcss",
  "serde_json",
  "swc_core",
  "urdf-rs",

@@ -1,4 +1,3 @@
-use cga_gpu::*;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -53,7 +52,7 @@ fn main() {
         }
         rest = &rest[i + 4..];
     }
-    match run_jsx_pose(
+    match cga_host::run_jsx_pose(
         &text,
         if css.is_empty() { None } else { Some(&css) },
         dir,
@@ -61,7 +60,12 @@ fn main() {
     ) {
         Ok(run) => print!(
             "{}",
-            run.scene.report(&run.camera, &run.tags, &run.kinematics)
+            cga_host::scene_report::scene_report(
+                &run.scene,
+                &run.camera,
+                &run.tags,
+                &run.kinematics
+            )
         ),
         Err(e) => {
             eprintln!("report_jsx: {e}");

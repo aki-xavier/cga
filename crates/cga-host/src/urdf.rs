@@ -12,9 +12,9 @@
 use cga_core::GeometryParams;
 use urdf_rs::{Geometry as UGeometry, JointType, Robot};
 
-use crate::geom_to_camera;
 use crate::jsx::run_jsx;
 use crate::scene_build::{JointDef, JointKind, Kinematics, SceneRun};
+use cga_gpu::geom_to_camera;
 
 fn uf(v: f64) -> String {
     let s = format!("{v:.6}");

@@ -29,13 +29,13 @@ use swc_core::ecma::visit::VisitMutWith;
 
 use cga_core::Multivector;
 
-use crate::scene::{Mesh, MeshParams, PerspectiveCamera, Scene};
 use crate::scene_build::{
     cam_solve, joint_motion, rpy4, ArgValue, Builders, CamProfile, CamRel, CamSolved, Driven,
     GearRel, JointDef, JointKind, Kinematics, TagInstance, TagRegistry,
 };
-use crate::scene_graph::Color;
-use crate::shading::Light;
+use cga_gpu::scene::{Mesh, MeshParams, PerspectiveCamera, Scene};
+use cga_gpu::scene_graph::Color;
+use cga_gpu::shading::Light;
 
 const PRELUDE: &str = r#"
 function h(tag, props, ...children) {
@@ -625,7 +625,7 @@ impl Builder {
         &self,
         el: &El,
         mat: &HashMap<String, ArgValue>,
-    ) -> Result<crate::shading::Material, String> {
+    ) -> Result<cga_gpu::shading::Material, String> {
         let mut merged: HashMap<String, ArgValue> = mat.clone();
         for (k, v) in css_match(&self.rules, el) {
             let key = k.trim_start_matches("--").to_string();
@@ -659,10 +659,10 @@ impl Builder {
         scene: &mut Scene,
         geo: cga_core::Geometry,
         world: [f64; 16],
-        mat: crate::shading::Material,
+        mat: cga_gpu::shading::Material,
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
-        let g2 = if crate::scene_graph::is_identity3(lin) {
+        let g2 = if cga_gpu::scene_graph::is_identity3(lin) {
             geo.clone()
         } else {
             cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
@@ -1619,6 +1619,13 @@ impl Builder {
     }
 }
 
+/// A rendered frame in PNG form (headless rendering).
+pub struct HeadlessImage {
+    pub width: i32,
+    pub height: i32,
+    pub png: Vec<u8>,
+}
+
 /// Evaluate a JSX scene (+ optional CSS) into a `SceneRun`.
 pub fn run_jsx(
     jsx_src: &str,
@@ -1707,18 +1714,18 @@ pub fn render_jsx_png(
     w: i32,
     h: i32,
     aa: i32,
-) -> Result<crate::HeadlessImage, String> {
+) -> Result<HeadlessImage, String> {
     if w <= 0 || h <= 0 {
         return Err(format!("headless: bad size {w}x{h}"));
     }
     let mut run = run_jsx(jsx_src, css_src, asset_root)?;
     run.camera.aspect = f64::from(w) / f64::from(h);
-    let mut r = crate::Renderer::new(w, h, aa, 3);
+    let mut r = cga_gpu::Renderer::new(w, h, aa, 3);
     let img = r.render(run.scene, run.camera);
-    Ok(crate::HeadlessImage {
+    Ok(HeadlessImage {
         width: w,
         height: h,
-        png: crate::frame_to_png_bytes(&img),
+        png: cga_gpu::frame_to_png_bytes(&img),
     })
 }
 
@@ -1748,6 +1755,23 @@ mod tests {
             assert!(out.png.starts_with(&[137, 80, 78, 71]), "{name}: PNG magic");
             assert!(out.png.len() > 1000, "{name}: 非空渲染");
         }
+    }
+
+    #[test]
+    fn renders_generated_flange() {
+        let text = crate::gen_flange_assembly(
+            &crate::FlangeSpec::default(),
+            &crate::BoltCircleSpec::default(),
+            &crate::GearSpec::default(),
+            &crate::BasePlateSpec::default(),
+        );
+        let out = render_jsx_png(&text, None, ".", 96, 72, 1).expect("flange render");
+        assert!(out.png.len() > 1000);
+    }
+
+    #[test]
+    fn bad_size_errors() {
+        assert!(render_jsx_png("export default <scene />;", None, ".", 0, 10, 1).is_err());
     }
 
     #[test]
@@ -1801,7 +1825,8 @@ export default (
         assert!((k.joints[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
         assert_eq!(k.joints[0].meshes, vec![0], "joint a 拥有 mesh 0");
         assert_eq!(k.joints[1].meshes, vec![1], "joint b 拥有 mesh 1");
-        let rep = run.scene.report(&run.camera, &run.tags, &run.kinematics);
+        let rep =
+            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
         assert!(rep.contains("joint 0 \"a\" type=revolute"), "{rep}");
         assert!(
             rep.contains("gear 0 driver=\"a\" driven=\"b\" ratio=-0.5"),
@@ -1854,7 +1879,8 @@ export default <sphere r={0.1} />;"#,
         )
         .expect("run");
         assert!((run.kinematics.joints[0].q[0] - 0.7).abs() < 1e-12);
-        let rep = run.scene.report(&run.camera, &run.tags, &run.kinematics);
+        let rep =
+            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
         assert!(rep.contains("pose j=0.7"), "{rep}");
 
         // 变量级覆盖：P 约定。

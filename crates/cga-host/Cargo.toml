@@ -1,0 +1,17 @@
+[package]
+name = "cga-host"
+version = "0.1.0"
+edition = "2021"
+description = "cga scene authoring host: JSX+CSS frontend, scene builders, reports, URDF interop."
+
+[dependencies]
+cga-core = { path = "../cga-core" }
+cga-gpu = { path = "../cga-gpu" }
+boa_engine = "0.22.0"
+swc_core = { version = "81.0.2", features = ["common", "ecma_ast", "ecma_parser", "ecma_codegen", "ecma_transforms_react", "ecma_visit"] }
+lightningcss = "1.0.0-alpha.72"
+serde_json = "1.0.151"
+urdf-rs = "0.10.0"
+
+[lints]
+workspace = true

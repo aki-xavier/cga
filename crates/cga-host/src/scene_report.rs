@@ -1,11 +1,11 @@
 use cga_core::{decompose_rigid, Geometry, Quaternion};
 use std::f64::consts::PI;
 
-use crate::geom_kernels::geom_to_camera;
-use crate::scene::{Mesh, PerspectiveCamera, Scene};
 use crate::scene_build::{csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry};
-use crate::scene_graph::{vec3_unit, Color};
-use crate::shading::{Light, LightKind, Material, MaterialKind};
+use cga_gpu::geom_kernels::geom_to_camera;
+use cga_gpu::scene::{Mesh, PerspectiveCamera, Scene};
+use cga_gpu::scene_graph::{vec3_unit, Color};
+use cga_gpu::shading::{Light, LightKind, Material, MaterialKind};
 
 fn fmt_num(v: f64) -> String {
     if v.is_nan() {
@@ -283,122 +283,120 @@ fn fmt_joint(i: usize, j: &JointDef) -> String {
     s
 }
 
-impl Scene {
-    pub fn report(
-        &self,
-        camera: &PerspectiveCamera,
-        tags: &TagRegistry,
-        kin: &Kinematics,
-    ) -> String {
-        let mut out = String::new();
-        out.push_str("scene version=1\n");
-        out.push_str(&format!(
-            "background(color={});\n",
-            fmt_color(&self.background)
-        ));
-        out.push_str(&fmt_camera(camera));
+pub fn scene_report(
+    scene: &Scene,
+    camera: &PerspectiveCamera,
+    tags: &TagRegistry,
+    kin: &Kinematics,
+) -> String {
+    let mut out = String::new();
+    out.push_str("scene version=1\n");
+    out.push_str(&format!(
+        "background(color={});\n",
+        fmt_color(&scene.background)
+    ));
+    out.push_str(&fmt_camera(camera));
+    out.push('\n');
+    for l in &scene.lights {
+        out.push_str(&fmt_light(l));
         out.push('\n');
-        for l in &self.lights {
-            out.push_str(&fmt_light(l));
-            out.push('\n');
-        }
-
-        let mut no_bounds = 0usize;
-        let mut bbox_lo = [f64::INFINITY; 3];
-        let mut bbox_hi = [f64::NEG_INFINITY; 3];
-        let mut any_bounds = false;
-        for (i, m) in self.objects.iter().enumerate() {
-            out.push_str(&fmt_object(i, m));
-            out.push('\n');
-            let params = geom_to_camera(&m.geometry, &m.motor());
-            match params.bounds() {
-                Some(b) => {
-                    out.push_str(&format!(
-                        "bounds {i} lo={} hi={}\n",
-                        fmt_vec3(b[0]),
-                        fmt_vec3(b[1])
-                    ));
-                    for k in 0..3 {
-                        bbox_lo[k] = bbox_lo[k].min(b[0][k]);
-                        bbox_hi[k] = bbox_hi[k].max(b[1][k]);
-                    }
-                    any_bounds = true;
-                }
-                None => {
-                    no_bounds += 1;
-                    out.push_str(&format!("bounds {i} none\n"));
-                }
-            }
-        }
-        for (name, insts) in tags {
-            out.push_str(&format!(
-                "tag \"{}\" count={}\n",
-                escape_name(name),
-                insts.len()
-            ));
-            for (j, inst) in insts.iter().enumerate() {
-                out.push_str(&fmt_instance(name, j, inst));
-                out.push('\n');
-            }
-        }
-        for (i, j) in kin.joints.iter().enumerate() {
-            out.push_str(&fmt_joint(i, j));
-            out.push('\n');
-        }
-        for (i, g) in kin.gears.iter().enumerate() {
-            out.push_str(&format!(
-                "gear {i} driver=\"{}\" driven=\"{}\" ratio={} offset={}\n",
-                escape_name(&g.driver),
-                escape_name(&g.driven),
-                fmt_num(g.ratio),
-                fmt_num(g.offset)
-            ));
-        }
-        for (i, c) in kin.cams.iter().enumerate() {
-            out.push_str(&format!(
-                "cam {i} driver=\"{}\" driven=\"{}\" q={}\n",
-                escape_name(&c.driver),
-                escape_name(&c.driven),
-                fmt_num(c.q)
-            ));
-        }
-        for (name, v) in &kin.pose {
-            out.push_str(&format!("pose {}={}\n", escape_name(name), fmt_num(*v)));
-        }
-        let mut summary = format!(
-            "summary objects={} lights={} no_bounds={}",
-            self.objects.len(),
-            self.lights.len(),
-            no_bounds
-        );
-        if !kin.joints.is_empty() || !kin.gears.is_empty() || !kin.cams.is_empty() {
-            summary.push_str(&format!(
-                " joints={} gears={} cams={}",
-                kin.joints.len(),
-                kin.gears.len(),
-                kin.cams.len()
-            ));
-        }
-        if any_bounds {
-            summary.push_str(&format!(
-                " bbox_lo={} bbox_hi={}",
-                fmt_vec3(bbox_lo),
-                fmt_vec3(bbox_hi)
-            ));
-        }
-        out.push_str(&summary);
-        out.push('\n');
-        out
     }
+
+    let mut no_bounds = 0usize;
+    let mut bbox_lo = [f64::INFINITY; 3];
+    let mut bbox_hi = [f64::NEG_INFINITY; 3];
+    let mut any_bounds = false;
+    for (i, m) in scene.objects.iter().enumerate() {
+        out.push_str(&fmt_object(i, m));
+        out.push('\n');
+        let params = geom_to_camera(&m.geometry, &m.motor());
+        match params.bounds() {
+            Some(b) => {
+                out.push_str(&format!(
+                    "bounds {i} lo={} hi={}\n",
+                    fmt_vec3(b[0]),
+                    fmt_vec3(b[1])
+                ));
+                for k in 0..3 {
+                    bbox_lo[k] = bbox_lo[k].min(b[0][k]);
+                    bbox_hi[k] = bbox_hi[k].max(b[1][k]);
+                }
+                any_bounds = true;
+            }
+            None => {
+                no_bounds += 1;
+                out.push_str(&format!("bounds {i} none\n"));
+            }
+        }
+    }
+    for (name, insts) in tags {
+        out.push_str(&format!(
+            "tag \"{}\" count={}\n",
+            escape_name(name),
+            insts.len()
+        ));
+        for (j, inst) in insts.iter().enumerate() {
+            out.push_str(&fmt_instance(name, j, inst));
+            out.push('\n');
+        }
+    }
+    for (i, j) in kin.joints.iter().enumerate() {
+        out.push_str(&fmt_joint(i, j));
+        out.push('\n');
+    }
+    for (i, g) in kin.gears.iter().enumerate() {
+        out.push_str(&format!(
+            "gear {i} driver=\"{}\" driven=\"{}\" ratio={} offset={}\n",
+            escape_name(&g.driver),
+            escape_name(&g.driven),
+            fmt_num(g.ratio),
+            fmt_num(g.offset)
+        ));
+    }
+    for (i, c) in kin.cams.iter().enumerate() {
+        out.push_str(&format!(
+            "cam {i} driver=\"{}\" driven=\"{}\" q={}\n",
+            escape_name(&c.driver),
+            escape_name(&c.driven),
+            fmt_num(c.q)
+        ));
+    }
+    for (name, v) in &kin.pose {
+        out.push_str(&format!("pose {}={}\n", escape_name(name), fmt_num(*v)));
+    }
+    let mut summary = format!(
+        "summary objects={} lights={} no_bounds={}",
+        scene.objects.len(),
+        scene.lights.len(),
+        no_bounds
+    );
+    if !kin.joints.is_empty() || !kin.gears.is_empty() || !kin.cams.is_empty() {
+        summary.push_str(&format!(
+            " joints={} gears={} cams={}",
+            kin.joints.len(),
+            kin.gears.len(),
+            kin.cams.len()
+        ));
+    }
+    if any_bounds {
+        summary.push_str(&format!(
+            " bbox_lo={} bbox_hi={}",
+            fmt_vec3(bbox_lo),
+            fmt_vec3(bbox_hi)
+        ));
+    }
+    out.push_str(&summary);
+    out.push('\n');
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Mesh, MeshParams};
-    use crate::scene_graph::Color;
-    use crate::shading::MaterialKind;
-    use crate::texture::Texture;
+    use cga_gpu::scene::{Mesh, MeshParams};
+    use cga_gpu::scene_graph::Color;
+    use cga_gpu::shading::MaterialKind;
+    use cga_gpu::texture::Texture;
 
     const DEF_MAT: &str = "material(color=0xFFFFFF, roughness=0.5, metalness=0, \
 emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
@@ -417,7 +415,7 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
 
     fn rep(jsx: &str) -> String {
         let run = crate::jsx::run_jsx(jsx, None, "").expect("run");
-        run.scene.report(&run.camera, &run.tags, &run.kinematics)
+        scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics)
     }
 
     fn assert_has(rep: &str, line: &str) {
@@ -635,7 +633,7 @@ emissive=0x00FF00, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
             rotation_angle: 0.0,
             motor: None,
         }));
-        let rep = sc.report(&cam(), &TagRegistry::new(), &Kinematics::default());
+        let rep = scene_report(&sc, &cam(), &TagRegistry::new(), &Kinematics::default());
         assert_has(
             &rep,
             &format!(

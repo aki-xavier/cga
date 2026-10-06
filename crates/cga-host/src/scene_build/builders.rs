@@ -14,7 +14,7 @@ impl Builders {
     }
 
     pub(crate) fn local_bounds(&self, geo: &Geometry) -> Option<[[f64; 3]; 2]> {
-        crate::geometry_ops::geom_bounds(&geo.identity_params())
+        cga_gpu::geometry_ops::geom_bounds(&geo.identity_params())
     }
 
     pub(crate) fn resolve(
@@ -292,7 +292,9 @@ impl Builders {
                 ArgValue::Str(path) => {
                     if !path.is_empty() {
                         if self.asset_root.is_empty() {
-                            return Err("build: material.map needs an explicit asset_root".to_string());
+                            return Err(
+                                "build: material.map needs an explicit asset_root".to_string()
+                            );
                         }
                         tex = Some(texture_load(&format!("{}/{}", self.asset_root, path))?);
                     }

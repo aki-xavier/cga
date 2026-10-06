@@ -7,6 +7,7 @@ description = "Demo CLIs for the cga crates."
 [dependencies]
 cga-core = { path = "../cga-core" }
 cga-gpu = { path = "../cga-gpu" }
+cga-host = { path = "../cga-host" }
 mlx-rs = { workspace = true }
 rand = "0.9"
 clap = { version = "4", features = ["derive"] }

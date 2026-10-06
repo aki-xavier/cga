@@ -26,7 +26,7 @@ fn main() {
         Some(i) => &src[..i],
         None => ".",
     };
-    let scene = cga_gpu::run_jsx(&text, None, asset_root)
+    let scene = cga_host::run_jsx(&text, None, asset_root)
         .unwrap_or_else(|e| panic!("{e}"))
         .scene;
 

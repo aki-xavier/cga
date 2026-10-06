@@ -1,4 +1,4 @@
-use cga_gpu::*;
+use cga_host::*;
 use clap::Parser;
 
 #[derive(Parser)]
