@@ -292,12 +292,12 @@ impl Builders {
                 ArgValue::Str(path) => {
                     if !path.is_empty() {
                         if self.asset_root.is_empty() {
-                            return Err("CGS material.map needs an explicit asset_root".to_string());
+                            return Err("build: material.map needs an explicit asset_root".to_string());
                         }
                         tex = Some(texture_load(&format!("{}/{}", self.asset_root, path))?);
                     }
                 }
-                _ => return Err("CGS material.map needs a string path".to_string()),
+                _ => return Err("build: material.map needs a string path".to_string()),
             }
         }
         if let Some(u) = mat.get("unlit") {
