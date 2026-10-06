@@ -6,6 +6,18 @@ use crate::texture::WrapMode;
 use cga_core::GeometryParams;
 use mlx_rs::{ops, Array};
 
+/// 网格阴影测试的预算（像素×面数，无 BVH）；与 renderer 侧同量级。
+const MESH_SHADOW_BUDGET: usize = 100_000_000;
+
+/// 该遮挡物的面数（网格类）；非网格返回 0。
+fn mesh_face_count(p: &GeometryParams) -> usize {
+    match p {
+        GeometryParams::TrimeshParams(t) => t.v0.len(),
+        GeometryParams::BezierParams(b) => b.v0.len(),
+        _ => 0,
+    }
+}
+
 pub mod rast_result;
 pub use self::rast_result::*;
 pub mod prep;
@@ -32,14 +44,30 @@ pub fn rasterize_meshes(
     ambient: Option<Light>,
     occluders: &[GeometryParams],
     occluder_opacity: &[f32],
-    occluder_is_mesh: &[bool],
+    // 每个遮挡物对应的网格对象下标（`objs` 里的下标；-1 = 非网格）。
+    // 网格遮挡物只对“不属于该对象”的像素做阴影测试——否则大网格会拿
+    // 自己的全部命中像素对自己做 O(命中像素 × 面数) 的自遮挡测试。
+    occluder_mesh_obj: &[i32],
 ) -> RastResult {
+    let t_dbg = std::time::Instant::now();
+    let dbg = std::env::var("CGA_RAST_TIME").is_ok();
     let prep = prepare_faces(objs, camera, w, h, fx, fy, cx, cy);
+    if dbg {
+        eprintln!(
+            "  prep {:.0} ms, {} 面",
+            t_dbg.elapsed().as_secs_f64() * 1e3,
+            prep.cam_v.len()
+        );
+    }
     if prep.cam_v.is_empty() {
         return RastResult::empty(w, h);
     }
     let n = w * h;
+    let t_vis = std::time::Instant::now();
     let vis = gpu_visibility(&prep, w, h, fx, fy, cx, cy);
+    if dbg {
+        eprintln!("  vis {:.0} ms", t_vis.elapsed().as_secs_f64() * 1e3);
+    }
     let depth = vis.depth;
     let hit_f = ck(vis.hit.reshape(&[n]));
 
@@ -63,39 +91,76 @@ pub fn rasterize_meshes(
     let mat = ck(ck(vis.mat.reshape(&[n])).take_axis(&idx_h, 0));
     let mat_safe = ck(ops::clip(&mat, (0, (objs.len() as i32 - 1).max(0))));
 
-    // 哪些网格对象有命中像素（用于跳过自阴影）
+    // 命中像素的所属对象（自遮挡排除用）
     mat.eval().unwrap();
     let matv = mat.as_slice::<i32>();
-    let mut present: Vec<bool> = vec![false; objs.len()];
-    for &m in matv {
-        if m >= 0 {
-            present[m as usize] = true;
-        }
-    }
 
     // D1 阴影：与 renderer::nearest 的阴影循环同逻辑；网格遮挡物跳过自阴影
+    let t_sh = std::time::Instant::now();
+    if dbg {
+        eprintln!("  命中像素 k={k}");
+    }
     let p_s = ck(pos.add(&ck(nrm.multiply(&fs(1e-3)))));
+    // 每个网格遮挡物的“外来命中像素”下标（matv != 该对象），与光源无关，预计算一次
+    let mut other_idx: Vec<Option<(Array, usize)>> = Vec::with_capacity(occluders.len());
+    for (j, mo) in occluder_mesh_obj.iter().enumerate() {
+        if *mo >= 0 {
+            let v: Vec<i32> = (0..k)
+                .filter(|&i| matv[i] != *mo)
+                .map(|i| i as i32)
+                .collect();
+            let n = v.len();
+            other_idx.push(Some((Array::from_slice(&v, &[n as i32]), n)));
+        } else {
+            other_idx.push(None);
+        }
+        let _ = j;
+    }
     let mut shadow_vis: Vec<Array> = Vec::new();
     for light in lit {
         let (ld, _) = light.direction_at(&pos);
         let far = light.far(&pos);
         let mut v = ck(ops::ones::<f32>(&[k as i32]));
         for (j, params) in occluders.iter().enumerate() {
-            let only_j = (0..objs.len()).all(|i| i == j || !present[i]);
-            if occluder_is_mesh.get(j).copied().unwrap_or(false) && only_j {
-                continue; // 自身遮挡 = 自阴影：跳过（无 BVH，开销与面数成正比）
-            }
-            let (st, m) = geom_shadow(params, &p_s, &ld);
-            let occ = if far.ndim() == 1 {
-                ck(m.logical_and(&ck(st.lt(&far))))
-            } else {
-                m
+            let factor = |occ: &Array, st: &Array, far: &Array| {
+                let o = if far.ndim() == 1 {
+                    ck(occ.logical_and(&ck(st.lt(far))))
+                } else {
+                    occ.clone()
+                };
+                ck(ops::select(
+                    &o,
+                    &fs(1.0 - occluder_opacity[j] as f64),
+                    &fs(1.0),
+                ))
             };
-            v = ck(v.multiply(&ck(ops::select(
-                &occ,
-                &fs(1.0 - occluder_opacity[j] as f64),
-                &fs(1.0),
-            ))));
+            if let Some((idx_o, n_o)) = &other_idx[j] {
+                if *n_o == 0 {
+                    continue; // 该网格没有外来像素 → 自阴影跳过（无 BVH）
+                }
+                let faces = mesh_face_count(params);
+                if faces > 0 && n_o.saturating_mul(faces) > MESH_SHADOW_BUDGET {
+                    continue; // 工作量超预算（无 BVH 的确定性上限）
+                }
+                let pos_s = ck(pos.take_axis(idx_o, 0));
+                let nrm_s = ck(nrm.take_axis(idx_o, 0));
+                let p_s_s = ck(pos_s.add(&ck(nrm_s.multiply(&fs(1e-3)))));
+                let (ld_s, _) = light.direction_at(&pos_s);
+                let far_s = light.far(&pos_s);
+                let (st, m) = geom_shadow(params, &p_s_s, &ld_s);
+                let f_s = factor(&m, &st, &far_s);
+                // 合并回全量命中像素：v *= (1 + 散布(f_s - 1))
+                let delta = ck(ops::indexing::scatter_single(
+                    &ck(ops::zeros::<f32>(&[k as i32])),
+                    idx_o,
+                    &ck(ck(f_s.subtract(&fs(1.0))).reshape(&[*n_o as i32, 1])),
+                    0,
+                ));
+                v = ck(v.multiply(&ck(delta.add(&fs(1.0)))));
+            } else {
+                let (st, m) = geom_shadow(params, &p_s, &ld);
+                v = ck(v.multiply(&factor(&m, &st, &far)));
+            }
         }
         shadow_vis.push(v);
     }
@@ -120,6 +185,10 @@ pub fn rasterize_meshes(
     let expo = ck(ck(ck(ops::stack(&expo_arr, 0)).take_axis(&mat_safe, 0)).expand_dims(1));
     let op_px = ck(ck(ops::stack(&op_arr, 0)).take_axis(&mat_safe, 0));
 
+    if dbg {
+        eprintln!("  阴影 {:.0} ms", t_sh.elapsed().as_secs_f64() * 1e3);
+    }
+    let t_shade = std::time::Instant::now();
     let vv =
         ck(ck(pos.negative()).divide(&ck(ck(ck(pos.multiply(&pos)).sum_axes(&[-1], true)).sqrt())));
     let mut shaded = shade_batched(
@@ -149,6 +218,9 @@ pub fn rasterize_meshes(
         }
     }
 
+    if dbg {
+        eprintln!("  着色 {:.0} ms", t_shade.elapsed().as_secs_f64() * 1e3);
+    }
     // 写回全分辨率缓冲（命中像素下标唯一，普通 scatter 即可）
     let color_full = ck(ops::zeros::<f32>(&[n, 3]));
     let color = ck(ops::indexing::scatter_single(
@@ -624,6 +696,67 @@ mod tests {
         }
         let rmse = (se / cnt as f64).sqrt();
         assert!(rmse < 0.01, "颜色 RMSE {rmse}");
+    }
+
+    #[test]
+    fn test_gpu_subdivision_matches_cpu() {
+        // 大屏占三角形触发预处理细分：细分无损，结果仍与 CPU 参考一致。
+        let (w, h) = (160i32, 120i32);
+        let tri = red_mesh(TrimeshGeometry::new(
+            &[[-2.0, -2.0, 2.0], [2.0, -2.0, 2.0], [0.0, 2.0, 2.0]],
+            &[[0, 1, 2]],
+        ));
+        let cam = test_cam(w, h);
+        let lit = test_lights();
+        let (dir, amb) = split_ambient(&lit);
+        let fy = h as f64 / (2.0 * (40.0_f64.to_radians() / 2.0).tan());
+        let fx = fy * cam.aspect;
+        let (cx, cy) = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
+        let gpu = rasterize_meshes(
+            &[tri.clone()],
+            &cam,
+            w,
+            h,
+            fx,
+            fy,
+            cx,
+            cy,
+            &dir,
+            amb,
+            &[],
+            &[],
+            &[],
+        );
+        let cpu = rasterize_meshes_cpu(&[tri], &cam, w, h, fx, fy, cx, cy, &dir, amb);
+        for a in [
+            &gpu.depth, &gpu.hit, &gpu.color, &cpu.depth, &cpu.hit, &cpu.color,
+        ] {
+            a.eval().unwrap();
+        }
+        let gh = gpu.hit.as_slice::<bool>();
+        let ch = cpu.hit.as_slice::<bool>();
+        let agree = gh.iter().zip(ch).filter(|(a, b)| a == b).count();
+        assert!(
+            agree as f64 >= 0.999 * gh.len() as f64,
+            "细分后 hit 一致率 {:.4}",
+            agree as f64 / gh.len() as f64
+        );
+        let gd = gpu.depth.as_slice::<f32>();
+        let cd = cpu.depth.as_slice::<f32>();
+        let gc = gpu.color.as_slice::<f32>();
+        let cc = cpu.color.as_slice::<f32>();
+        for i in 0..gh.len() {
+            if gh[i] && ch[i] {
+                let rel = ((gd[i] - cd[i]) as f64).abs() / (cd[i] as f64);
+                assert!(rel < 2e-3, "细分后深度应一致：{} vs {}", gd[i], cd[i]);
+                for c in 0..3 {
+                    assert!(
+                        (gc[i * 3 + c] - cc[i * 3 + c]).abs() < 0.02,
+                        "细分不应改变颜色"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

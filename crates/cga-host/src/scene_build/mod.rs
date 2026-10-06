@@ -1,6 +1,5 @@
-//! Scene-build residue of the retired CGS parser (R4): value types, builders,
-//! kinematics, face/bounds helpers. Text parsing lives in the JSX host
-//! (crate::jsx); CGS text syntax is frozen and no longer parsed.
+//! Scene building: value types, builders, kinematics, face/bounds helpers, and
+//! the build-time CSG bake. Text parsing lives in the JSX host (crate::jsx).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -520,9 +519,106 @@ fn sig_defaults(name: &str) -> HashMap<String, ArgValue> {
     m
 }
 
+/// 一个几何树里是否有网格类后代（Trimesh / 曲面细分 Bezier）。
+/// 递归穿过 CSG 子节点与仿射包装（instances/drill 会包一层 AffineGeometry）。
+pub fn has_mesh_descendant(g: &Geometry) -> bool {
+    match g {
+        Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_) => true,
+        Geometry::CsgGeometry(c) => c.children.iter().any(has_mesh_descendant),
+        Geometry::AffineGeometry(a) => a.inner.iter().any(has_mesh_descendant),
+        _ => false,
+    }
+}
+
+/// CSG 含网格类后代时，光线路径要对每个光线做区间分类 + 曲面 winding
+/// （O(光线×面数)，实测 1.2M 光线 × 32 面 ≈ 20 s）。构建期把整棵布尔
+/// 烘焙成三角网（marching tetrahedra，`cells` 为最长轴网格数），改走光栅路径。
+/// 返回 None 表示不适用（无网格后代 / 无界 / 网格超限 / 字段不可判定），
+/// 调用方保持原 CSG（射线路径仍然正确，只是慢）。
+pub fn bake_csg_if_mesh(g: &Geometry, cells: usize) -> Option<Geometry> {
+    if !matches!(g, Geometry::CsgGeometry(_)) || !has_mesh_descendant(g) {
+        return None;
+    }
+    if cells == 0 {
+        return None;
+    }
+    let params = g.identity_params();
+    let [lo, hi] = params.bounds()?;
+    let span = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
+    if !(span > 0.0) || !span.is_finite() {
+        return None;
+    }
+    let step = span / cells as f64;
+    let mesh = params.bake(step).ok()?;
+    // marching tetrahedra 在等值面正好穿过网格节点时会输出零面积面
+    // （顶点重复），TrimeshGeometry 拒绝此类面——过滤掉（bake 的拓扑审计
+    // 同样把零面积面排除在计数外）。
+    let verts = &mesh.vertices;
+    let faces: Vec<[i32; 3]> = mesh
+        .faces
+        .iter()
+        .copied()
+        .filter(|f| {
+            if f[0] == f[1] || f[1] == f[2] || f[0] == f[2] {
+                return false;
+            }
+            let a = verts[f[0] as usize];
+            let b = verts[f[1] as usize];
+            let c = verts[f[2] as usize];
+            let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cx = e1[1] * e2[2] - e1[2] * e2[1];
+            let cy = e1[2] * e2[0] - e1[0] * e2[2];
+            let cz = e1[0] * e2[1] - e1[1] * e2[0];
+            let cl = (cx * cx + cy * cy + cz * cz).sqrt();
+            cl >= 1e-12 // 与 TrimeshGeometry::new 的判据一致
+        })
+        .collect();
+    if faces.is_empty() {
+        return None;
+    }
+    Some(Geometry::TrimeshGeometry(TrimeshGeometry::new(
+        verts, &faces,
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bake_csg_if_mesh() {
+        // 4x4 控制网格（Bezier 面片要求 16 点）
+        let mut pts: Vec<[f64; 3]> = Vec::new();
+        for i in 0..4 {
+            for j in 0..4 {
+                pts.push([
+                    -1.0 + i as f64 * 2.0 / 3.0,
+                    0.15 * ((i as f64 - 1.5).powi(2) + (j as f64 - 1.5).powi(2)) / 2.25,
+                    -1.0 + j as f64 * 2.0 / 3.0,
+                ]);
+            }
+        }
+        let tool = Geometry::BezierPatchGeometry(BezierPatchGeometry::new(&pts, 0.6, 2));
+        let solid = Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0));
+        let csg_mesh = Geometry::CsgGeometry(cga_core::CsgGeometry::new(
+            CsgOp::Difference,
+            vec![solid.clone(), tool],
+        ));
+        // 含网格后代 → 烘焙成三角网
+        match bake_csg_if_mesh(&csg_mesh, 24) {
+            Some(Geometry::TrimeshGeometry(t)) => assert!(t.n_faces > 100, "面数 {}", t.n_faces),
+            other => panic!("应烘焙成 trimesh，得到 {other:?}"),
+        }
+        // 纯解析 CSG 不烘焙（射线路径精确且足够快）
+        let csg_analytic = Geometry::CsgGeometry(cga_core::CsgGeometry::new(
+            CsgOp::Difference,
+            vec![solid, Geometry::SphereGeometry(SphereGeometry::new(0.8))],
+        ));
+        assert!(bake_csg_if_mesh(&csg_analytic, 24).is_none());
+        // cells = 0 关闭烘焙
+        assert!(bake_csg_if_mesh(&csg_mesh, 0).is_none());
+    }
 
     fn geom_kind(g: &Geometry) -> &'static str {
         match g {

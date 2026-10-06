@@ -608,6 +608,8 @@ struct Builder {
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
     pose: HashMap<String, f64>,
+    /// 含网格后代的 CSG 构建期烘焙网格数（最长轴），0 = 关闭（保持射线路径）。
+    bake_cells: usize,
 }
 
 fn mat4_mul(a: [f64; 16], b: [f64; 16]) -> [f64; 16] {
@@ -700,6 +702,12 @@ impl Builder {
                     } else if let Some(c) = p_str(el, "background")? {
                         scene.background = parse_hex(&c)?;
                     }
+                    if let Some(bc) = p_num(el, "bake")? {
+                        if bc < 0.0 {
+                            return Err(format!("JSX: scene bake must be >= 0, got {bc}"));
+                        }
+                        self.bake_cells = bc as usize;
+                    }
                 }
                 for c in &el.children {
                     self.walk(c, ctx, mat, scene, cam)?;
@@ -739,12 +747,11 @@ impl Builder {
                     _ => cga_core::CsgOp::Intersection,
                 };
                 let material = self.material_for(el, mat)?;
-                self.emit(
-                    scene,
-                    cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids)),
-                    cga_core::mat4_identity(),
-                    material,
-                );
+                let geo = cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids));
+                // 含网格后代的布尔：构建期烘焙成三角网 → 走光栅路径
+                let geo =
+                    crate::scene_build::bake_csg_if_mesh(&geo, self.bake_cells).unwrap_or(geo);
+                self.emit(scene, geo, cga_core::mat4_identity(), material);
                 Ok(())
             }
             "ambient_light" | "directional_light" | "point_light" => {
@@ -1673,6 +1680,7 @@ pub fn run_jsx_pose(
         pending_tags: Vec::new(),
         rules,
         pose: pose.iter().cloned().collect(),
+        bake_cells: 96,
     };
     b.walk(
         &root,
@@ -1755,6 +1763,45 @@ mod tests {
             assert!(out.png.starts_with(&[137, 80, 78, 71]), "{name}: PNG magic");
             assert!(out.png.len() > 1000, "{name}: 非空渲染");
         }
+    }
+
+    #[test]
+    fn csg_with_bezier_is_baked() {
+        // 含曲面的布尔在构建期烘焙成三角网（走光栅）；bake={0} 保持 CSG（射线）
+        let mut pts: Vec<String> = Vec::new();
+        for i in 0..4 {
+            for j in 0..4 {
+                let x = -1.0 + i as f64 * 2.0 / 3.0;
+                let z = -1.0 + j as f64 * 2.0 / 3.0;
+                pts.push(format!("[{x:.4},0,{z:.4}]"));
+            }
+        }
+        let body = |bake: &str| {
+            format!(
+                "const CTRL = [{}];\nexport default (<scene{bake}><difference>\
+                 <box s={{[2,2,2]}} /><bezier points={{CTRL}} thickness={{0.6}} div={{2}} />\
+                 </difference></scene>);",
+                pts.join(",")
+            )
+        };
+        let run = crate::jsx::run_jsx(&body(""), None, ".").expect("run_jsx");
+        assert!(
+            matches!(
+                run.scene.objects[0].geometry,
+                cga_core::Geometry::TrimeshGeometry(_)
+            ),
+            "默认应烘焙：{:?}",
+            run.scene.objects[0].geometry
+        );
+        let run0 = crate::jsx::run_jsx(&body(" bake={0}"), None, ".").expect("run_jsx");
+        assert!(
+            matches!(
+                run0.scene.objects[0].geometry,
+                cga_core::Geometry::CsgGeometry(_)
+            ),
+            "bake=0 应保持 CSG：{:?}",
+            run0.scene.objects[0].geometry
+        );
     }
 
     #[test]

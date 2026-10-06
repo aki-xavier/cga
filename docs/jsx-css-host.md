@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # JSX + CSS 场景宿主：React 模式前端
 
-状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-gpu/src/jsx/`、CLI `render_jsx` / `report_jsx` / `bake_jsx`。
+状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-host/src/jsx/`、CLI `render_jsx` / `report_jsx` / `bake_jsx`。
 R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_to_urdf`）改出 JSX；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
@@ -33,12 +33,15 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_
 | `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid Bezier Extrude Loft Mesh>` | 图元（参数校验复用 scene_build builder） |
 | `<Translate t>` `<Rotate axis angle>` `<Scale s>` `<Mirror axis>` | 修饰符（组合 4×4 ctx） |
 | `<Material …>` | 材质合并作用于子树 |
-| `<Union/Difference/Intersection>` | CSG 块（≥2 子几何） |
+| `<Union/Difference/Intersection>` | CSG 块（≥2 子几何）；含网格类后代（mesh/bezier）时在**构建期自动烘焙**成三角网走光栅路径 |
+| `<scene bake={N}>` | CSG 烘焙分辨率：最长轴 N 格（默认 96，`bake={0}` 关闭烘焙保持解析 CSG） |
 | `<AmbientLight/DirectionalLight/PointLight/Camera/Background>` | 灯光与相机 |
 | `<Joint name type axis at rpy q limit pitch>` | P1 关节（嵌套成父子树） |
 | `<Gear driver driven ratio offset>` | P2 齿轮耦合 |
 | `<Cam driver driven driverProfile drivenProfile>` | P3 凸轮接触求解（profile 是普通对象 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}`） |
 | `<Tag name>` | 标签注册表 |
+
+**CSG 自动烘焙**：CSG 子树里出现网格类叶（`mesh`/`bezier` 厚壳）时，解析路径要对每条光线做区间分类并对曲面算 winding（O(光线×面数)，实测 1.2M 光线 × 32 面 ≈ 20 s）。构建期用 `GeometryParams::bake`（marching tetrahedra，确定性）把该布尔烘焙成 `TrimeshGeometry`，主可见性转由光栅路径负责；`<scene bake={N}>` 控制网格密度。烘焙不可行时（无界、网格超限、字段不可判定）保持原 CSG。网格阴影测试（光线路径与光栅路径）带 1e8 光线/像素×面数预算：无 BVH，超预算的遮挡物跳过（确定性上限）。
 
 v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合选择器。需要时各自单独立项。
 

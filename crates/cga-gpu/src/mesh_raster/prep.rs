@@ -6,6 +6,12 @@ use cga_core::{transform_point, Geometry, TriUvs, TrimeshGeometry};
 /// 近平面：与光线路径的 t>1e-6 同量级（光线路径不看 camera.near）。
 pub(crate) const Z_NEAR: f64 = 1e-4;
 
+/// 单面片窗口上限（屏幕像素）。分桶窗口法对跨越整屏的大三角形会退化成
+/// O(bbox 面积 × 面数)（行进四面体正好产生这种大面片），因此在 CPU 预处理
+/// 时把大面片递归四分——相机空间位置与 uv 都是线性插值，细分无损。
+const MAX_FACE_WINDOW_PX: f64 = 4096.0;
+const MAX_SUBDIV_DEPTH: u8 = 6;
+
 /// 全局面表（一个场景所有网格对象的面拼接）。
 #[derive(Default)]
 pub(crate) struct FacePrep {
@@ -125,10 +131,10 @@ pub(crate) fn prepare_faces(
                 af[8] * n[0] + af[9] * n[1] + af[10] * n[2],
             ];
             if cv[0][2] >= Z_NEAR && cv[1][2] >= Z_NEAR && cv[2][2] >= Z_NEAR {
-                push_face(&mut out, cv, cn, uv, oi, w, h, fx, fy, cx, cy);
+                push_face(&mut out, cv, cn, uv, oi, w, h, fx, fy, cx, cy, 0);
             } else if cv[0][2] < Z_NEAR || cv[1][2] < Z_NEAR || cv[2][2] < Z_NEAR {
                 for (ct, cu) in clip_tri_near(cv, uv, Z_NEAR) {
-                    push_face(&mut out, ct, cn, cu, oi, w, h, fx, fy, cx, cy);
+                    push_face(&mut out, ct, cn, cu, oi, w, h, fx, fy, cx, cy, 0);
                 }
             }
         }
@@ -149,6 +155,7 @@ fn push_face(
     fy: f64,
     cx: f64,
     cy: f64,
+    depth: u8,
 ) {
     let mut s = [0f64; 6];
     for i in 0..3 {
@@ -161,6 +168,30 @@ fn push_face(
     let y1 = s[1].max(s[3]).max(s[5]).ceil().min(f64::from(h - 1)) as i32;
     if x1 < x0 || y1 < y0 {
         return; // 完全屏外
+    }
+    // 大屏占面片：递归四分（无损），让窗口保持小
+    let window_px = f64::from(x1 - x0 + 1) * f64::from(y1 - y0 + 1);
+    if window_px > MAX_FACE_WINDOW_PX && depth < MAX_SUBDIV_DEPTH {
+        let mid = |a: [f64; 3], b: [f64; 3]| {
+            [
+                0.5 * (a[0] + b[0]),
+                0.5 * (a[1] + b[1]),
+                0.5 * (a[2] + b[2]),
+            ]
+        };
+        let mid2 = |a: [f64; 2], b: [f64; 2]| [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+        let m01 = (mid(cv[0], cv[1]), mid2(uv[0], uv[1]));
+        let m12 = (mid(cv[1], cv[2]), mid2(uv[1], uv[2]));
+        let m20 = (mid(cv[2], cv[0]), mid2(uv[2], uv[0]));
+        for (tv, tu) in [
+            ([cv[0], m01.0, m20.0], [uv[0], m01.1, m20.1]),
+            ([m01.0, cv[1], m12.0], [m01.1, uv[1], m12.1]),
+            ([m20.0, m12.0, cv[2]], [m20.1, m12.1, uv[2]]),
+            ([m01.0, m12.0, m20.0], [m01.1, m12.1, m20.1]),
+        ] {
+            push_face(out, tv, cn, tu, oi, w, h, fx, fy, cx, cy, depth + 1);
+        }
+        return;
     }
     out.cam_v.push([
         cv[0][0] as f32,

@@ -1,5 +1,23 @@
 use super::*;
 
+/// 网格阴影测试的光线×面数预算（无 BVH，实测约 1.4e8 ray-face/s）。
+const MESH_SHADOW_BUDGET: usize = 100_000_000;
+
+/// 该遮挡物的面数（网格类）；非网格返回 0。
+fn mesh_face_count(p: &GeometryParams) -> usize {
+    match p {
+        GeometryParams::TrimeshParams(t) => t.v0.len(),
+        GeometryParams::BezierParams(b) => b.v0.len(),
+        _ => 0,
+    }
+}
+
+/// 网格遮挡物的阴影测试是否超预算（超了就跳过，保持确定性上限）。
+fn mesh_shadow_over_budget(p: &GeometryParams, n_rays: i32) -> bool {
+    let f = mesh_face_count(p);
+    f > 0 && (n_rays as usize).saturating_mul(f) > MESH_SHADOW_BUDGET
+}
+
 #[derive(Debug)]
 pub struct Renderer {
     pub width: i32,
@@ -96,11 +114,13 @@ impl Renderer {
         }
 
         let mut mesh_objs: Vec<Mesh> = Vec::new();
-        for obj in &scene.objects {
+        let mut mesh_of_scene: Vec<i32> = vec![-1; scene.objects.len()];
+        for (i, obj) in scene.objects.iter().enumerate() {
             if matches!(
                 obj.geometry,
                 Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
             ) {
+                mesh_of_scene[i] = mesh_objs.len() as i32;
                 mesh_objs.push(obj.clone());
             }
         }
@@ -113,17 +133,16 @@ impl Renderer {
         let mut stated_list: Vec<GeometryParams> = Vec::with_capacity(s2.objects.len());
         let mut opacities: Vec<f32> = Vec::with_capacity(s2.objects.len());
         let mut is_mesh: Vec<bool> = Vec::with_capacity(s2.objects.len());
-        for obj in &s2.objects {
+        let mut occluder_mesh_obj: Vec<i32> = Vec::with_capacity(s2.objects.len());
+        for (i, obj) in s2.objects.iter().enumerate() {
+            occluder_mesh_obj.push(mesh_of_scene[i]);
             params_list.push(geom_to_camera(
                 &obj.geometry,
                 &camera.motor.compose(&obj.motor()),
             ));
             stated_list.push(geom_to_camera(&obj.geometry, &obj.motor()));
             opacities.push(obj.material.opacity as f32);
-            is_mesh.push(matches!(
-                obj.geometry,
-                Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
-            ));
+            is_mesh.push(mesh_of_scene[i] >= 0);
         }
         let in_medium = ck(ops::zeros::<bool>(&[n_rays]));
         let sigma = ck(ops::zeros::<f32>(&[n_rays]));
@@ -170,7 +189,7 @@ impl Renderer {
                 ambient,
                 &params_list,
                 &opacities,
-                &is_mesh,
+                &occluder_mesh_obj,
             );
             let closer = ck(ck(rr.depth.lt(&dz)).logical_and(&rr.hit));
             // D4：半透明网格与光线结果 alpha 混合（无折射弯曲的近似，见 docs）
@@ -439,8 +458,12 @@ impl Renderer {
             let far = light.far(&p);
             let mut v = ck(ops::ones::<f32>(&[n_rays]));
             for (j, obj) in objs.iter().enumerate() {
-                if is_mesh.get(j).copied().unwrap_or(false) && !any_hit {
-                    continue; // 无命中 → 无表面需要阴影
+                if is_mesh.get(j).copied().unwrap_or(false) {
+                    // 无命中 → 无表面需要可见性；工作量（光线×面数）超预算 →
+                    // 跳过（网格阴影无 BVH，是 O(光线×面数)；预算是确定性上限）
+                    if !any_hit || mesh_shadow_over_budget(&params_list[j], n_rays) {
+                        continue;
+                    }
                 }
                 let (st, m) = geom_shadow(&params_list[j], &p_s, &ld);
                 let occ = if far.ndim() == 1 {
