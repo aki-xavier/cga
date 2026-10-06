@@ -95,17 +95,15 @@ impl Renderer {
             }
         }
 
-        let mut ray_objs: Vec<Mesh> = Vec::new();
         let mut mesh_objs: Vec<Mesh> = Vec::new();
         for obj in &scene.objects {
             if matches!(obj.geometry, Geometry::TrimeshGeometry(_)) {
                 mesh_objs.push(obj.clone());
-            } else {
-                ray_objs.push(obj.clone());
             }
         }
-        let mut s2 = scene.clone();
-        s2.objects = ray_objs;
+        // 追踪场景保留全部对象：主可见性在 nearest(primary) 里跳过网格
+        // （由光栅路径负责），但网格参与阴影遮挡（D2）与反射/折射（D3）。
+        let s2 = scene.clone();
         let in_medium = ck(ops::zeros::<bool>(&[n_rays]));
         let sigma = ck(ops::zeros::<f32>(&[n_rays]));
         let (mut rgb, t, truth) =
@@ -294,6 +292,11 @@ impl Renderer {
             let wm = cam.motor.compose(&obj.motor());
             let params = geom_to_camera(&obj.geometry, &wm);
             params_list.push(params.clone());
+            if primary && matches!(obj.geometry, Geometry::TrimeshGeometry(_)) {
+                // 主可见性交给光栅路径；网格仅在阴影（下方）和
+                // 非主光线（反射/折射，primary=false）里参与求交。
+                continue;
+            }
             if primary {
                 if let Some(b) = geom_bounds(&params) {
                     if b[1][2] <= 1e-6 {

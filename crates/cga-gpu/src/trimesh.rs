@@ -53,7 +53,19 @@ pub(crate) fn trimesh_mt_all(
     (tall, nall, valid)
 }
 
-pub fn trimesh_intersect(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+/// Peak-bytes budget for the (n_rays, f, 3) f32 temporaries of one ray chunk.
+/// `trimesh_mt_all` keeps ~6 such temporaries live; the ray axis is chunked
+/// so that rays×faces never materializes past this budget (the 2026-10 bench:
+/// unchunked 307k rays × 1.9k faces already swap-thrashed a 24 GB machine).
+pub(crate) const RAY_CHUNK_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+fn ray_chunk_len(n_faces: usize, budget: usize) -> usize {
+    // ~6 live (n,f,3) f32 temporaries inside trimesh_mt_all + reduce outputs.
+    let per_ray = n_faces.max(1) * 3 * 4 * 6;
+    (budget / per_ray.max(1)).max(1024)
+}
+
+fn trimesh_intersect_all(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (tv0, te1, te2, tnrm) = tri_mlx(p);
     let (tall, nall, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &o_l, &d_u);
@@ -80,12 +92,106 @@ pub fn trimesh_intersect(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Arr
     (t, n, mask)
 }
 
-pub fn trimesh_shadow(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array) {
+pub(crate) fn trimesh_shadow_all(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (tv0, te1, te2, tnrm) = tri_mlx(p);
     let (tall, _, _) = trimesh_mt_all(&tv0, &te1, &te2, &tnrm, &o_l, &d_u);
     let t_l = ck(tall.min_axes(&[-1], false));
     (ck(t_l.divide(col(&lam, 0))), ck(t_l.is_finite()))
+}
+
+/// Ray-axis chunked dispatch: split the (N,3) ray bundle into slices, run one
+/// shot per slice eagerly, concatenate. Bitwise-equal to a single shot (every
+/// ray flows through the identical op sequence exactly once).
+fn chunk_rays<T>(
+    n: usize,
+    chunk: usize,
+    o: &Array,
+    d: &Array,
+    f: impl Fn(&Array, &Array) -> T,
+    cat: impl Fn(&[T]) -> T,
+) -> T {
+    if n <= chunk {
+        return f(o, d);
+    }
+    o.eval().unwrap();
+    d.eval().unwrap();
+    let of: &[f32] = o.as_slice();
+    let df: &[f32] = d.as_slice();
+    let mut parts: Vec<T> = Vec::new();
+    for i in 0..n.div_ceil(chunk) {
+        let lo = i * chunk;
+        let hi = (lo + chunk).min(n);
+        let oc = Array::from_slice(&of[lo * 3..hi * 3], &[(hi - lo) as i32, 3]);
+        let dc = Array::from_slice(&df[lo * 3..hi * 3], &[(hi - lo) as i32, 3]);
+        parts.push(f(&oc, &dc));
+    }
+    cat(&parts)
+}
+
+pub fn trimesh_intersect(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    self::trimesh_intersect_chunked(p, o, d, RAY_CHUNK_BYTES)
+}
+
+pub(crate) fn trimesh_intersect_chunked(
+    p: &TrimeshParams,
+    o: &Array,
+    d: &Array,
+    budget: usize,
+) -> (Array, Array, Array) {
+    let n = o.shape()[0] as usize;
+    let chunk = ray_chunk_len(p.v0.len(), budget);
+    chunk_rays::<(Array, Array, Array)>(
+        n,
+        chunk,
+        o,
+        d,
+        |oc, dc| {
+            let r = trimesh_intersect_all(p, oc, dc);
+            r.0.eval().unwrap();
+            r.1.eval().unwrap();
+            r.2.eval().unwrap();
+            r
+        },
+        |parts| {
+            if parts.len() == 1 {
+                return parts.first().unwrap().clone();
+            }
+            let ts: Vec<&Array> = parts.iter().map(|p| &p.0).collect();
+            let ns: Vec<&Array> = parts.iter().map(|p| &p.1).collect();
+            let ms: Vec<&Array> = parts.iter().map(|p| &p.2).collect();
+            (
+                ck(ops::concatenate(&ts, 0)),
+                ck(ops::concatenate(&ns, 0)),
+                ck(ops::concatenate(&ms, 0)),
+            )
+        },
+    )
+}
+
+pub fn trimesh_shadow(p: &TrimeshParams, o: &Array, d: &Array) -> (Array, Array) {
+    let n = o.shape()[0] as usize;
+    let chunk = ray_chunk_len(p.v0.len(), RAY_CHUNK_BYTES);
+    chunk_rays::<(Array, Array)>(
+        n,
+        chunk,
+        o,
+        d,
+        |oc, dc| {
+            let r = trimesh_shadow_all(p, oc, dc);
+            r.0.eval().unwrap();
+            r.1.eval().unwrap();
+            r
+        },
+        |parts| {
+            if parts.len() == 1 {
+                return parts.first().unwrap().clone();
+            }
+            let ts: Vec<&Array> = parts.iter().map(|p| &p.0).collect();
+            let ms: Vec<&Array> = parts.iter().map(|p| &p.1).collect();
+            (ck(ops::concatenate(&ts, 0)), ck(ops::concatenate(&ms, 0)))
+        },
+    )
 }
 
 pub fn trimesh_uv(_p: &TrimeshParams, pos: &Array, _n: &Array) -> Array {
@@ -251,6 +357,81 @@ mod tests {
             &[[0.0, 0.0, 1.0], [2.0, 0.0, 1.0], [0.0, 2.0, 1.0]],
             &[[0, 1, 2]],
         ))
+    }
+
+    #[test]
+    fn test_chunked_intersect_bitwise_equal() {
+        // 小网格 + 多光线 + 极小预算 → 强制多块；结果必须与单发逐位一致。
+        let g = tm_triangle();
+        let p = match crate::geom_to_camera(&g, &Multivector::identity()) {
+            cga_core::GeometryParams::TrimeshParams(tp) => tp,
+            _ => panic!("trimesh expected"),
+        };
+        let n = 300usize;
+        let od = vec![0f32; n * 3];
+        let mut dd = vec![0f32; n * 3];
+        for i in 0..n {
+            let x = (i % 20) as f32 * 0.1 - 0.5;
+            let y = (i / 20) as f32 * 0.1 - 0.5;
+            dd[i * 3] = x * 0.1;
+            dd[i * 3 + 1] = y * 0.1;
+            dd[i * 3 + 2] = 1.0;
+        }
+        let o = Array::from_slice(&od, &[n as i32, 3]);
+        let d = Array::from_slice(&dd, &[n as i32, 3]);
+        let (t1, n1, m1) = trimesh_intersect_all(&p, &o, &d);
+        // 预算 20_000B：chunk = 20000/(1面*72B) = 277 < 300 → 2 块
+        let (t2, n2, m2) = trimesh_intersect_chunked(&p, &o, &d, 20_000);
+        for arr in [&t1, &n1, &m1, &t2, &n2, &m2] {
+            arr.eval().unwrap();
+        }
+        assert_eq!(t1.as_slice::<f32>(), t2.as_slice::<f32>());
+        assert_eq!(n1.as_slice::<f32>(), n2.as_slice::<f32>());
+        assert_eq!(m1.as_slice::<bool>(), m2.as_slice::<bool>());
+    }
+
+    #[test]
+    fn test_chunked_shadow_bitwise_equal() {
+        let g = tm_triangle();
+        let p = match crate::geom_to_camera(&g, &Multivector::identity()) {
+            cga_core::GeometryParams::TrimeshParams(tp) => tp,
+            _ => panic!("trimesh expected"),
+        };
+        let n = 300usize;
+        let mut od = vec![0f32; n * 3];
+        let mut dd = vec![0f32; n * 3];
+        for i in 0..n {
+            od[i * 3 + 1] = -1.0;
+            dd[i * 3] = (i % 20) as f32 * 0.01;
+            dd[i * 3 + 1] = 1.0;
+            dd[i * 3 + 2] = (i / 20) as f32 * 0.01;
+        }
+        let o = Array::from_slice(&od, &[n as i32, 3]);
+        let d = Array::from_slice(&dd, &[n as i32, 3]);
+        let (t1, m1) = trimesh_shadow_all(&p, &o, &d);
+        let o2 = Array::from_slice(&od, &[n as i32, 3]);
+        let d2 = Array::from_slice(&dd, &[n as i32, 3]);
+        // 直接以相同预算走 chunk_rays（trimesh_shadow 用全局预算，此处验证分块机制）
+        let (t2, m2) = chunk_rays(
+            n,
+            69,
+            &o2,
+            &d2,
+            |oc, dc| trimesh_shadow_all(&p, oc, dc),
+            |parts| {
+                let ts: Vec<&Array> = parts.iter().map(|p| &p.0).collect();
+                let ms: Vec<&Array> = parts.iter().map(|p| &p.1).collect();
+                (
+                    ck(ops::concatenate(&ts, 0)),
+                    ck(ops::concatenate(&ms, 0)),
+                )
+            },
+        );
+        for arr in [&t1, &m1, &t2, &m2] {
+            arr.eval().unwrap();
+        }
+        assert_eq!(t1.as_slice::<f32>(), t2.as_slice::<f32>());
+        assert_eq!(m1.as_slice::<bool>(), m2.as_slice::<bool>());
     }
 
     #[test]

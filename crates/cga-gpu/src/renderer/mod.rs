@@ -472,4 +472,74 @@ mod tests {
         let want = rq_linear_to_srgb255(0.2);
         assert!((f64::from(p[0]) - f64::from(want)).abs() <= 2.0);
     }
+
+    #[test]
+    fn test_render_trimesh_casts_shadow() {
+        // D2：网格遮挡物在光线追踪的平面上投出本影。
+        let mut sc = rq_shadow_scene(None);
+        let verts: [[f64; 3]; 4] = [
+            [1.5, 1.5, 2.5],
+            [2.5, 1.5, 2.5],
+            [2.5, 1.5, 3.5],
+            [1.5, 1.5, 3.5],
+        ];
+        let faces: [[i32; 3]; 2] = [[0, 1, 2], [0, 2, 3]];
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+            material: std_red_material(),
+            position: [0.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut r = Renderer::new(96, 96, 1, 3);
+        let img = r.render(sc, rq_shadow_cam());
+        let p = rq_px(&img, 96, 48, 48);
+        let want = rq_linear_to_srgb255(0.2);
+        assert!((f64::from(p[0]) - f64::from(want)).abs() <= 2.0);
+    }
+
+    #[test]
+    fn test_render_trimesh_visible_through_glass() {
+        // D3：折射光线（depth>0）里网格参与求交——透过玻璃球可见网格墙。
+        let mut sc = Scene::new(None); // 天蓝背景：无网格时中心 = 蓝
+        let verts: [[f64; 3]; 4] = [
+            [-4.0, -4.0, 4.0],
+            [4.0, -4.0, 4.0],
+            [4.0, 4.0, 4.0],
+            [-4.0, 4.0, 4.0],
+        ];
+        let faces: [[i32; 3]; 2] = [[0, 2, 1], [0, 3, 2]]; // 法线朝 -z（向相机）
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::TrimeshGeometry(TrimeshGeometry::new(&verts, &faces)),
+            material: Material::basic(Color::from_hex(0xCC3333), 1.0),
+            position: [0.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.8)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0xAAD4FF),
+                roughness: 0.5,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 0.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0, 0.0, 2.2],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut r = Renderer::new(64, 64, 1, 3);
+        let img = r.render(sc, rq_head_on_cam());
+        let p = rq_px(&img, 64, 32, 32);
+        assert!(
+            p[0] > p[2] + 60.0,
+            "中心像素应为折射所见红墙，得到 {p:?}（无 D3 时是天蓝背景）"
+        );
+    }
 }
