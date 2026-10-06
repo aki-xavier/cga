@@ -86,7 +86,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 206 tests pass.
+   Result: all 208 tests pass.
 
 2. Render the smoke scene:
 
@@ -148,6 +148,7 @@ cargo run --release -p cga-examples --bin render_jsx -- examples/jsx/orbit.jsx o
 
 Rules:
 
+- Ray tracing cost is `objects × rays × lights × (1 + secondary bounces)`. Per-object screen-space ray subsetting (frustum culling) now applies to primary rays, and per-object bounding-sphere subsetting to shadow rays: 500 primitives 5.9 s → 1.1 s, `building.jsx` 26.3 s → 3.0 s, `primitives.jsx` 4.6 s → 0.17 s. Culling is conservative (pixel-identical); `CGA_NO_CULL=1` renders in reference mode with culling off.
 - `<scene bake={N}>`: a boolean whose subtree contains a mesh leaf (`mesh` / thick `bezier`) is baked at build time into a triangle mesh (`GeometryParams::bake`, marching tetrahedra) and drawn by the raster path. `N` = grid cells along the longest axis (default 96); `bake={0}` keeps the analytic CSG. Without it such a boolean costs O(rays × faces) per frame (measured ≈ 20 s for 1.2 M rays × 32 faces); with it, `freeform.jsx` renders in ≈ 0.4 s.
 - Elements: primitives `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid/bezier/extrude/loft/mesh`, modifiers `translate/rotate/scale/mirror/material`, CSG `union/difference/intersection`, lights, `camera`, `background`, `joint/gear/cam`, `tag/drill/instances/when`.
 - `export default <element>` is the scene. Function components are plain JS functions. Control flow is real JS (`map`, ternaries).
@@ -393,7 +394,7 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 
 ## Quality
 
-- `make test`: **all 206 tests pass** (cga-core 61 + cga-gpu 113 + cga-host 32, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the raster path (GPU-vs-CPU reference equivalence, double-sided open mesh, near-plane clipping, mesh shadow casting/receiving, transparent mesh blending, raster SSAA), the ray path (chunked trimesh intersection bitwise-equal to single shot), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/bake volume), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
+- `make test`: **all 208 tests pass** (cga-core 61 + cga-gpu 115 + cga-host 32, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, mesh interop (winding-number classification: open meshes, globally reversed, chunking consistency for `contains` and `crossings`), certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose), the raster path (GPU-vs-CPU reference equivalence, double-sided open mesh, near-plane clipping, mesh shadow casting/receiving, transparent mesh blending, raster SSAA), the ray path (chunked trimesh intersection bitwise-equal to single shot), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export/import round trips, scene reports, the freeform degenerate-case library + interval classification + certifiable root-finding + Bézier patch leaves (evaluation/chord-height bound/watertight shell/CSG/bake volume), baked volume and watertight topology (boundary edges/non-manifold edges/Euler characteristic) goldens.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/helmet/csg goldens have **RMSE = 0**.
 
 ## License

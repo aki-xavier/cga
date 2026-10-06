@@ -633,6 +633,39 @@ mod tests {
     }
 
     #[test]
+    fn test_render_object_straddling_frame_edge() {
+        // 剔除保守性：球心在画面外、只有一部分进入视野时，可见部分必须照常着色。
+        // （逐对象屏幕区间子集不得漏掉任何落在对象包围盒内的光线。）
+        let mut sc = Scene::new(None);
+        let cam0 = rq_head_on_cam(); // 原点朝 +z，fov 40
+                                     // 球心放到画面右侧之外，但球体仍覆盖画面右缘
+        let off = 2.0;
+        sc.add_mesh(Mesh::new(MeshParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(1.2)),
+            material: std_red_material(),
+            position: [off, 0.0, 3.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 1.0));
+        let mut r = Renderer::new(64, 64, 1, 3);
+        let img = r.render(sc, cam0);
+        let d = data_f32(&img);
+        // 相机基座的 right = -x，所以世界 +x 的球出现在画面左缘：左缘被覆盖，
+        // 右缘仍是天空背景（0x87CEEB：蓝 > 红）。
+        let li = (32 * 64 + 0) * 4;
+        let ri = (32 * 64 + 63) * 4;
+        let (lr, lg, lb) = (d[li], d[li + 1], d[li + 2]);
+        let (rr, _rg, rb) = (d[ri], d[ri + 1], d[ri + 2]);
+        assert!(
+            lr > lg && lr > 40.0,
+            "画面左缘应被球（红）覆盖，得到 {lr}/{lg}/{lb}"
+        );
+        assert!(rb > rr, "画面右缘应仍是天空背景，得到 {rr}/../{rb}");
+    }
+
+    #[test]
     fn test_render_raster_antialiasing() {
         // D7：光栅边缘参与 SSAA——斜边三角形在 aa=2 时边缘有过渡像素，aa=1 全硬边。
         let mk = || {

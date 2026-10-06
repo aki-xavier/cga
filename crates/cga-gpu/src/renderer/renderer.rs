@@ -1,7 +1,121 @@
 use super::*;
 
+/// 阴影：遮挡物包围球 vs 阴影射线（p → 光源）的保守筛选，返回需要测试的光线下标。
+/// `None` 表示不能界定（无界几何如平面）→ 调用方回退全量。
+fn shadow_ray_indices(
+    params: &GeometryParams,
+    p: &Array,
+    ld: &Array,
+    far: &Array,
+    n_rays: i32,
+) -> Option<Vec<i32>> {
+    let b = geom_bounds(params)?;
+    let c = [
+        0.5 * (b[0][0] + b[1][0]),
+        0.5 * (b[0][1] + b[1][1]),
+        0.5 * (b[0][2] + b[1][2]),
+    ];
+    let (dx, dy, dz) = (b[1][0] - b[0][0], b[1][1] - b[0][1], b[1][2] - b[0][2]);
+    let r = 0.5 * (dx * dx + dy * dy + dz * dz).sqrt();
+    if !(r.is_finite() && r >= 0.0) {
+        return None;
+    }
+    // far：点光源是 (n,)，平行光是 0-d（= 无限远）
+    let far_lim = if far.ndim() == 1 {
+        ck(far.reshape(&[n_rays]))
+    } else {
+        ck(ops::broadcast_to(fs(1e30), &[n_rays]))
+    };
+    let to_c = ck(ck(p.negative()).add(&arr3v(c))); // c - p  (n,3)
+    let proj = ck(ck(to_c.multiply(ld)).sum_axes(&[-1], false)); // (n,)
+    let perp2 =
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
+    let lim = ck(far_lim.add(&fs(r)));
+    let mask = ck(mask.logical_and(&ck(lim.gt(&proj))));
+    mask.eval().unwrap();
+    let cnt = ck(mask.sum(None)).item_cast::<i32>();
+    if cnt * 2 >= n_rays {
+        // 子集收益不足 2×：走全量，省掉索引回读与 gather/scatter 开销
+        return None;
+    }
+    if cnt == 0 {
+        return Some(Vec::new());
+    }
+    let mut idx: Vec<i32> = Vec::with_capacity(cnt as usize);
+    let data = mask.as_slice::<bool>();
+    for (i, &v) in data.iter().enumerate() {
+        if v {
+            idx.push(i as i32);
+        }
+    }
+    Some(idx)
+}
+
 /// 网格阴影测试的光线×面数预算（无 BVH，实测约 1.4e8 ray-face/s）。
 const MESH_SHADOW_BUDGET: usize = 100_000_000;
+
+/// 主光线：对象屏幕包围盒内的光线下标（保守剔除）。
+///
+/// 光线包按 `(子采样 j,i) × 基础像素 (y,x)` 展开：`idx = (j*k+i)·(w·h) + y·w + x`。
+/// 包围盒由相机空间 AABB 的 8 个角投影得到，外扩 1 个基础像素（子采样落点 +
+/// 浮点余量）。返回 `None` 表示不能用子集（无界几何如平面、或 AABB 跨近平面）
+/// ——调用方回退全量光线。返回空表表示对象完全在画面外（连同相机后方）。
+fn primary_ray_indices(
+    params: &GeometryParams,
+    cam: &PerspectiveCamera,
+    w: i32,
+    h: i32,
+    k: i32,
+) -> Option<Vec<i32>> {
+    let b = geom_bounds(params)?;
+    let [lo, hi] = b;
+    if hi[2] <= 1e-6 {
+        return Some(Vec::new()); // 全在相机后方
+    }
+    if lo[2] <= 1e-6 {
+        return None; // 跨近平面：投影会发散，保守回退
+    }
+    let fy = f64::from(h) / (2.0 * (cam.fov.to_radians() / 2.0).tan());
+    let fx = fy * cam.aspect;
+    let cx = f64::from(w - 1) / 2.0;
+    let cy = f64::from(h - 1) / 2.0;
+    let (mut x0, mut x1) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut y0, mut y1) = (f64::INFINITY, f64::NEG_INFINITY);
+    for c in 0..8 {
+        let p = [
+            if c & 1 == 0 { lo[0] } else { hi[0] },
+            if c & 2 == 0 { lo[1] } else { hi[1] },
+            if c & 4 == 0 { lo[2] } else { hi[2] },
+        ];
+        let sx = fx * p[0] / p[2] + cx;
+        let sy = fy * p[1] / p[2] + cy;
+        x0 = x0.min(sx);
+        x1 = x1.max(sx);
+        y0 = y0.min(sy);
+        y1 = y1.max(sy);
+    }
+    let bx0 = (x0.floor() as i32 - 1).max(0);
+    let by0 = (y0.floor() as i32 - 1).max(0);
+    let bx1 = (x1.ceil() as i32 + 1).min(w - 1);
+    let by1 = (y1.ceil() as i32 + 1).min(h - 1);
+    if bx1 < bx0 || by1 < by0 || !x0.is_finite() {
+        return Some(Vec::new());
+    }
+    let base = w * h;
+    let area = ((bx1 - bx0 + 1) as i64) * ((by1 - by0 + 1) as i64) * (k as i64) * (k as i64);
+    let mut idx: Vec<i32> = Vec::with_capacity(area as usize);
+    for y in by0..=by1 {
+        for x in bx0..=bx1 {
+            for j in 0..k {
+                for i in 0..k {
+                    idx.push((j * k + i) * base + y * w + x);
+                }
+            }
+        }
+    }
+    Some(idx)
+}
 
 /// 该遮挡物的面数（网格类）；非网格返回 0。
 fn mesh_face_count(p: &GeometryParams) -> usize {
@@ -373,6 +487,8 @@ impl Renderer {
         let mut best_uv = ck(ops::zeros::<f32>(&[n_rays, 2]));
         let mut best_idx = ck(ops::zeros::<i32>(&[n_rays]));
         let objs = &scene.objects;
+        // 临时排查开关：CGA_NO_CULL=1 关闭所有剔除子集（对照渲染）
+        let cull_on = std::env::var("CGA_NO_CULL").is_err();
         let cam = self.cam.unwrap_or_else(|| panic!("no camera"));
         let frame = view_frame(&cam);
         for (i, obj) in objs.iter().enumerate() {
@@ -387,21 +503,30 @@ impl Renderer {
                 // 非主光线（反射/折射，primary=false）里参与求交。
                 continue;
             }
-            if primary {
-                if let Some(b) = geom_bounds(params) {
-                    if b[1][2] <= 1e-6 {
-                        continue;
-                    }
-                }
-            }
-            let (t, n_i, mask) = geom_intersect(params, o, d);
-            let hit_point = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
+            // 主光线逐对象屏幕区间子集（保守剔除）：只对落在对象屏幕包围盒内的
+            // 光线求交。无界几何/跨近平面 → None 回退全量；空表 → 画面外，跳过。
+            let subset: Option<Vec<i32>> = if primary && cull_on {
+                primary_ray_indices(params, &cam, self.width, self.height, self.aa)
+            } else {
+                None
+            };
+            let ids: Option<Array> = match &subset {
+                Some(v) if v.is_empty() => continue,
+                Some(v) => Some(Array::from_slice(v, &[v.len() as i32])),
+                None => None,
+            };
+            let (o_u, d_u) = match &ids {
+                Some(ids_a) => (ck(o.take_axis(ids_a, 0)), ck(d.take_axis(ids_a, 0))),
+                None => (o.clone(), d.clone()),
+            };
+            let (t, n_i, mask) = geom_intersect(params, &o_u, &d_u);
+            let hit_point = ck(o_u.add(ck(ck(t.expand_dims(1)).multiply(&d_u))));
             let uv_i = if matches!(
                 obj.geometry,
                 Geometry::TrimeshGeometry(_) | Geometry::BezierPatchGeometry(_)
             ) {
                 // 网格类 UV 由光栅路径透视校正插值；此处避免大数组克隆
-                ck(ops::zeros::<f32>(&[n_rays, 2]))
+                ck(ops::zeros::<f32>(&[d_u.shape()[0], 2]))
             } else {
                 geom_uv(
                     &stated_list[i],
@@ -409,15 +534,58 @@ impl Renderer {
                     &outward(&n_i, &frame.0, &[0.0, 0.0, 0.0]),
                 )
             };
-            let nearer = ck(mask.logical_and(ck(t.lt(&best_t))));
-            best_t = ck(ops::select(&nearer, &t, &best_t));
-            best_n = ck(ops::select(ck(nearer.expand_dims(1)), &n_i, &best_n));
-            best_uv = ck(ops::select(ck(nearer.expand_dims(1)), &uv_i, &best_uv));
-            best_idx = ck(ops::select(
-                &nearer,
-                ck(ops::full::<i32>(&[n_rays], &Array::from_int(i as i32))),
-                &best_idx,
-            ));
+            match &ids {
+                None => {
+                    let nearer = ck(mask.logical_and(ck(t.lt(&best_t))));
+                    best_t = ck(ops::select(&nearer, &t, &best_t));
+                    best_n = ck(ops::select(ck(nearer.expand_dims(1)), &n_i, &best_n));
+                    best_uv = ck(ops::select(ck(nearer.expand_dims(1)), &uv_i, &best_uv));
+                    best_idx = ck(ops::select(
+                        &nearer,
+                        ck(ops::full::<i32>(&[n_rays], &Array::from_int(i as i32))),
+                        &best_idx,
+                    ));
+                }
+                Some(ids_a) => {
+                    // 子集：先取回该子集当前的胜者，再用 scatter 写回（下标唯一）
+                    let len = d_u.shape()[0];
+                    let bt_s = ck(best_t.take_axis(ids_a, 0));
+                    let bn_s = ck(best_n.take_axis(ids_a, 0));
+                    let bu_s = ck(best_uv.take_axis(ids_a, 0));
+                    let bi_s = ck(best_idx.take_axis(ids_a, 0));
+                    let nearer = ck(mask.logical_and(ck(t.lt(&bt_s))));
+                    let ne1 = ck(nearer.expand_dims(1));
+                    best_t = ck(ops::indexing::scatter_single(
+                        &best_t,
+                        ids_a,
+                        &ck(ck(ops::select(&nearer, &t, &bt_s)).reshape(&[len, 1])),
+                        0,
+                    ));
+                    best_n = ck(ops::indexing::scatter_single(
+                        &best_n,
+                        ids_a,
+                        &ck(ck(ops::select(&ne1, &n_i, &bn_s)).reshape(&[len, 1, 3])),
+                        0,
+                    ));
+                    best_uv = ck(ops::indexing::scatter_single(
+                        &best_uv,
+                        ids_a,
+                        &ck(ck(ops::select(&ne1, &uv_i, &bu_s)).reshape(&[len, 1, 2])),
+                        0,
+                    ));
+                    best_idx = ck(ops::indexing::scatter_single(
+                        &best_idx,
+                        ids_a,
+                        &ck(ck(ops::select(
+                            &nearer,
+                            &ck(ops::full::<i32>(&[len], &Array::from_int(i as i32))),
+                            &bi_s,
+                        ))
+                        .reshape(&[len, 1])),
+                        0,
+                    ));
+                }
+            }
         }
         let hit = ck(best_t.is_finite());
         // 网格遮挡物的阴影测试是 O(光线×面数)；没有一条光线命中任何物体时
@@ -465,17 +633,54 @@ impl Renderer {
                         continue;
                     }
                 }
-                let (st, m) = geom_shadow(&params_list[j], &p_s, &ld);
-                let occ = if far.ndim() == 1 {
-                    ck(m.logical_and(ck(st.lt(&far))))
+                // 逐对象阴影子集：只有“打到光源的射线”靠近该对象时才需要测试
+                let sh_sub = if cull_on {
+                    shadow_ray_indices(&params_list[j], &p_s, &ld, &far, n_rays)
                 } else {
-                    m
+                    None
                 };
-                v = ck(v.multiply(ck(ops::select(
-                    &occ,
-                    fs(1.0 - obj.material.opacity),
-                    fs(1.0),
-                ))));
+                match sh_sub {
+                    Some(v_i) if v_i.is_empty() => continue,
+                    Some(v_i) => {
+                        let len = v_i.len() as i32;
+                        let ids = Array::from_slice(&v_i, &[len]);
+                        let ps_s = ck(p_s.take_axis(&ids, 0));
+                        let ld_s = ck(ld.take_axis(&ids, 0));
+                        let far_s = if far.ndim() == 1 {
+                            ck(far.take_axis(&ids, 0))
+                        } else {
+                            far.clone()
+                        };
+                        let (st, m) = geom_shadow(&params_list[j], &ps_s, &ld_s);
+                        let occ = if far_s.ndim() == 1 {
+                            ck(m.logical_and(ck(st.lt(&far_s))))
+                        } else {
+                            m
+                        };
+                        let f_s = ck(ops::select(&occ, fs(1.0 - obj.material.opacity), fs(1.0)));
+                        // 合并回全量：v *= (1 + 散布(f_s - 1))
+                        let delta = ck(ops::indexing::scatter_single(
+                            &ck(ops::zeros::<f32>(&[n_rays])),
+                            &ids,
+                            &ck(ck(f_s.subtract(fs(1.0))).reshape(&[len, 1])),
+                            0,
+                        ));
+                        v = ck(v.multiply(&ck(delta.add(fs(1.0)))));
+                    }
+                    None => {
+                        let (st, m) = geom_shadow(&params_list[j], &p_s, &ld);
+                        let occ = if far.ndim() == 1 {
+                            ck(m.logical_and(ck(st.lt(&far))))
+                        } else {
+                            m
+                        };
+                        v = ck(v.multiply(ck(ops::select(
+                            &occ,
+                            fs(1.0 - obj.material.opacity),
+                            fs(1.0),
+                        ))));
+                    }
+                }
             }
             vis.push(v);
         }
