@@ -1,4 +1,4 @@
-// 仿射扩展的 JSX 版（与 examples/cgs/affine.cgs 同构）
+// 仿射扩展的 JSX 版（与 examples/jsx/affine.jsx 同构）
 import './affine.css';
 
 const Body = () => (

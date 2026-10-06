@@ -1,4 +1,4 @@
-// 图元全家福的 JSX 版（与 examples/cgs/primitives.cgs 同构）
+// 图元全家福的 JSX 版（与 examples/jsx/primitives.jsx 同构）
 import './primitives.css';
 
 export default (

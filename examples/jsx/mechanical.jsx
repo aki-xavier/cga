@@ -1,4 +1,4 @@
-// 机械装配体的 JSX 版（与 examples/cgs/mechanical.cgs 同构）
+// 机械装配体的 JSX 版（与 examples/jsx/mechanical.jsx 同构）
 import './mechanical.css';
 
 const Post = ({ r, h, class: cls }) => (

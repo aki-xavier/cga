@@ -1,5 +1,5 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
-# JSX + CSS 场景宿主：React 模式的 CGS 前端
+# JSX + CSS 场景宿主：React 模式前端
 
 状态：已实现（2026-10-06，路线 A：真 JS）。适用：`crates/cga-gpu/src/jsx/`、CLI `render_jsx` / `report_jsx` / `bake_jsx`。
 R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_to_urdf`）改出 JSX；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
@@ -12,9 +12,9 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_
 | JSX → JS | swc（`swc_core`，classic 运行时，pragma `h`） | 解析 + 变换，错误带 span（报 `JSX line N: …`） |
 | JS 执行 | boa（纯 Rust，无 IO 沙箱） | 真 JS 语义：函数组件、`map`、三元、`Math`、任意表达式 |
 | CSS | lightningcss | 规则解析（tag / `.class` / `#id` / `:root` / `scene`） |
-| 场景构建 | 复用 CGS 的 `build_geometry`/`build_material`/kinematics | 语义单一来源 |
+| 场景构建 | 复用 `scene_build` 的 `build_geometry`/`build_material`/kinematics | 语义单一来源 |
 
-管线：`.jsx` → swc 变换 → boa 执行（宿主 `h` 是纯 JS prelude）→ 元素树经 `JSON.stringify` 回传 → Rust 建 `CgsRun`（Scene + camera + tags + kinematics，报告管线原样可用）。
+管线：`.jsx` → swc 变换 → boa 执行（宿主 `h` 是纯 JS prelude）→ 元素树经 `JSON.stringify` 回传 → Rust 建 `SceneRun`（Scene + camera + tags + kinematics，报告管线原样可用）。
 
 ## 2. 约定
 
@@ -30,7 +30,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_
 
 | JSX | 语义 |
 | --- | --- |
-| `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid Bezier Extrude Loft Mesh>` | 图元（参数校验复用 CGS builder） |
+| `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid Bezier Extrude Loft Mesh>` | 图元（参数校验复用 scene_build builder） |
 | `<Translate t>` `<Rotate axis angle>` `<Scale s>` `<Mirror axis>` | 修饰符（组合 4×4 ctx） |
 | `<Material …>` | 材质合并作用于子树 |
 | `<Union/Difference/Intersection>` | CSG 块（≥2 子几何） |
@@ -42,25 +42,25 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`urdf_to_jsx`/`jsx_
 
 v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合选择器。需要时各自单独立项。
 
-已平权的 CGS 高级特性（JSX 形态）：
+已平权的原 CGS 高级特性（JSX 形态）：
 
-| CGS | JSX |
+| 原 CGS | JSX |
 | --- | --- |
 | `constrain(x) { lhs == rhs; } solve;` | `const [x] = solve([x0], [v => eq(...), v => le(...)])`（数值残差 + Levenberg-GN） |
 | `drill(r=…, through=…, axis=…)` | `<Drill r through axis from to />`（through 吃 tag 名或元素值） |
 | `instances("n")` + `if(len(…)==k)` | `<Instances of="n"/>` 重放 + `<When of="n" count={k}>` 门控 |
 | `face/fnrm/center/lo/hi/size/xdir…` | 同名惰性查询函数（prop 位置解析；向量运算用 `vadd/vsub/vscale`） |
-| `--set` / `cgs_pose` | `run_jsx_pose` + 全局 `P` 约定（`P.x` 读覆盖）+ 关节名覆盖 |
+| `--set` / 原 cgs_pose | `run_jsx_pose` + 全局 `P` 约定（`P.x` 读覆盖）+ 关节名覆盖 |
 
 ## 4. 验收
 
-- `test_jsx_orbit_parity_with_cgs`：`examples/jsx/orbit.jsx` + `orbit.css` 与 `examples/cgs/orbit.cgs` 渲染**逐字节相同**（96×72 PNG）。
+- 平权验收（R2 时点，CGS 尚在）：orbit/assembly/画廊六场景的 JSX 版与原 CGS 版渲染**逐字节相同**（96×72 PNG）。R4 后 CGS 文件已删除，测试现为 JSX 冒烟。
 - 函数组件 + `map` + 三元控制流出 4 个对象。
 - CSS 类命中材质（color/roughness 断言）。
 - JSX 关节 + gear 推导 q，mesh 归属记录正确，报告含 joint/gear 行。
-- 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 CGS 文本）；缺 `export default` 显式报错。
+- 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常。
 
-## 5. 与 CGS 的关系
+## 5. 架构终态
 
-CGS 保留为底层语义来源（builder、错误文本、报告）。JSX 是并列的前端宿主，不是 IR 翻译——两条路径在同一个 `CgsRun` 上汇合，下游（渲染/报告/bake/URDF）无差别。错误契约在 JSX 侧降级为尽力而为（boa/swc 消息 + 行号），CGS 侧契约不变。
+`.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 JS 执行结果翻译成它的调用。下游（渲染/报告/bake/URDF 互转）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）。

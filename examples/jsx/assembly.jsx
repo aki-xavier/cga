@@ -1,4 +1,4 @@
-// assembly 场景的 JSX + CSS 版（与 examples/cgs/assembly.cgs 同构：
+// assembly 场景的 JSX + CSS 版（与 examples/jsx/assembly.jsx 同构：
 // solve 约束、派生钻孔、面引用、tag 实例、集合计数门控）
 import './assembly.css';
 

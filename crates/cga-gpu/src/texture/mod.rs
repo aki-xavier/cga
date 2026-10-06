@@ -55,7 +55,7 @@ mod tests {
     fn test_png_decode_and_sample() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/cgs/assets/brick.png"
+            "/../../examples/gallery/assets/brick.png"
         );
         let (rgba, w, h) = load_png_rgba(path).unwrap();
         assert!(w == 256 && h == 256);
@@ -74,7 +74,7 @@ mod tests {
     fn test_textured_render() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/cgs/assets/brick.png"
+            "/../../examples/gallery/assets/brick.png"
         );
         let tex = texture_load(path).unwrap();
         let mut sc = Scene::new(None);

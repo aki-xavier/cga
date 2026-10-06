@@ -1,4 +1,4 @@
-// 参数化板式办公楼的 JSX 版（与 examples/cgs/building.cgs 同构）
+// 参数化板式办公楼的 JSX 版（与 examples/jsx/building.jsx 同构）
 import './building.css';
 
 const Storey = ({ y, width, depth, floorH, cols, bay }) => {

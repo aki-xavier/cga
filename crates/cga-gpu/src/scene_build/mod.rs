@@ -18,10 +18,10 @@ use crate::scene_graph::{vec3_dot, Color};
 use crate::shading::{Material, MaterialParams};
 use crate::texture::texture_load;
 
-pub mod cgs_value;
-pub use self::cgs_value::*;
-pub mod cgs_vec3;
-pub use self::cgs_vec3::*;
+pub mod arg_value;
+pub use self::arg_value::*;
+pub mod arg_vec3;
+pub use self::arg_vec3::*;
 pub mod scene_run;
 pub use self::scene_run::*;
 pub mod kinematics;
@@ -33,13 +33,13 @@ pub use self::builders::*;
 
 pub type TagRegistry = BTreeMap<String, Vec<TagInstance>>;
 
-pub(crate) fn cgs_truthy(v: &CgsValue) -> bool {
+pub(crate) fn arg_truthy(v: &ArgValue) -> bool {
     match v {
-        CgsValue::Bool(b) => *b,
-        CgsValue::Num(x) => *x != 0.0,
-        CgsValue::Str(s) => !s.is_empty(),
-        CgsValue::List(l) => !l.is_empty(),
-        CgsValue::Vec3(_) => true,
+        ArgValue::Bool(b) => *b,
+        ArgValue::Num(x) => *x != 0.0,
+        ArgValue::Str(s) => !s.is_empty(),
+        ArgValue::List(l) => !l.is_empty(),
+        ArgValue::Vec3(_) => true,
     }
 }
 fn fmt_f64(x: f64) -> String {
@@ -50,19 +50,19 @@ fn fmt_f64(x: f64) -> String {
     }
 }
 
-fn cgs_num(v: &CgsValue, line: i32, what: &str) -> Result<f64, String> {
+fn cgs_num(v: &ArgValue, line: i32, what: &str) -> Result<f64, String> {
     match v {
-        CgsValue::Num(x) => Ok(*x),
-        _ => Err(format!("CGS line {line}: {what} needs a number, got {v}")),
+        ArgValue::Num(x) => Ok(*x),
+        _ => Err(format!("build: {what} needs a number, got {v}")),
     }
 }
 
-fn cgs_vec3(v: &CgsValue, line: i32, what: &str) -> Result<[f64; 3], String> {
+fn cgs_vec3(v: &ArgValue, line: i32, what: &str) -> Result<[f64; 3], String> {
     match v {
-        CgsValue::Vec3(v3) => Ok([v3.x, v3.y, v3.z]),
-        CgsValue::List(items) => {
+        ArgValue::Vec3(v3) => Ok([v3.x, v3.y, v3.z]),
+        ArgValue::List(items) => {
             if items.len() != 3 {
-                return Err(format!("CGS line {line}: {what} needs [x,y,z], got {v}"));
+                return Err(format!("build: {what} needs [x,y,z], got {v}"));
             }
             Ok([
                 cgs_num(&items[0], line, what)?,
@@ -70,13 +70,13 @@ fn cgs_vec3(v: &CgsValue, line: i32, what: &str) -> Result<[f64; 3], String> {
                 cgs_num(&items[2], line, what)?,
             ])
         }
-        _ => Err(format!("CGS line {line}: {what} needs [x,y,z], got {v}")),
+        _ => Err(format!("build: {what} needs [x,y,z], got {v}")),
     }
 }
 
-fn cgs_opt_num(v: &CgsValue, def: f64) -> f64 {
+fn cgs_opt_num(v: &ArgValue, def: f64) -> f64 {
     match v {
-        CgsValue::Num(x) => {
+        ArgValue::Num(x) => {
             if *x < 0.0 {
                 def
             } else {
@@ -160,7 +160,7 @@ pub(crate) fn parse_face_key(key: &str, line: i32, what: &str) -> Result<(usize,
         key.len() == 2 && matches!(&key[..1], "+" | "-") && matches!(&key[1..], "x" | "y" | "z");
     if !ok {
         return Err(format!(
-            "CGS line {line}: {what}: unknown face key \"{key}\" (expected \"+x\"/\"-x\"/\"+y\"/\"-y\"/\"+z\"/\"-z\")"
+            "build: {what}: unknown face key \"{key}\" (expected \"+x\"/\"-x\"/\"+y\"/\"-y\"/\"+z\"/\"-z\")"
         ));
     }
     let axis = match &key[1..] {
@@ -254,9 +254,9 @@ pub(crate) fn csg_op_name(op: CsgOp) -> &'static str {
     }
 }
 
-fn cgs_arg_num(args: &HashMap<String, CgsValue>, key: &str) -> f64 {
+fn arg_num(args: &HashMap<String, ArgValue>, key: &str) -> f64 {
     cgs_num(
-        &args.get(key).cloned().unwrap_or(CgsValue::Num(0.0)),
+        &args.get(key).cloned().unwrap_or(ArgValue::Num(0.0)),
         0,
         key,
     )
@@ -265,7 +265,7 @@ fn cgs_arg_num(args: &HashMap<String, CgsValue>, key: &str) -> f64 {
 
 fn validate_geometry_params(
     name: &str,
-    args: &HashMap<String, CgsValue>,
+    args: &HashMap<String, ArgValue>,
     line: i32,
 ) -> Result<(), String> {
     let pos_keys: &[&str] = match name {
@@ -276,59 +276,57 @@ fn validate_geometry_params(
         _ => &[],
     };
     for k in pos_keys {
-        if cgs_arg_num(args, k) <= 0.0 {
-            return Err(format!("CGS line {line}: {name}.{k} must be > 0"));
+        if arg_num(args, k) <= 0.0 {
+            return Err(format!("build: {name}.{k} must be > 0"));
         }
     }
     match name {
         "box" | "ellipsoid" => {
             let key = if name == "box" { "s" } else { "radii" };
             let v = cgs_vec3(
-                &args.get(key).cloned().unwrap_or(CgsValue::Num(0.0)),
+                &args.get(key).cloned().unwrap_or(ArgValue::Num(0.0)),
                 line,
                 &format!("{name}.{key}"),
             )?;
             if v[0].min(v[1].min(v[2])) <= 0.0 {
-                return Err(format!(
-                    "CGS line {line}: {name}.{key} components must be > 0"
-                ));
+                return Err(format!("build: {name}.{key} components must be > 0"));
             }
         }
         "plane" => {
             let n = cgs_vec3(
-                &args.get("n").cloned().unwrap_or(CgsValue::Num(0.0)),
+                &args.get("n").cloned().unwrap_or(ArgValue::Num(0.0)),
                 line,
                 "plane.n",
             )?;
             if vec3_dot(n, n) < 1e-24 {
-                return Err(format!("CGS line {line}: plane.n must not be zero"));
+                return Err(format!("build: plane.n must not be zero"));
             }
         }
         "torus" => {
-            let arc = cgs_arg_num(args, "arc");
+            let arc = arg_num(args, "arc");
             if !(arc > 0.0) || arc > std::f64::consts::TAU {
-                return Err(format!("CGS line {line}: torus.arc must be in (0, 2*pi]"));
+                return Err(format!("build: torus.arc must be in (0, 2*pi]"));
             }
         }
         "cyclide" => {
-            let a = cgs_arg_num(args, "a");
-            let b = cgs_arg_num(args, "b");
-            let d = cgs_arg_num(args, "d");
+            let a = arg_num(args, "a");
+            let b = arg_num(args, "b");
+            let d = arg_num(args, "d");
             if !(a > b && b > 0.0) {
-                return Err(format!("CGS line {line}: cyclide needs a > b > 0"));
+                return Err(format!("build: cyclide needs a > b > 0"));
             }
             if d <= 0.0 {
-                return Err(format!("CGS line {line}: cyclide.d must be > 0"));
+                return Err(format!("build: cyclide.d must be > 0"));
             }
         }
         "loft" => {
-            if let Some(CgsValue::List(raw)) = args.get("profiles") {
+            if let Some(ArgValue::List(raw)) = args.get("profiles") {
                 let mut m: i64 = -1;
                 for p in raw {
-                    if let CgsValue::List(pl) = p {
+                    if let ArgValue::List(pl) = p {
                         if m >= 0 && pl.len() as i64 != m {
                             return Err(format!(
-                                "CGS line {line}: loft profiles must share the same vertex count"
+                                "build: loft profiles must share the same vertex count"
                             ));
                         }
                         m = pl.len() as i64;
@@ -336,12 +334,12 @@ fn validate_geometry_params(
                 }
             }
             let mut zs: Vec<f64> = Vec::new();
-            let zsraw = args.get("zs").cloned().unwrap_or(CgsValue::Num(0.0));
+            let zsraw = args.get("zs").cloned().unwrap_or(ArgValue::Num(0.0));
             match zsraw {
-                CgsValue::Vec3(v3) => {
+                ArgValue::Vec3(v3) => {
                     zs = vec![v3.x, v3.y, v3.z];
                 }
-                CgsValue::List(zlist) => {
+                ArgValue::List(zlist) => {
                     for z in &zlist {
                         zs.push(cgs_num(z, line, "loft.zs[i]")?);
                     }
@@ -350,33 +348,29 @@ fn validate_geometry_params(
             }
             for i in 0..zs.len().saturating_sub(1) {
                 if zs[i] >= zs[i + 1] {
-                    return Err(format!(
-                        "CGS line {line}: loft.zs must be strictly increasing"
-                    ));
+                    return Err(format!("build: loft.zs must be strictly increasing"));
                 }
             }
         }
         "bezier" => {
-            if cgs_arg_num(args, "thickness") < 0.0 {
-                return Err(format!("CGS line {line}: bezier.thickness must be >= 0"));
+            if arg_num(args, "thickness") < 0.0 {
+                return Err(format!("build: bezier.thickness must be >= 0"));
             }
-            let div = cgs_arg_num(args, "div");
+            let div = arg_num(args, "div");
             if div.fract() != 0.0 || div < 1.0 || div > 32.0 {
-                return Err(format!(
-                    "CGS line {line}: bezier.div must be an integer in 1..=32"
-                ));
+                return Err(format!("build: bezier.div must be an integer in 1..=32"));
             }
             match args.get("points") {
-                Some(CgsValue::List(items)) if items.len() == 16 => {}
-                Some(CgsValue::List(items)) => {
+                Some(ArgValue::List(items)) if items.len() == 16 => {}
+                Some(ArgValue::List(items)) => {
                     return Err(format!(
-                        "CGS line {line}: bezier.points needs 16 [x,y,z] control points, got {}",
+                        "build: bezier.points needs 16 [x,y,z] control points, got {}",
                         items.len()
                     ));
                 }
                 _ => {
                     return Err(format!(
-                        "CGS line {line}: bezier.points needs 16 [x,y,z] control points, got none"
+                        "build: bezier.points needs 16 [x,y,z] control points, got none"
                     ));
                 }
             }
@@ -386,42 +380,42 @@ fn validate_geometry_params(
     Ok(())
 }
 
-fn profile2d(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 2]>, String> {
+fn profile2d(v: &ArgValue, line: i32, what: &str) -> Result<Vec<[f64; 2]>, String> {
     match v {
-        CgsValue::List(items) => {
+        ArgValue::List(items) => {
             if items.len() < 3 {
-                return Err(format!("CGS line {line}: {what} needs >= 3 [x,y] points"));
+                return Err(format!("build: {what} needs >= 3 [x,y] points"));
             }
             let mut pts: Vec<[f64; 2]> = Vec::new();
             for p in items {
                 match p {
-                    CgsValue::List(pair) => {
+                    ArgValue::List(pair) => {
                         if pair.len() != 2 {
-                            return Err(format!("CGS line {line}: {what} items must be [x,y]"));
+                            return Err(format!("build: {what} items must be [x,y]"));
                         }
                         let x = cgs_num(&pair[0], line, what)?;
                         let y = cgs_num(&pair[1], line, what)?;
                         pts.push([x, y]);
                     }
                     _ => {
-                        return Err(format!("CGS line {line}: {what} items must be [x,y]"));
+                        return Err(format!("build: {what} items must be [x,y]"));
                     }
                 }
             }
 
-            validate_profile(&pts).map_err(|e| format!("CGS line {line}: {e}"))?;
+            validate_profile(&pts).map_err(|e| format!("build: {e}"))?;
             Ok(pts)
         }
-        _ => Err(format!("CGS line {line}: {what} needs a list")),
+        _ => Err(format!("build: {what} needs a list")),
     }
 }
 
-fn points16(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 3]>, String> {
+fn points16(v: &ArgValue, line: i32, what: &str) -> Result<Vec<[f64; 3]>, String> {
     match v {
-        CgsValue::List(items) => {
+        ArgValue::List(items) => {
             if items.len() != 16 {
                 return Err(format!(
-                    "CGS line {line}: {what} needs 16 [x,y,z] control points, got {}",
+                    "build: {what} needs 16 [x,y,z] control points, got {}",
                     items.len()
                 ));
             }
@@ -431,11 +425,11 @@ fn points16(v: &CgsValue, line: i32, what: &str) -> Result<Vec<[f64; 3]>, String
             }
             Ok(pts)
         }
-        _ => Err(format!("CGS line {line}: {what} needs a list")),
+        _ => Err(format!("build: {what} needs a list")),
     }
 }
 
-fn cgs_sig_names(name: &str) -> Vec<&'static str> {
+fn sig_names(name: &str) -> Vec<&'static str> {
     match name {
         "sphere" => vec!["r"],
         "plane" => vec!["n"],
@@ -466,36 +460,36 @@ fn cgs_sig_names(name: &str) -> Vec<&'static str> {
     }
 }
 
-fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
-    let mut m: HashMap<String, CgsValue> = HashMap::new();
+fn sig_defaults(name: &str) -> HashMap<String, ArgValue> {
+    let mut m: HashMap<String, ArgValue> = HashMap::new();
     match name {
         "plane" => {
-            m.insert("d".to_string(), CgsValue::Num(0.0));
+            m.insert("d".to_string(), ArgValue::Num(0.0));
         }
         "cylinder" => {
-            m.insert("h".to_string(), CgsValue::Num(-1.0));
+            m.insert("h".to_string(), ArgValue::Num(-1.0));
         }
         "torus" => {
-            m.insert("arc".to_string(), CgsValue::Num(std::f64::consts::TAU));
+            m.insert("arc".to_string(), ArgValue::Num(std::f64::consts::TAU));
         }
         "bezier" => {
-            m.insert("thickness".to_string(), CgsValue::Num(0.0));
-            m.insert("div".to_string(), CgsValue::Num(8.0));
+            m.insert("thickness".to_string(), ArgValue::Num(0.0));
+            m.insert("div".to_string(), ArgValue::Num(8.0));
         }
         "directional_light" | "point_light" => {
-            m.insert("intensity".to_string(), CgsValue::Num(1.0));
-            m.insert("color".to_string(), CgsValue::Num(0xFFFFFF as f64));
+            m.insert("intensity".to_string(), ArgValue::Num(1.0));
+            m.insert("color".to_string(), ArgValue::Num(0xFFFFFF as f64));
         }
         "ambient_light" => {
-            m.insert("intensity".to_string(), CgsValue::Num(0.3));
-            m.insert("color".to_string(), CgsValue::Num(0xFFFFFF as f64));
+            m.insert("intensity".to_string(), ArgValue::Num(0.3));
+            m.insert("color".to_string(), ArgValue::Num(0xFFFFFF as f64));
         }
         "camera" => {
-            m.insert("fov".to_string(), CgsValue::Num(50.0));
-            m.insert("aspect".to_string(), CgsValue::Num(16.0 / 9.0));
+            m.insert("fov".to_string(), ArgValue::Num(50.0));
+            m.insert("aspect".to_string(), ArgValue::Num(16.0 / 9.0));
             m.insert(
                 "position".to_string(),
-                CgsValue::Vec3(CgsVec3 {
+                ArgValue::Vec3(ArgVec3 {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
@@ -503,7 +497,7 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
             );
             m.insert(
                 "target".to_string(),
-                CgsValue::Vec3(CgsVec3 {
+                ArgValue::Vec3(ArgVec3 {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
@@ -511,15 +505,15 @@ fn cgs_sig_defaults(name: &str) -> HashMap<String, CgsValue> {
             );
         }
         "material" => {
-            m.insert("color".to_string(), CgsValue::Num(0xFFFFFF as f64));
-            m.insert("roughness".to_string(), CgsValue::Num(-1.0));
-            m.insert("metalness".to_string(), CgsValue::Num(-1.0));
-            m.insert("emissive".to_string(), CgsValue::Num(-1.0));
-            m.insert("opacity".to_string(), CgsValue::Num(-1.0));
-            m.insert("ior".to_string(), CgsValue::Num(-1.0));
-            m.insert("absorption".to_string(), CgsValue::Num(-1.0));
-            m.insert("unlit".to_string(), CgsValue::Bool(false));
-            m.insert("map".to_string(), CgsValue::Str(String::new()));
+            m.insert("color".to_string(), ArgValue::Num(0xFFFFFF as f64));
+            m.insert("roughness".to_string(), ArgValue::Num(-1.0));
+            m.insert("metalness".to_string(), ArgValue::Num(-1.0));
+            m.insert("emissive".to_string(), ArgValue::Num(-1.0));
+            m.insert("opacity".to_string(), ArgValue::Num(-1.0));
+            m.insert("ior".to_string(), ArgValue::Num(-1.0));
+            m.insert("absorption".to_string(), ArgValue::Num(-1.0));
+            m.insert("unlit".to_string(), ArgValue::Bool(false));
+            m.insert("map".to_string(), ArgValue::Str(String::new()));
         }
         _ => {}
     }

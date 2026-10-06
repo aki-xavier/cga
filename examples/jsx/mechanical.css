@@ -3,7 +3,7 @@
 .shaft { color: #9BA1A6; roughness: 0.3; metalness: 0.8; }
 .bolt { color: #6E747A; roughness: 0.4; metalness: 0.7; }
 .brass { color: #C8A24A; roughness: 0.3; metalness: 0.8; }
-.tread { color: #4A4F54; roughness: 0.5; metalness: 0.6; map: url("../cgs/assets/treadplate.png"); }
+.tread { color: #4A4F54; roughness: 0.5; metalness: 0.6; map: url("../gallery/assets/treadplate.png"); }
 .washer { color: #4A4F54; roughness: 0.45; metalness: 0.65; }
 .key { color: #C8A24A; roughness: 0.35; metalness: 0.75; }
 .ground { color: #3A4046; roughness: 0.9; }

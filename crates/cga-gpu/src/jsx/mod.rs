@@ -1,4 +1,4 @@
-//! JSX + CSS scene host (docs/cgs-react-css.md, route C-with-A: real JS via
+//! JSX + CSS scene host (docs/jsx-css-host.md: real JS via
 //! boa, JSX compiled by swc, CSS parsed by lightningcss).
 //!
 //! Pipeline: .jsx source → swc (parse JSX → h() calls) → boa executes real
@@ -31,7 +31,7 @@ use cga_core::Multivector;
 
 use crate::scene::{Mesh, MeshParams, PerspectiveCamera, Scene};
 use crate::scene_build::{
-    cam_solve, joint_motion, rpy4, Builders, CamProfile, CamRel, CamSolved, CgsValue, Driven,
+    cam_solve, joint_motion, rpy4, ArgValue, Builders, CamProfile, CamRel, CamSolved, Driven,
     GearRel, JointDef, JointKind, Kinematics, TagInstance, TagRegistry,
 };
 use crate::scene_graph::Color;
@@ -458,13 +458,13 @@ fn p_num_list(el: &El, key: &str) -> Result<Option<Vec<f64>>, String> {
     }
 }
 
-fn cgs_of(v: &Value) -> CgsValue {
+fn cgs_of(v: &Value) -> ArgValue {
     match v {
-        Value::Number(n) => CgsValue::Num(n.as_f64().unwrap_or(0.0)),
-        Value::Bool(b) => CgsValue::Bool(*b),
-        Value::String(s) => CgsValue::Str(s.clone()),
-        Value::Array(a) => CgsValue::List(a.iter().map(cgs_of).collect()),
-        _ => CgsValue::Num(0.0),
+        Value::Number(n) => ArgValue::Num(n.as_f64().unwrap_or(0.0)),
+        Value::Bool(b) => ArgValue::Bool(*b),
+        Value::String(s) => ArgValue::Str(s.clone()),
+        Value::Array(a) => ArgValue::List(a.iter().map(cgs_of).collect()),
+        _ => ArgValue::Num(0.0),
     }
 }
 
@@ -572,7 +572,7 @@ fn css_match(rules: &[StyleRule], el: &El) -> Vec<(String, String)> {
     out
 }
 
-fn css_value_to_arg(name: &str, raw: &str) -> Option<CgsValue> {
+fn css_value_to_arg(name: &str, raw: &str) -> Option<ArgValue> {
     let raw = raw.trim().trim_matches('"').trim_matches('\'');
     match name {
         "color" | "emissive" | "background" | "background-color" => {
@@ -582,7 +582,7 @@ fn css_value_to_arg(name: &str, raw: &str) -> Option<CgsValue> {
                 _ => h.to_string(),
             };
             let v = i32::from_str_radix(&expanded, 16).ok()?;
-            Some(CgsValue::Num(v as f64))
+            Some(ArgValue::Num(v as f64))
         }
         "map" => {
             let p = raw
@@ -591,9 +591,9 @@ fn css_value_to_arg(name: &str, raw: &str) -> Option<CgsValue> {
                 .unwrap_or(raw)
                 .trim_matches('"')
                 .trim_matches('\'');
-            Some(CgsValue::Str(p.to_string()))
+            Some(ArgValue::Str(p.to_string()))
         }
-        _ => raw.parse::<f64>().ok().map(CgsValue::Num),
+        _ => raw.parse::<f64>().ok().map(ArgValue::Num),
     }
 }
 
@@ -624,9 +624,9 @@ impl Builder {
     fn material_for(
         &self,
         el: &El,
-        mat: &HashMap<String, CgsValue>,
+        mat: &HashMap<String, ArgValue>,
     ) -> Result<crate::shading::Material, String> {
-        let mut merged: HashMap<String, CgsValue> = mat.clone();
+        let mut merged: HashMap<String, ArgValue> = mat.clone();
         for (k, v) in css_match(&self.rules, el) {
             let key = k.trim_start_matches("--").to_string();
             if let Some(val) = css_value_to_arg(&k, &v) {
@@ -640,7 +640,7 @@ impl Builder {
         }
         self.loader
             .build_material(&merged)
-            .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))
+            .map_err(|e| e.replacen("build: ", "JSX: ", 1))
     }
 
     fn register_tags(&mut self, geo: &cga_core::Geometry, world: [f64; 16], emit: [f64; 16]) {
@@ -688,7 +688,7 @@ impl Builder {
         &mut self,
         el: &El,
         ctx: [f64; 16],
-        mat: &HashMap<String, CgsValue>,
+        mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
@@ -958,7 +958,7 @@ impl Builder {
     }
 
     fn build_geo(&mut self, el: &El) -> Result<cga_core::Geometry, String> {
-        let mut args: HashMap<String, CgsValue> = HashMap::new();
+        let mut args: HashMap<String, ArgValue> = HashMap::new();
         for (k, v) in &el.props {
             if MATERIAL_KEYS.contains(&k.as_str()) || k == "class" || k == "className" || k == "id"
             {
@@ -969,17 +969,17 @@ impl Builder {
         let args = self
             .loader
             .resolve(&el.tag, Vec::new(), args, 0)
-            .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))?;
+            .map_err(|e| e.replacen("build: ", "JSX: ", 1))?;
         self.loader
             .build_geometry(&el.tag, &args, 0)
-            .map_err(|e| e.replacen("CGS line 0: ", "JSX: ", 1))
+            .map_err(|e| e.replacen("build: ", "JSX: ", 1))
     }
 
     fn primitive_el(
         &mut self,
         el: &El,
         ctx: [f64; 16],
-        mat: &HashMap<String, CgsValue>,
+        mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
     ) -> Result<(), String> {
         let geo = self.build_geo(el)?;
@@ -992,7 +992,7 @@ impl Builder {
         &mut self,
         el: &El,
         ctx: [f64; 16],
-        mat: &HashMap<String, CgsValue>,
+        mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
@@ -1649,7 +1649,7 @@ pub fn run_jsx_pose(
         if r.sel.scene {
             for (k, v) in &r.props {
                 if k == "background" || k == "background-color" {
-                    if let Some(CgsValue::Num(c)) = css_value_to_arg(k, v) {
+                    if let Some(ArgValue::Num(c)) = css_value_to_arg(k, v) {
                         scene.background = Color::from_hex(c as i32);
                     }
                 }

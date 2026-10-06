@@ -895,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cgs_modifier_ordering() {
+    fn test_jsx_modifier_ordering() {
         let sc = crate::run_jsx(
             "export default <translate t={[10,0,0]}><scale s={2}><sphere r={1} /></scale></translate>;",
             None,
@@ -922,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cgs_csg_block_and_new_primitives() {
+    fn test_jsx_csg_block_and_new_primitives() {
         let text = "export default (\n  <scene>\n    \
             <difference><box s={[2,2,2]} /><cylinder r={0.5} h={4} /></difference>\n    \
             <cone r={1} h={2} />\n    \
@@ -942,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn test_cgs_gltf_mesh() {
+    fn test_jsx_gltf_mesh() {
         let (verts, faces) = extrude(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], 1.0);
         crate::save_glb(
-            "/tmp/cga_cgs.glb",
+            "/tmp/cga_host.glb",
             &[crate::GltfMeshIn {
                 vertices: verts,
                 faces,
@@ -954,7 +954,7 @@ mod tests {
             }],
         );
         let sc = crate::run_jsx(
-            "export default <mesh file=\"cga_cgs.glb\" />;",
+            "export default <mesh file=\"cga_host.glb\" />;",
             None,
             "/tmp",
         )
@@ -962,6 +962,6 @@ mod tests {
         .scene;
         assert_eq!(sc.objects.len(), 1);
         assert_eq!(geom_kind(&sc.objects[0].geometry), "mesh");
-        let _ = std::fs::remove_file("/tmp/cga_cgs.glb");
+        let _ = std::fs::remove_file("/tmp/cga_host.glb");
     }
 }

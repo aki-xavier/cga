@@ -1,4 +1,4 @@
-// 自由曲面的 JSX 版（与 examples/cgs/freeform.cgs 同构）
+// 自由曲面的 JSX 版（与 examples/jsx/freeform.jsx 同构）
 import './freeform.css';
 
 const PTS = [

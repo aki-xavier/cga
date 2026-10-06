@@ -1,4 +1,4 @@
-//! URDF interop (docs/cgs-articulation.md P5/P6).
+//! URDF interop (关节化 P5/P6（调研文档已随完成退役）).
 //!
 //! Export: the CGS joint tree maps 1:1 onto URDF (origin xyz/rpy ↔ at/rpy,
 //! axis in the joint frame, limit, gear → mimic). helical/cylindrical/

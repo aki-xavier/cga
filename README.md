@@ -20,41 +20,41 @@ Eight gallery scenes (`examples/jsx/*.jsx` + `.css`). One `render_jsx` command p
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/orbit.png" width="440" alt="orbit.jsx render"><br>
+      <img src="examples/gallery/orbit.png" width="440" alt="orbit.jsx render"><br>
       <sub><b>orbit.jsx</b> — refractive glass sphere + reflective/diffuse multi-material. Golden-test scene.</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/grid.png" width="440" alt="grid.jsx 3×3 sphere grid"><br>
+      <img src="examples/gallery/grid.png" width="440" alt="grid.jsx 3×3 sphere grid"><br>
       <sub><b>grid.jsx</b> — 3×3 sphere grid with <code>module</code> + <code>for</code>.</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/building.png" width="440" alt="building.jsx brick building"><br>
+      <img src="examples/gallery/building.png" width="440" alt="building.jsx brick building"><br>
       <sub><b>building.jsx</b> — CSG cuts true window holes. <code>map=</code> applies the brick texture.</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/mechanical.png" width="440" alt="mechanical.jsx mechanical part"><br>
+      <img src="examples/gallery/mechanical.png" width="440" alt="mechanical.jsx mechanical part"><br>
       <sub><b>mechanical.jsx</b> — bolt-circle drilling pattern. Countersunk cone holes. Torus washer. Gear tooth array.</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/primitives.png" width="440" alt="primitives.jsx primitive family"><br>
+      <img src="examples/gallery/primitives.png" width="440" alt="primitives.jsx primitive family"><br>
       <sub><b>primitives.jsx</b> — primitive family: sphere·box·cylinder·cone (blades) + torus·tube·ellipsoid·cyclide·circle (ray inverse transform).</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/affine.png" width="440" alt="affine.jsx affine extension"><br>
+      <img src="examples/gallery/affine.png" width="440" alt="affine.jsx affine extension"><br>
       <sub><b>affine.jsx</b> — non-uniform <code>scale</code>. <code>mirror</code> mirror pair: the off-center hole and corner marker sphere flip with the body.</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/assembly.png" width="440" alt="assembly.jsx associative assembly"><br>
+      <img src="examples/gallery/assembly.png" width="440" alt="assembly.jsx associative assembly"><br>
       <sub><b>assembly.jsx</b> — v2/v3 showcase: <code>constrain</code> solves hole positions. <code>drill</code> cuts through. <code>face</code> mounts posts. <code>instances</code> gates the top beam. Method chaining throughout.</sub>
     </td>
     <td align="center" width="50%">
-      <img src="examples/cgs/examples_cgs/freeform.png" width="440" alt="freeform.jsx freeform surface"><br>
+      <img src="examples/gallery/freeform.png" width="440" alt="freeform.jsx freeform surface"><br>
       <sub><b>freeform.jsx</b> — bicubic Bézier surface shell. Slot cut into a thick-shell surface (CSG leaf).</sub>
     </td>
   </tr>
@@ -110,11 +110,11 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 | **Render engine** | three.js naming: Scene / PerspectiveCamera / Mesh / Sphere·Plane·Cylinder·Box·Circle Geometry / MeshStandard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
 | **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. **Mesh**: Möller–Trumbore batch intersection + extrude/loft + OBJ/glTF/GLB. |
 | **MLX GPU** | Per-pixel vectorized analytic intersection. One kernel batch per full-resolution frame (mlx-rs / Metal). Camera space: X right, Y down, Z forward. |
-| **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `CgsRun`; orbit.jsx renders byte-identical to orbit.jsx. See `docs/cgs-react-css.md`. |
+| **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `SceneRun`. See `docs/jsx-css-host.md`. |
 
 ## Scene authoring: JSX + CSS (React style)
 
-Scenes are `.jsx` files with a `.css` material sheet. Real JavaScript runs (function components, `map`, ternaries, `Math`); JSX elements map to scene elements; CSS rules apply materials by tag/class/id. See `docs/cgs-react-css.md` for the mapping table and boundaries. The retired CGS text syntax is no longer parsed.
+Scenes are `.jsx` files with a `.css` material sheet. Real JavaScript runs (function components, `map`, ternaries, `Math`); JSX elements map to scene elements; CSS rules apply materials by tag/class/id. See `docs/jsx-css-host.md` for the mapping table and boundaries.
 
 Scene example (`examples/jsx/orbit.jsx`):
 
@@ -204,13 +204,13 @@ The gallery scene `assembly.jsx` (`examples/jsx/assembly.jsx`) exercises every v
 
 ![CSG booleans side by side: union / difference / intersection](examples/csg/demo_csg.png)
 
-**New primitives** — cone (convex-body interval clipping) / torus (Durand–Kerner solves the quartic; `arc<2π` gives a partial arc-pipe tube; CGS and the Rust API share one source) / ellipsoid (affinely scaled sphere) / cyclide (Dupin cyclide quartic surface). These four are not CGA blades. They connect through ray inverse transforms. See the gallery image `primitives.jsx`.
+**New primitives** — cone (convex-body interval clipping) / torus (Durand–Kerner solves the quartic; `arc<2π` gives a partial arc-pipe tube; JSX and the Rust API share one source) / ellipsoid (affinely scaled sphere) / cyclide (Dupin cyclide quartic surface). These four are not CGA blades. They connect through ray inverse transforms. See the gallery image `primitives.jsx`.
 
 **Affine extension** — scale/mirror connect through the AffineGeometry ray inverse transform. Versors cannot express these two transform classes. Normals use the inverse-transpose transform. Mirrors are automatically correct when det<0. The context is a full 4×4 affine. Geometry landing points are decomposed into motor·linear by Newton polar decomposition. Any nesting order of `rotate` with `scale/mirror` is correct. See the mirror pair in the gallery `affine.jsx`.
 
 **Mesh and interop** — `MeshGeometry`: Möller–Trumbore batch intersection. Flat normals. No BVH. `modeling.rs`: extrude (ear-clipping triangulation of concave outlines) and loft (equal-point-count multi-section). `mesh_io.rs`: pure-stdlib OBJ read/write. `mesh_io_gltf.rs`: glTF/GLB read/write (node transforms/hierarchy/material colors).
 
-**Freeform surfaces (P3)** — `bezier(points=16, thickness, div)` is a rational bicubic Bézier patch. See the surface shell and the slotted surface in the gallery `freeform.jsx`. Its `crossings`/`contains`/`field`/`bounds` reuse the mesh MT kernel (uniform `div×div` tessellation; the analytic chord-height bound is asserted in tests). With `thickness>0` it stitches a watertight offset thick shell (top/bottom/side walls share indices; every edge asserted ×2) — a true solid that can enter CSG and baking. With `thickness=0` it is a render surface. CSG and baking reject it explicitly (same family as `circle`). Full example: `examples/cgs/freeform.jsx`. Measured constraint: CSG×mesh memory grows as O(rays × intersections × triangles). The interval classifier samples (k+1) points per ray. `contains` evaluates in chunks under a 256 MB temporary budget to prevent OOM. A high `div` must be paired with low resolution/aa.
+**Freeform surfaces (P3)** — `bezier(points=16, thickness, div)` is a rational bicubic Bézier patch. See the surface shell and the slotted surface in the gallery `freeform.jsx`. Its `crossings`/`contains`/`field`/`bounds` reuse the mesh MT kernel (uniform `div×div` tessellation; the analytic chord-height bound is asserted in tests). With `thickness>0` it stitches a watertight offset thick shell (top/bottom/side walls share indices; every edge asserted ×2) — a true solid that can enter CSG and baking. With `thickness=0` it is a render surface. CSG and baking reject it explicitly (same family as `circle`). Full example: `examples/jsx/freeform.jsx`. Measured constraint: CSG×mesh memory grows as O(rays × intersections × triangles). The interval classifier samples (k+1) points per ray. `contains` evaluates in chunks under a 256 MB temporary budget to prevent OOM. A high `div` must be paired with low resolution/aa.
 
 **Baking** — `bake` turns any CSG implicit solid into a triangle mesh. **Pure CPU float64, no GPU dependency. Runs on Linux/CI.** Pipeline: signed field (same sign convention as the GPU `*_contains`) → marching tetrahedra (Kuhn six-tetrahedron subdivision) → bit-exact vertex welding + component-wise consistent orientation. **Watertightness is a constructive conclusion, not luck.** `topology_report()` puts boundary edges, non-manifold edges, and the Euler characteristic into CI assertions. Non-finite field values report an explicit error: export must not abstain. The image below is the `demo_bake` output. Left: implicit CSG original (analytically smooth). Right: baked mesh (visible facets).
 
@@ -364,10 +364,10 @@ crates/
     mesh_io_gltf            glTF/GLB read/write
     scene_build / scene_report / jsx_gen / headless scene builders, report, JSX generation, headless rendering
     urdf                    URDF export/import (jsx_to_urdf / urdf_to_jsx, urdf-rs)
-    jsx                     JSX+CSS scene host (swc compile → boa execute → CgsRun)
+    jsx                     JSX+CSS scene host (swc compile → boa execute → SceneRun)
     renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction)
   cga-examples/             demo CLIs (src/bin/*.rs)
-examples/                   .cgs scenes (incl. primitives/affine/assembly/freeform) + jsx/ React-style scenes + assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
+examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; bake/lang are the P4 and generation-pipeline showcases)
 docs/                       architecture diagram, robotics diagram, cross-platform plan
 ```
 

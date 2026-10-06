@@ -1,4 +1,4 @@
-// orbit demo 场景的 JSX + CSS 版（与 examples/cgs/orbit.cgs 同构；
+// orbit demo 场景的 JSX + CSS 版（与 examples/jsx/orbit.jsx 同构；
 // 测试断言两者渲染逐字节相等）
 import './orbit.css';
 

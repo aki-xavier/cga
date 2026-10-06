@@ -20,18 +20,18 @@ impl Builders {
     pub(crate) fn resolve(
         &self,
         name: &str,
-        pos: Vec<CgsValue>,
-        kw: HashMap<String, CgsValue>,
+        pos: Vec<ArgValue>,
+        kw: HashMap<String, ArgValue>,
         line: i32,
-    ) -> Result<HashMap<String, CgsValue>, String> {
-        let names = cgs_sig_names(name);
-        let defaults = cgs_sig_defaults(name);
-        let mut merged: HashMap<String, CgsValue> = HashMap::new();
+    ) -> Result<HashMap<String, ArgValue>, String> {
+        let names = sig_names(name);
+        let defaults = sig_defaults(name);
+        let mut merged: HashMap<String, ArgValue> = HashMap::new();
         for (k, v) in &defaults {
             merged.insert(k.clone(), v.clone());
         }
         if pos.len() > names.len() {
-            return Err(format!("CGS line {line}: {name} too many positional args"));
+            return Err(format!("build: {name} too many positional args"));
         }
         for (i, pname) in names.iter().enumerate() {
             if i < pos.len() {
@@ -40,14 +40,14 @@ impl Builders {
         }
         for (k, v) in kw {
             if !names.contains(&k.as_str()) && !defaults.contains_key(&k) {
-                return Err(format!("CGS line {line}: {name} has no parameter {k}"));
+                return Err(format!("build: {name} has no parameter {k}"));
             }
             merged.insert(k, v);
         }
         for pname in &names {
-            if let Some(CgsValue::Num(x)) = merged.get(*pname) {
+            if let Some(ArgValue::Num(x)) = merged.get(*pname) {
                 if x.is_nan() && *pname == "cylinder.h" {
-                    merged.insert(pname.to_string(), CgsValue::Num(-1.0));
+                    merged.insert(pname.to_string(), ArgValue::Num(-1.0));
                 }
             }
         }
@@ -57,14 +57,14 @@ impl Builders {
     pub(crate) fn build_geometry(
         &mut self,
         name: &str,
-        args: &HashMap<String, CgsValue>,
+        args: &HashMap<String, ArgValue>,
         line: i32,
     ) -> Result<Geometry, String> {
         validate_geometry_params(name, args, line)?;
         match name {
             "sphere" => {
                 let r = cgs_num(
-                    &args.get("r").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "sphere.r",
                 )?;
@@ -72,12 +72,12 @@ impl Builders {
             }
             "plane" => {
                 let n = cgs_vec3(
-                    &args.get("n").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("n").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "plane.n",
                 )?;
                 let d = cgs_num(
-                    &args.get("d").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("d").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "plane.d",
                 )?;
@@ -85,12 +85,12 @@ impl Builders {
             }
             "cylinder" => {
                 let h = cgs_num(
-                    &args.get("h").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("h").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cylinder.h",
                 )?;
                 let r = cgs_num(
-                    &args.get("r").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cylinder.r",
                 )?;
@@ -101,7 +101,7 @@ impl Builders {
             }
             "box" => {
                 let s = cgs_vec3(
-                    &args.get("s").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("s").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "box.s",
                 )?;
@@ -109,7 +109,7 @@ impl Builders {
             }
             "circle" => {
                 let r = cgs_num(
-                    &args.get("r").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "circle.r",
                 )?;
@@ -117,12 +117,12 @@ impl Builders {
             }
             "cone" => {
                 let r = cgs_num(
-                    &args.get("r").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cone.r",
                 )?;
                 let h = cgs_num(
-                    &args.get("h").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("h").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cone.h",
                 )?;
@@ -130,12 +130,12 @@ impl Builders {
             }
             "torus" => {
                 let r1 = cgs_num(
-                    &args.get("R").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("R").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "torus.R",
                 )?;
                 let r2 = cgs_num(
-                    &args.get("r").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "torus.r",
                 )?;
@@ -143,7 +143,7 @@ impl Builders {
                     &args
                         .get("arc")
                         .cloned()
-                        .unwrap_or(CgsValue::Num(std::f64::consts::TAU)),
+                        .unwrap_or(ArgValue::Num(std::f64::consts::TAU)),
                     line,
                     "torus.arc",
                 )?;
@@ -155,17 +155,17 @@ impl Builders {
             }
             "cyclide" => {
                 let a = cgs_num(
-                    &args.get("a").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("a").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.a",
                 )?;
                 let b = cgs_num(
-                    &args.get("b").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("b").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.b",
                 )?;
                 let d = cgs_num(
-                    &args.get("d").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("d").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.d",
                 )?;
@@ -178,7 +178,7 @@ impl Builders {
             }
             "ellipsoid" => {
                 let r = cgs_vec3(
-                    &args.get("radii").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("radii").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "ellipsoid.radii",
                 )?;
@@ -187,15 +187,15 @@ impl Builders {
                 )))
             }
             "bezier" => {
-                let raw = args.get("points").cloned().unwrap_or(CgsValue::Num(0.0));
+                let raw = args.get("points").cloned().unwrap_or(ArgValue::Num(0.0));
                 let pts = points16(&raw, line, "bezier.points")?;
                 let thickness = cgs_num(
-                    &args.get("thickness").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("thickness").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "bezier.thickness",
                 )?;
                 let div = cgs_num(
-                    &args.get("div").cloned().unwrap_or(CgsValue::Num(8.0)),
+                    &args.get("div").cloned().unwrap_or(ArgValue::Num(8.0)),
                     line,
                     "bezier.div",
                 )? as usize;
@@ -205,12 +205,12 @@ impl Builders {
             }
             "extrude" => {
                 let prof = profile2d(
-                    &args.get("profile").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("profile").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "extrude.profile",
                 )?;
                 let h = cgs_num(
-                    &args.get("h").cloned().unwrap_or(CgsValue::Num(0.0)),
+                    &args.get("h").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "extrude.h",
                 )?;
@@ -218,25 +218,23 @@ impl Builders {
                 Ok(Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f)))
             }
             "loft" => {
-                let raw = args.get("profiles").cloned().unwrap_or(CgsValue::Num(0.0));
+                let raw = args.get("profiles").cloned().unwrap_or(ArgValue::Num(0.0));
                 match raw {
-                    CgsValue::List(list) => {
+                    ArgValue::List(list) => {
                         if list.len() < 2 {
-                            return Err(format!(
-                                "CGS line {line}: loft.profiles needs >= 2 sections"
-                            ));
+                            return Err(format!("build: loft.profiles needs >= 2 sections"));
                         }
                         let mut profiles: Vec<Vec<[f64; 2]>> = Vec::new();
                         for p in &list {
                             profiles.push(profile2d(p, line, "loft.profiles[i]")?);
                         }
-                        let zsraw = args.get("zs").cloned().unwrap_or(CgsValue::Num(0.0));
+                        let zsraw = args.get("zs").cloned().unwrap_or(ArgValue::Num(0.0));
                         match zsraw {
-                            CgsValue::Vec3(v3) => {
+                            ArgValue::Vec3(v3) => {
                                 let (v, f) = loft(&profiles, &[v3.x, v3.y, v3.z]);
                                 Ok(Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f)))
                             }
-                            CgsValue::List(zlist) => {
+                            ArgValue::List(zlist) => {
                                 let mut zs: Vec<f64> = Vec::new();
                                 for z in &zlist {
                                     zs.push(cgs_num(z, line, "loft.zs[i]")?);
@@ -244,20 +242,18 @@ impl Builders {
                                 let (v, f) = loft(&profiles, &zs);
                                 Ok(Geometry::TrimeshGeometry(TrimeshGeometry::new(&v, &f)))
                             }
-                            _ => Err(format!("CGS line {line}: loft.zs needs a list")),
+                            _ => Err(format!("build: loft.zs needs a list")),
                         }
                     }
-                    _ => Err(format!("CGS line {line}: loft.profiles needs a list")),
+                    _ => Err(format!("build: loft.profiles needs a list")),
                 }
             }
             "mesh" => {
-                let p = args.get("file").cloned().unwrap_or(CgsValue::Num(0.0));
+                let p = args.get("file").cloned().unwrap_or(ArgValue::Num(0.0));
                 match p {
-                    CgsValue::Str(path) => {
+                    ArgValue::Str(path) => {
                         if self.asset_root.is_empty() {
-                            return Err(format!(
-                                "CGS line {line}: mesh needs an explicit asset_root"
-                            ));
+                            return Err(format!("build: mesh needs an explicit asset_root"));
                         }
                         let full = format!("{}/{}", self.asset_root, path);
                         if full.ends_with(".obj") {
@@ -269,19 +265,19 @@ impl Builders {
                             return Ok(gltf_to_geometry(&loaded));
                         }
                         Err(format!(
-                            "CGS line {line}: unsupported mesh file \"{path}\" (use .obj/.glb/.gltf)"
+                            "build: unsupported mesh file \"{path}\" (use .obj/.glb/.gltf)"
                         ))
                     }
-                    _ => Err(format!("CGS line {line}: mesh.file needs a string path")),
+                    _ => Err(format!("build: mesh.file needs a string path")),
                 }
             }
-            _ => Err(format!("CGS line {line}: unknown primitive {name}")),
+            _ => Err(format!("build: unknown primitive {name}")),
         }
     }
 
     pub(crate) fn build_material(
         &self,
-        mat: &HashMap<String, CgsValue>,
+        mat: &HashMap<String, ArgValue>,
     ) -> Result<Material, String> {
         let color = match mat.get("color") {
             Some(v) => {
@@ -293,7 +289,7 @@ impl Builders {
         let mut tex = None;
         if let Some(v) = mat.get("map") {
             match v {
-                CgsValue::Str(path) => {
+                ArgValue::Str(path) => {
                     if !path.is_empty() {
                         if self.asset_root.is_empty() {
                             return Err("CGS material.map needs an explicit asset_root".to_string());
@@ -305,7 +301,7 @@ impl Builders {
             }
         }
         if let Some(u) = mat.get("unlit") {
-            if cgs_truthy(u) {
+            if arg_truthy(u) {
                 let op = match mat.get("opacity") {
                     Some(o) => cgs_num(o, 0, "opacity")?,
                     None => 1.0,
@@ -314,11 +310,11 @@ impl Builders {
             }
         }
         let roughness = cgs_opt_num(
-            &mat.get("roughness").cloned().unwrap_or(CgsValue::Num(-1.0)),
+            &mat.get("roughness").cloned().unwrap_or(ArgValue::Num(-1.0)),
             0.5,
         );
         let metalness = cgs_opt_num(
-            &mat.get("metalness").cloned().unwrap_or(CgsValue::Num(-1.0)),
+            &mat.get("metalness").cloned().unwrap_or(ArgValue::Num(-1.0)),
             0.0,
         );
         let emissive = match mat.get("emissive") {
@@ -333,14 +329,14 @@ impl Builders {
             None => Color::from_hex(0x000000),
         };
         let opacity = cgs_opt_num(
-            &mat.get("opacity").cloned().unwrap_or(CgsValue::Num(-1.0)),
+            &mat.get("opacity").cloned().unwrap_or(ArgValue::Num(-1.0)),
             1.0,
         );
-        let ior = cgs_opt_num(&mat.get("ior").cloned().unwrap_or(CgsValue::Num(-1.0)), 1.5);
+        let ior = cgs_opt_num(&mat.get("ior").cloned().unwrap_or(ArgValue::Num(-1.0)), 1.5);
         let absorption = cgs_opt_num(
             &mat.get("absorption")
                 .cloned()
-                .unwrap_or(CgsValue::Num(-1.0)),
+                .unwrap_or(ArgValue::Num(-1.0)),
             0.0,
         );
         let mut m = Material::standard(MaterialParams {

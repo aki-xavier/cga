@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | `cga-core`（代数核心） | 纯 Rust f64，无外部依赖 | 已跨平台，含 WASM |
 | `bake`（网格烘焙） | 纯 CPU f64 | 已跨平台，Linux/CI 可运行 |
-| CGS 语言 / 场景报告 / glTF / PNG | 纯 stdlib Rust | 已跨平台 |
+| 场景宿主 / 场景报告 / glTF / PNG | 纯 stdlib Rust | 已跨平台 |
 | **逐像素内核（`cga-gpu`）** | **mlx-rs → MLX C++ → Metal，仅 Apple Silicon** | **唯一锁定点** |
 
 结论：跨平台问题 = 替换 `cga-gpu` 里 13 个文件的 MLX 调用面。其余全部已经可移植。
@@ -69,5 +69,5 @@
 ## 6. 验证方式
 
 - 阶段 1 完成判据：`make test` 236 个测试全过，金样 RMSE = 0 不变。
-- 阶段 2 完成判据：`cargo test --no-default-features --features cpu-backend` 在 Linux CI 全过。`render_cgs orbit.cgs` 输出与 MLX 金样 RMSE < 1e-3。
-- 阶段 3 完成判据：同一代码在 macOS（Metal）、Linux（Vulkan）、Windows（DX12）渲染金样达标。WASM 构建产出浏览器可跑的 `render_cgs`。
+- 阶段 2 完成判据：`cargo test --no-default-features --features cpu-backend` 在 Linux CI 全过。`render_jsx orbit.jsx` 输出与 MLX 金样 RMSE < 1e-3。
+- 阶段 3 完成判据：同一代码在 macOS（Metal）、Linux（Vulkan）、Windows（DX12）渲染金样达标。WASM 构建产出浏览器可跑的 `render_jsx`。

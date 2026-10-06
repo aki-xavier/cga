@@ -1,4 +1,4 @@
-// 3×3 球阵列（与 examples/cgs/grid.cgs 同构）
+// 3×3 球阵列（与 examples/jsx/grid.jsx 同构）
 import './grid.css';
 
 const Bead = ({ x, z, r = 0.35 }) => (

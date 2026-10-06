@@ -315,8 +315,7 @@ pub(crate) fn cam_solve(
     let pa = pose_profile(&rel.driver_profile, d_world);
     let pb0 = pose_profile(&rel.driven_profile, t2(0.0));
     let parallel = |u: [f64; 3], v: [f64; 3]| v3_norm(v3_cross(u, v)) < 1e-9;
-    let err_axis =
-        || format!("CGS line {line}: cam profile normal must be parallel to its joint axis");
+    let err_axis = || format!("build: cam profile normal must be parallel to its joint axis");
     if !pa.is_plane {
         if matches!(
             driver.kind,
@@ -386,14 +385,14 @@ pub(crate) fn cam_solve(
     }
     if brackets.is_empty() {
         return Err(format!(
-            "CGS line {line}: cam found no contact in limit [{}, {}]",
+            "build: cam found no contact in limit [{}, {}]",
             fmt_f64(lo),
             fmt_f64(hi)
         ));
     }
     if brackets.len() > 1 {
         return Err(format!(
-            "CGS line {line}: cam contact is not unique in limit [{}, {}]",
+            "build: cam contact is not unique in limit [{}, {}]",
             fmt_f64(lo),
             fmt_f64(hi)
         ));
