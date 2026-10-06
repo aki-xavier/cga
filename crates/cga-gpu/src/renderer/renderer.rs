@@ -52,6 +52,44 @@ fn shadow_ray_indices(
     Some(idx)
 }
 
+/// 次级光线（反射/折射）：对象包围球 vs 光线束的保守筛选，返回需要求交的光线下标。
+/// `None` = 不能界定（无界几何如平面）或子集收益不足（≥50% 命中）。
+fn ray_object_subset(params: &GeometryParams, o: &Array, d: &Array) -> Option<Vec<i32>> {
+    let b = geom_bounds(params)?;
+    let c = [
+        0.5 * (b[0][0] + b[1][0]),
+        0.5 * (b[0][1] + b[1][1]),
+        0.5 * (b[0][2] + b[1][2]),
+    ];
+    let (dx, dy, dz) = (b[1][0] - b[0][0], b[1][1] - b[0][1], b[1][2] - b[0][2]);
+    let r = 0.5 * (dx * dx + dy * dy + dz * dz).sqrt();
+    if !(r.is_finite() && r >= 0.0) {
+        return None;
+    }
+    let n = o.shape()[0];
+    let to_c = ck(ck(o.negative()).add(&arr3v(c)));
+    let proj = ck(ck(to_c.multiply(d)).sum_axes(&[-1], false));
+    let perp2 =
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
+    mask.eval().unwrap();
+    let cnt = ck(mask.sum(None)).item_cast::<i32>();
+    if cnt * 2 >= n {
+        return None; // 收益不足 2×：走全量
+    }
+    if cnt == 0 {
+        return Some(Vec::new());
+    }
+    let mut idx: Vec<i32> = Vec::with_capacity(cnt as usize);
+    let data = mask.as_slice::<bool>();
+    for (i, &v) in data.iter().enumerate() {
+        if v {
+            idx.push(i as i32);
+        }
+    }
+    Some(idx)
+}
+
 /// 主光线：对象屏幕包围盒内的光线下标（保守剔除）。
 ///
 /// 光线包按 `(子采样 j,i) × 基础像素 (y,x)` 展开：`idx = (j*k+i)·(w·h) + y·w + x`。
@@ -304,62 +342,113 @@ impl Renderer {
         };
         if depth < self.max_depth {
             let need = ck(hit.logical_and(s_lt(&op, 1.0)));
-            if ck(need.sum(None)).item_cast::<f32>() > 0.0 {
+            let need_c = ck(need.contiguous());
+            need_c.eval().unwrap();
+            let m_need = ck(ck(need_c.as_type::<i32>()).sum(None)).item_cast::<i32>();
+            if m_need > 0 {
+                // 递归只对“需要折射/反射的像素”做：把光线包裁剪成 need 的子集，
+                // 递归返回后散布回全量（其余像素由 result 保留）。此前递归在全量
+                // 光线包上跑，未命中的像素白算——玻璃像素占比越小浪费越大。
+                let full = m_need >= o.shape()[0];
+                let idx: Vec<i32> = if full {
+                    Vec::new()
+                } else {
+                    let mut v: Vec<i32> = Vec::with_capacity(m_need as usize);
+                    for (i, &b) in need_c.as_slice::<bool>().iter().enumerate() {
+                        if b {
+                            v.push(i as i32);
+                        }
+                    }
+                    v
+                };
+                let ids = if full {
+                    None
+                } else {
+                    Some(Array::from_slice(&idx, &[idx.len() as i32]))
+                };
+                // 子集化输入（full 时直接用原数组）
+                let g = |a: &Array| -> Array {
+                    match &ids {
+                        Some(id) => ck(a.take_axis(id, 0)),
+                        None => a.clone(),
+                    }
+                };
+                let (o_s, d_s) = (g(o), g(d));
+                let n_s = g(&n);
+                let cos_i_s = g(&cos_i);
+                let op_s = g(&op);
+                let ior_s = g(&ior);
+                let abso_s = g(&abso);
+                let t_s = g(&t);
+                let local_s = g(&local);
+                let in_medium_s = g(in_medium);
+                let sigma_s = g(sigma);
+                let bg_s = g(bg);
+
                 let eta = ck(ops::select(
-                    ck(in_medium.expand_dims(1)),
-                    ck(ior.expand_dims(1)),
-                    ck(fs(1.0).divide(ck(ior.expand_dims(1)))),
+                    ck(in_medium_s.expand_dims(1)),
+                    ck(ior_s.expand_dims(1)),
+                    ck(fs(1.0).divide(ck(ior_s.expand_dims(1)))),
                 ));
                 let k = ck(fs(1.0).subtract(ck(ck(eta.multiply(&eta))
-                    .multiply(ck(fs(1.0).subtract(ck(cos_i.multiply(&cos_i))))))));
+                    .multiply(ck(fs(1.0).subtract(ck(cos_i_s.multiply(&cos_i_s))))))));
                 let cos_t = ck(s_max(&k, 0.0).sqrt());
-                let g = ck(fs(1.0).divide(&eta));
-                let rs = ck(ck(cos_i.subtract(ck(g.multiply(&cos_t))))
-                    .divide(s_max(&ck(cos_i.add(ck(g.multiply(&cos_t)))), 1e-12)));
-                let rp = ck(ck(cos_t.subtract(ck(g.multiply(&cos_i))))
-                    .divide(s_max(&ck(cos_t.add(ck(g.multiply(&cos_i)))), 1e-12)));
+                let gg = ck(fs(1.0).divide(&eta));
+                let rs = ck(ck(cos_i_s.subtract(ck(gg.multiply(&cos_t))))
+                    .divide(s_max(&ck(cos_i_s.add(ck(gg.multiply(&cos_t)))), 1e-12)));
+                let rp = ck(ck(cos_t.subtract(ck(gg.multiply(&cos_i_s))))
+                    .divide(s_max(&ck(cos_t.add(ck(gg.multiply(&cos_i_s)))), 1e-12)));
                 let mut fres = s_mul(&ck(ck(rs.multiply(&rs)).add(ck(rp.multiply(&rp)))), 0.5);
                 fres = ck(ops::select(s_le(&k, 0.0), ck(ops::ones_like(&fres)), &fres));
-                let p = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
-                let d_r = ck(d.add(ck(n.multiply(s_mul(&cos_i, 2.0)))));
-                let d_t = ck(ck(d.multiply(&eta))
-                    .add(ck(n.multiply(ck(ck(eta.multiply(&cos_i)).subtract(&cos_t))))));
-                let entering = ck(in_medium.logical_not());
-                let sig_next = ck(ops::select(&entering, &abso, fs(0.0)));
+                let p = ck(o_s.add(ck(ck(t_s.expand_dims(1)).multiply(&d_s))));
+                let d_r = ck(d_s.add(ck(n_s.multiply(s_mul(&cos_i_s, 2.0)))));
+                let d_t = ck(ck(d_s.multiply(&eta)).add(ck(
+                    n_s.multiply(ck(ck(eta.multiply(&cos_i_s)).subtract(&cos_t)))
+                )));
+                let entering = ck(in_medium_s.logical_not());
+                let sig_next = ck(ops::select(&entering, &abso_s, fs(0.0)));
                 let (refl, _, _) = self.trace(
                     scene,
                     params_list,
                     stated_list,
-                    &ck(p.add(s_mul(&n, 1e-3))),
+                    &ck(p.add(s_mul(&n_s, 1e-3))),
                     &d_r,
                     lit,
                     ambient,
-                    bg,
-                    in_medium,
-                    sigma,
+                    &bg_s,
+                    &in_medium_s,
+                    &sigma_s,
                     depth + 1,
                 );
                 let (refr, _, _) = self.trace(
                     scene,
                     params_list,
                     stated_list,
-                    &ck(p.subtract(s_mul(&n, 1e-3))),
+                    &ck(p.subtract(s_mul(&n_s, 1e-3))),
                     &d_t,
                     lit,
                     ambient,
-                    bg,
+                    &bg_s,
                     &entering,
                     &sig_next,
                     depth + 1,
                 );
-                let body = ck(ck(ck(op.expand_dims(1)).multiply(&local))
+                let body = ck(ck(ck(op_s.expand_dims(1)).multiply(&local_s))
                     .add(ck(
-                        ck(fs(1.0).subtract(ck(op.expand_dims(1)))).multiply(&refr)
+                        ck(fs(1.0).subtract(ck(op_s.expand_dims(1)))).multiply(&refr)
                     )));
                 let glass =
                     ck(ck(fres.multiply(&refl))
                         .add(ck(ck(fs(1.0).subtract(&fres)).multiply(&body))));
-                result = ck(ops::select(ck(need.expand_dims(1)), &glass, &result));
+                result = match &ids {
+                    None => ck(ops::select(ck(need.expand_dims(1)), &glass, &result)),
+                    Some(id) => ck(ops::indexing::scatter_single(
+                        &result,
+                        id,
+                        &ck(glass.reshape(&[idx.len() as i32, 1, 3])),
+                        0,
+                    )),
+                };
             }
         }
         let att = ck(ops::select(
@@ -419,10 +508,13 @@ impl Renderer {
             let params = &params_list[i];
             // 主光线逐对象屏幕区间子集（保守剔除）：只对落在对象屏幕包围盒内的
             // 光线求交。无界几何/跨近平面 → None 回退全量；空表 → 画面外，跳过。
-            let subset: Option<Vec<i32>> = if primary && cull_on {
+            let subset: Option<Vec<i32>> = if !cull_on {
+                None
+            } else if primary {
                 primary_ray_indices(params, &cam, self.width, self.height, self.aa)
             } else {
-                None
+                // 次级光线（反射/折射）：包络球筛选（主光线的屏幕区间不适用）
+                ray_object_subset(params, o, d)
             };
             let ids: Option<Array> = match &subset {
                 Some(v) if v.is_empty() => continue,

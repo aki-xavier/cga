@@ -384,6 +384,48 @@ mod tests {
     }
 
     #[test]
+    fn test_render_glass_recursion_partial_subset() {
+        // 玻璃只覆盖画面中心的一小块：折射递归走“need 子集”路径（此前递归在全量
+        // 光线包上跑，subset 分支漏 gather 会在这里炸/串位）。中心应见墙，边缘仍是墙。
+        let mut sc = rq_wall_scene();
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.3)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0xAAD4FF),
+                roughness: 0.05,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 0.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0, 0.0, 2.2],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut r = Renderer::new(96, 96, 1, 3);
+        let img = r.render(sc, rq_head_on_cam());
+        let center = rq_px(&img, 96, 48, 48);
+        let corner = rq_px(&img, 96, 2, 2);
+        // 边缘（玻璃外）就是墙色 0xCC3333 → (204,51,51)
+        for c in 0..3 {
+            let want = [204.0, 51.0, 51.0][c];
+            assert!(
+                (f64::from(corner[c]) - want).abs() <= 3.0,
+                "边缘应见墙色：corner={corner:?}"
+            );
+        }
+        // 中心透过玻璃：正入射透射所见为墙色，叠加 ~4% Fresnel 反射的浅蓝
+        assert!(
+            center[0] > 150.0
+                && f64::from(center[0]) - f64::from(center[1]) > 80.0
+                && f64::from(center[0]) - f64::from(center[2]) > 60.0,
+            "中心应透过玻璃见到红墙：center={center:?}"
+        );
+    }
+
+    #[test]
     fn test_render_shadow_umbra_is_ambient_only() {
         let mut r = Renderer::new(96, 96, 1, 3);
         let img = r.render(rq_shadow_scene(Some(1.0)), rq_shadow_cam());
