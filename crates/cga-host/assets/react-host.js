@@ -275,11 +275,17 @@
     const reconciler = R.Reconciler(hostConfig);
     const tag = opts.tag === 'legacy' ? R.roots.LegacyRoot : R.roots.ConcurrentRoot;
 
+    // 宿主输入通道：用 React context，而不是可变闭包。改值只让 useContext(HostInput)
+    // 的组件重渲染，其余子树照常 bailout —— 这正是"props 变化 → 局部重渲染"。
+    const InputCtx = React.createContext({});
+    globalThis.HostInput = InputCtx;
+    let input = {};
+
     // 根包装组件与当前根元素。Root 的身份在会话内固定，于是每次 update 都重渲染
     // 同一个组件类型，React 只 diff 它返回的元素树（组件身份不丢，hook 状态得以保留）。
     let rootElement = null;
     const Root = function __CgaRoot() {
-      return rootElement;
+      return React.createElement(InputCtx.Provider, { value: input }, rootElement);
     };
     const root = reconciler.createContainer(
       container,
@@ -313,6 +319,61 @@
         if (rootElement === null) throw new Error('react-host: update() before begin()');
         renderRoot();
         return true;
+      },
+      // 宿主推入输入（props 监听）：设值后调用 update()，只有 context 消费者重渲染。
+      setInput(inputJson) {
+        input = inputJson ? JSON.parse(inputJson) : {};
+        return true;
+      },
+      // 事件派发：自定义渲染器不会自动派发事件，命中谁、派发什么由宿主决定。
+      // 从命中实例沿祖先链找第一个 `prop` 处理器并调用（React 的冒泡语义，简化版）。
+      dispatch(id, prop, payloadJson) {
+        const payload = payloadJson ? JSON.parse(payloadJson) : null;
+        const path = [];
+        const find = (n) => {
+          path.push(n);
+          if (n.id === id) return true;
+          for (const ch of n.children || []) {
+            if (find(ch)) return true;
+          }
+          path.pop();
+          return false;
+        };
+        let hit = false;
+        for (const ch of container.children) {
+          if (find(ch)) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) return JSON.stringify({ found: false, reason: 'no such instance ' + id });
+        for (let i = path.length - 1; i >= 0; i--) {
+          const n = path[i];
+          const handler = n.props ? n.props[prop] : undefined;
+          if (typeof handler === 'function') {
+            handler({
+              type: prop,
+              target: { id: n.id, type: n.type },
+              currentTarget: { id: n.id, type: n.type },
+              payload,
+            });
+            return JSON.stringify({ found: true, id: n.id, type: n.type });
+          }
+        }
+        return JSON.stringify({ found: false, reason: 'no ' + prop + ' handler in ancestry of ' + id });
+      },
+      // 已提交实例清单（宿主拾取/测试用）：id、type、函数型 prop 名。
+      instances() {
+        const out = [];
+        const walk = (n) => {
+          const handlers = n.props
+            ? Object.keys(n.props).filter((k) => typeof n.props[k] === 'function')
+            : [];
+          if (n.kind === 'host') out.push({ id: n.id, type: String(n.type), handlers });
+          for (const ch of n.children || []) walk(ch);
+        };
+        for (const ch of container.children) walk(ch);
+        return JSON.stringify(out);
       },
       unmount() {
         reconciler.updateContainer(null, root, null, null);

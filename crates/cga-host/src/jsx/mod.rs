@@ -1751,6 +1751,151 @@ pub fn render_jsx_png_mode(
     })
 }
 
+/// 长驻场景会话：模块求值一次，之后按帧驱动（宿主输入 / 事件派发），每帧从已提交的
+/// 实例树重建 `SceneRun` 并可渲染。
+///
+/// 这就是"props 监听 + 动态局部重渲染"在宿主侧的落点：输入走 React context（改值只让
+/// 消费者重渲染），事件由宿主派发（自定义渲染器不自动派发事件），重建只反映已变化的实例。
+pub struct SceneSession {
+    react: crate::react::ReactSession,
+    css: Option<String>,
+    asset_root: String,
+    pose: HashMap<String, f64>,
+    run: Option<crate::SceneRun>,
+}
+
+impl SceneSession {
+    pub fn open(
+        jsx_src: &str,
+        css_src: Option<&str>,
+        asset_root: &str,
+    ) -> Result<SceneSession, String> {
+        SceneSession::open_pose(jsx_src, css_src, asset_root, &[])
+    }
+
+    /// 同 [`SceneSession::open`]，并注入 pose 覆盖（`P.x`）。
+    pub fn open_pose(
+        jsx_src: &str,
+        css_src: Option<&str>,
+        asset_root: &str,
+        pose: &[(String, f64)],
+    ) -> Result<SceneSession, String> {
+        let js = compile_jsx(jsx_src)?;
+        let module = format!("{PRELUDE_REACT}{PRELUDE_COMMON}\n{js}");
+        let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
+        let mut react = crate::react::ReactSession::new(crate::react::Runtime::from_env())?;
+        react.register_global("solve", 2, solve_host)?;
+        react.begin(&module, &pose_map)?;
+        let stats = react.drain()?;
+        if stats.errors > 0 {
+            let detail = react
+                .logs()?
+                .into_iter()
+                .filter(|l| l.level == "error")
+                .map(|l| l.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!("JSX: 渲染期异常:\n{detail}"));
+        }
+        let mut sess = SceneSession {
+            react,
+            css: css_src.map(str::to_string),
+            asset_root: asset_root.to_string(),
+            pose: pose_map,
+            run: None,
+        };
+        sess.rebuild()?;
+        Ok(sess)
+    }
+
+    /// 从当前实例树重建 `SceneRun`（CSS 匹配、材质继承、惰性查询都会重跑）。
+    pub fn rebuild(&mut self) -> Result<(), String> {
+        let dump = self.react.snapshot()?;
+        let v: Value =
+            serde_json::from_str(&dump).map_err(|e| format!("JSX: 场景序列化失败: {e}"))?;
+        let pose: Vec<(String, f64)> = self.pose.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let run = build_scene_run(&v, self.css.as_deref(), &self.asset_root, &pose)?;
+        self.run = Some(run);
+        Ok(())
+    }
+
+    pub fn run(&self) -> &crate::SceneRun {
+        self.run
+            .as_ref()
+            .expect("SceneSession: rebuild 之前没有场景")
+    }
+
+    /// 推入宿主输入（props 监听）→ 重渲染 → 跑到静止 → 重建场景。
+    pub fn set_input(&mut self, json: &str) -> Result<crate::react::DrainStats, String> {
+        let stats = self.react.apply_input(json)?;
+        self.rebuild()?;
+        Ok(stats)
+    }
+
+    /// 事件派发 → 跑到静止 → 重建场景。
+    pub fn dispatch(
+        &mut self,
+        id: i64,
+        prop: &str,
+        payload_json: &str,
+    ) -> Result<crate::react::DispatchOutcome, String> {
+        let out = self.react.dispatch(id, prop, payload_json)?;
+        self.react.drain()?;
+        self.rebuild()?;
+        Ok(out)
+    }
+
+    pub fn instances(&mut self) -> Result<Vec<crate::react::InstanceInfo>, String> {
+        self.react.instances()
+    }
+
+    /// 当前已提交实例树的 `{t,p,c}` JSON（调试 / 测试用）。
+    pub fn snapshot(&mut self) -> Result<String, String> {
+        self.react.snapshot()
+    }
+
+    pub fn counters(&mut self) -> Result<crate::react::Counters, String> {
+        self.react.counters()
+    }
+
+    pub fn reset_counters(&mut self) -> Result<(), String> {
+        self.react.reset_counters()
+    }
+
+    pub fn drain(&mut self) -> Result<crate::react::DrainStats, String> {
+        let stats = self.react.drain()?;
+        self.rebuild()?;
+        Ok(stats)
+    }
+
+    pub fn errors(&mut self) -> Result<Vec<String>, String> {
+        self.react.errors()
+    }
+
+    pub fn logs(&mut self) -> Result<Vec<crate::react::LogEntry>, String> {
+        self.react.logs()
+    }
+
+    /// 重建当前场景并渲染。
+    pub fn render(
+        &mut self,
+        w: i32,
+        h: i32,
+        aa: i32,
+        mode: cga_gpu::RenderMode,
+    ) -> Result<crate::HeadlessImage, String> {
+        self.rebuild()?;
+        let run = self.run();
+        let mut r = cga_gpu::Renderer::new(w, h, aa, 3).with_mode(mode);
+        let img = r.render(run.scene.clone(), run.camera.clone());
+        Ok(crate::HeadlessImage {
+            width: w,
+            height: h,
+            png: cga_gpu::frame_to_png_bytes(&img),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1766,6 +1911,7 @@ mod tests {
             "primitives",
             "affine",
             "assembly",
+            "animation",
         ] {
             let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
                 .unwrap_or_else(|_| panic!("read {name}.jsx"));
@@ -1821,6 +1967,106 @@ mod tests {
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
         h
+    }
+
+    /// ---- P2：宿主输入（props 监听）与事件派发 → 动态局部重渲染 ----
+
+    const DIAL_SCENE: &str = r#"
+const { useContext, useState } = React;
+const fixed = <sphere r={1} />;
+
+function Dial() {
+  const IN = useContext(HostInput);
+  const x = IN.x === undefined ? 0 : IN.x;
+  return <translate t={[x, 0, 0]}><sphere r={0.25} /></translate>;
+}
+
+function Counter() {
+  const [n, setN] = useState(0);
+  return (
+    <translate t={[0, 2, 0]} onClick={() => setN(n + 1)}>
+      <sphere r={0.2 + n * 0.1} />
+    </translate>
+  );
+}
+
+export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></scene>;
+"#;
+
+    #[test]
+    fn scene_session_host_input_rebuilds_locally() {
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        let xs = |s: &SceneSession| -> Vec<f64> {
+            s.run()
+                .scene
+                .objects
+                .iter()
+                .map(|o| o.base.motor().to_matrix()[3])
+                .collect()
+        };
+        let before = xs(&s);
+        s.reset_counters().unwrap();
+        let stats = s.set_input(r#"{"x": 2.0}"#).unwrap();
+        assert_eq!(stats.errors, 0);
+        let c = s.counters().unwrap();
+        assert_eq!(c.create, 0, "输入变化不得新建实例");
+        assert!(c.update >= 1, "被消费的输入应让消费者更新: {c:?}");
+        let after = xs(&s);
+        assert_eq!(after.len(), before.len(), "对象数不变");
+        let moved: Vec<usize> = (0..before.len())
+            .filter(|i| (before[*i] - after[*i]).abs() > 1e-9)
+            .collect();
+        assert_eq!(
+            moved.len(),
+            1,
+            "只有 Dial 的球平移: {before:?} -> {after:?}"
+        );
+        assert!(
+            (after[moved[0]] - 2.0).abs() < 1e-9,
+            "Dial 应平移到 x=2: {after:?}"
+        );
+    }
+
+    #[test]
+    fn scene_session_dispatch_updates_state_across_frames() {
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        let inst = s
+            .instances()
+            .unwrap()
+            .into_iter()
+            .find(|i| i.handlers.iter().any(|h| h == "onClick"))
+            .expect("带 onClick 的实例");
+        assert!(s.snapshot().unwrap().contains(r#""r":0.2"#), "初值 r=0.2");
+        s.reset_counters().unwrap();
+        let out = s.dispatch(inst.id, "onClick", "null").unwrap();
+        assert!(out.found, "{out:?}");
+        assert_eq!(s.counters().unwrap().create, 0, "事件驱动不得新建实例");
+        assert!(s.snapshot().unwrap().contains(r#""r":0.3"#), "第一帧 r=0.3");
+        assert!(s.dispatch(inst.id, "onClick", "null").unwrap().found);
+        assert!(
+            s.snapshot().unwrap().contains(r#""r":0.4"#),
+            "第二帧 r=0.4（状态跨帧累积）"
+        );
+        assert_eq!(s.errors().unwrap(), Vec::<String>::new());
+        assert!(
+            !s.dispatch(999_999, "onClick", "null").unwrap().found,
+            "未知实例"
+        );
+        assert!(
+            !s.dispatch(inst.id, "onWheel", "null").unwrap().found,
+            "无该处理器"
+        );
+    }
+
+    #[test]
+    fn scene_session_is_deterministic_across_frames() {
+        let mut a = SceneSession::open(DIAL_SCENE, None, ".").unwrap();
+        let mut b = SceneSession::open(DIAL_SCENE, None, ".").unwrap();
+        a.set_input(r#"{"x": 1.0}"#).unwrap();
+        b.set_input(r#"{"x": 1.0}"#).unwrap();
+        let ha = render_png(a.run());
+        let hb = render_png(b.run());
+        assert_eq!(ha, hb, "同输入序列同输出");
     }
 
     #[test]

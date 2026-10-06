@@ -15,7 +15,7 @@ cga embeds Euclidean 3D into conformal space (basis `{e1, e2, e3, e0, e∞}`). P
 
 ## Render gallery
 
-Eight gallery scenes (`examples/jsx/*.jsx` + `.css`). One `render_jsx` command produces each image:
+Eight gallery scenes (`examples/jsx/*.jsx` + `.css`). One `render_jsx` command produces each image (`animation.jsx` with `render_frames`, see below):
 
 <table>
   <tr>
@@ -51,7 +51,11 @@ Eight gallery scenes (`examples/jsx/*.jsx` + `.css`). One `render_jsx` command p
   <tr>
     <td align="center" width="50%">
       <img src="examples/gallery/assembly.png" width="440" alt="assembly.jsx associative assembly"><br>
-      <sub><b>assembly.jsx</b> — v2/v3 showcase: <code>constrain</code> solves hole positions. <code>drill</code> cuts through. <code>face</code> mounts posts. <code>instances</code> gates the top beam. Method chaining throughout.</sub>
+      <sub><b>assembly.jsx</b> — associative assembly: <code>solve</code> derives hole offsets, <code>&lt;drill through={plate}&gt;</code> cuts through it, <code>face()</code> mounts the posts, <code>&lt;when count={2}&gt;</code> gates the top beam.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="examples/gallery/animation.png" width="440" alt="animation.jsx multi-frame render"><br>
+      <sub><b>animation.jsx</b> — one module, many frames: the host pushes <code>IN.t</code> each frame, React rebuilds only the consumers (0 instances created after mount), hooks keep state across frames (<code>useEffect</code> counts them).</sub>
     </td>
   </tr>
 </table>
@@ -83,7 +87,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 166 tests pass.
+   Result: all 170 tests pass.
 
 2. Render the smoke scene:
 
@@ -152,7 +156,7 @@ Rules:
 - Interop is **export only**: `export_stl <scene.jsx> [out.stl] [step] [--ascii]` and `export_urdf <scene.jsx> [out.urdf] [--name R] [step]` (the latter also writes `meshes/*.stl`). Solids are tessellated on demand by `GeometryParams::bake` (certified marching tetrahedra); unbounded geometry (planes, infinite cylinders) and circles are skipped and reported.
 - Elements: primitives `sphere/plane/cylinder/box/circle/cone/torus/cyclide/ellipsoid`, modifiers `translate/rotate/scale/mirror/material`, CSG `union/difference/intersection`, lights, `camera`, `background`, `joint/gear/cam`, `tag/drill/instances/when`.
 - `export default <element>` is the scene. Components are **real React components**: hooks (`useState useReducer useMemo useRef useContext useEffect`), `memo`, fragments and keys all work, and React reconciles — a child's own `setState` creates 0 instances and updates exactly 1, a keyed insert creates 1 and leaves every other instance's identity untouched (both asserted by tests). Control flow is real JS (`map`, ternaries).
-- One pass per render: mount → `drain` (deterministic scheduler, no event loop) → snapshot of the committed instance tree. Dispatching events (interactivity) needs a long-lived session and a viewport; the mechanism exists, no input source is wired up yet.
+- One pass per render: mount → `drain` (deterministic scheduler, no event loop) → snapshot of the committed instance tree. A long-lived `SceneSession` drives many frames instead: it pushes **host input** through React context (`useContext(HostInput)` — only consumers re-render) and can **dispatch events** to a hit instance (custom renderers do not dispatch events themselves, so the host picks the target). `render_frames` is the CLI for it. Interactivity still needs a viewport to produce the events; the mechanism does not.
 - CSS matches tag / `.class` / `#id` / `:root` / `scene`. Material keys: `color roughness metalness emissive opacity ior absorption map unlit`. Material inherits down the tree; inline props beat CSS rules; CSS cascades in source order.
 - `torus(R, r, arc=2π)`: with `arc<2π` it is a partial arc-pipe (tube).
 - Constraint solving: `const [x] = solve([x0], [v => eq(…), v => le(…)])` — numeric residuals with `eq/le/ge` helpers; non-convergence is an explicit error.
@@ -379,12 +383,13 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 | `export_stl <file.jsx> [out.stl] [step] [--ascii]` | JSX → STL（实体三角化；平面/无限长圆柱/圆跳过并列出） |
 | `export_urdf <file.jsx> [out.urdf] [--name R] [step]` | JSX 关节树 → URDF（+ `meshes/*.stl`） |
 | `render_jsx <file.jsx> [out.png] [w h aa] [--opaque]` | JSX(+CSS) → PNG（`--opaque` = 忽略透明度模式） |
+| `render_frames <file.jsx> [prefix] [w h aa frames]` | 逐帧：宿主每帧推入 `IN.t`，React 局部重渲染后出图 `<prefix>_NN.png`（并打印每帧协调计数） |
 | `report_jsx <file.jsx> [--set name=value]` | JSX → scene report (stdout line-by-line assertable text; errors go to stderr, exit 1) |
 | `stereo_pair [seed] [out_dir] [w h] [baseline]` | `left.png` / `right.png` / `truth.txt` stereo pair |
 
 ## Quality
 
-- `make test`: **all 166 tests pass** (cga-core 44 + cga-gpu 82 + cga-host 40, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, baked-mesh watertightness/volume/topology, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose, frozen render goldens), the embedded React runtime (hooks/context/memo/keys, partial updates, effect ordering, unmount cleanup, determinism, author-error reporting), the two render modes (IgnoreOpacity is a bitwise no-op without transparency; refraction and transparent-occluder shadows differ), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export, STL export (binary/ASCII layout, non-solid skipping, world-space placement), scene reports.
+- `make test`: **all 170 tests pass** (cga-core 44 + cga-gpu 82 + cga-host 44, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, baked-mesh watertightness/volume/topology, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose, frozen render goldens), the embedded React runtime (hooks/context/memo/keys, partial updates, effect ordering, unmount cleanup, determinism, author-error reporting), the two render modes (IgnoreOpacity is a bitwise no-op without transparency; refraction and transparent-occluder shadows differ), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export, STL export (binary/ASCII layout, non-solid skipping, world-space placement), scene reports.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/csg goldens have **RMSE = 0**.
 
 ## License

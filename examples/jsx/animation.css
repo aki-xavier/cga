@@ -1,0 +1,6 @@
+:root { background: #10131A; }
+.ground { color: #2A3038; roughness: 0.85; }
+.sun { color: #F2B233; roughness: 0.35; unlit: 1; }
+.moon { color: #5AA9E6; roughness: 0.3; metalness: 0.1; }
+.counter { color: #C0392B; roughness: 0.5; }
+.moon2 { color: #58C98A; roughness: 0.35; metalness: 0.05; }

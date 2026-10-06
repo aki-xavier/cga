@@ -41,6 +41,11 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 
 **没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）、真实事件源与布局、portal 到 DOM。`onClick` 之类会被 React 正常装上，但需要宿主派发事件并长驻会话——交互运行时属于后续阶段；`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
 
+**多帧与事件（宿主驱动）**：`SceneSession` 让一个模块跨多帧存活。
+- **宿主输入（props 监听）**：输入放在 React context（`useContext(HostInput)`），宿主 `set_input(json)` 后 `update()`；只有消费者重渲染，其余子树 bailout。`render_frames` 每帧推 `IN.t`，示例场景 `animation.jsx` 首帧 create=13、之后每帧 **create=0 / update=8**。
+- **事件派发**：自定义渲染器不会自动派发事件，由宿主决定"命中谁、派发什么"：`dispatch(instance_id, prop, payload)` 沿祖先链找第一个处理器并调用（简化版冒泡），随后 `drain`。测试里 `onClick` → `useState` → 局部更新（create=0，状态跨帧累积）。
+- 没有落点的是**事件源**（拾取/指针）：渲染器已经是光线追踪，`scene_session.instances()` 给出可命中的实例，把它接到拾取上即可做成查看器——属于后续工作。
+
 **版本适配**：host config 面按 React 版本固定（19 移除了 `prepareUpdate`、把 diff 交给 `commitUpdate(instance, type, prevProps, nextProps)`、元素标记改名 `react.transitional.element`、dev 构建额外要求性能追踪/View Transition/test selector 一组键）。升级 React 只需改 `react-host.js` 并重跑 `make vendor-react`。
 
 ## 4. 元素 → 语义映射
@@ -77,6 +82,7 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 - React 迁移验收（P1）：React 路径与旧的一次性求值路径对 7 个画廊场景渲染**逐字节相同**；旧路径删除后固化为渲染金标（orbit / mechanical / assembly 三场景，覆盖透明、CSG、solve 约束 + tag/when + 嵌套元素属性）。
 - 跨二进制核对：迁移前后两个 CLI 对 7 个场景（640×480 aa=2）输出逐位一致，端到端 +80…+240 ms/进程。
 - React 运行时测试：hooks 求值、局部更新计数、keyed 身份稳定、effect 依赖与清理顺序、卸载清理、同输入同输出、作者错误（语法/运行时）回传。
+- 多帧/事件测试：`SceneSession` 输入变化只让消费者平移（create=0、恰好 1 个对象移动）、`onClick` 派发使状态跨三帧累积（create=0）、同输入序列同输出。
 - 函数组件 + `map` + 三元控制流出 4 个对象。
 - CSS 类命中材质（color/roughness 断言）。
 - JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。

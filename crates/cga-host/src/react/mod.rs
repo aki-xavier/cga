@@ -85,6 +85,24 @@ pub struct Counters {
     pub mount: u64,
 }
 
+/// 已提交的宿主实例（宿主拾取 / 测试用）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceInfo {
+    pub id: i64,
+    pub type_name: String,
+    /// 函数型 prop 名（事件处理器就在其中）。
+    pub handlers: Vec<String>,
+}
+
+/// 一次事件派发的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DispatchOutcome {
+    pub found: bool,
+    pub id: i64,
+    pub type_name: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogEntry {
     pub level: String,
@@ -213,6 +231,86 @@ impl ReactSession {
     /// 内置 React 版本。
     pub fn version(&mut self) -> Result<String, String> {
         self.exec(|w| w.call("CGA_REACT_HOST.version"))
+    }
+
+    /// 推入宿主输入（props 监听）。设值后需 [`ReactSession::update`] 才会生效；
+    /// 只有 `useContext(HostInput)` 的组件会重渲染，其余子树 bailout。
+    pub fn set_input(&mut self, json: &str) -> Result<(), String> {
+        let json = json.to_string();
+        self.exec(move |w| {
+            let lit = serde_json::to_string(&json).map_err(|e| e.to_string())?;
+            w.call(&format!("__sess.setInput({lit})")).map(|_| ())
+        })
+    }
+
+    /// 推入输入 + 重渲染 + 跑到静止（一帧）。
+    pub fn apply_input(&mut self, json: &str) -> Result<DrainStats, String> {
+        self.set_input(json)?;
+        self.update()?;
+        self.drain()
+    }
+
+    /// 派发事件给某个实例（沿祖先链找第一个 `prop` 处理器）。
+    pub fn dispatch(
+        &mut self,
+        id: i64,
+        prop: &str,
+        payload_json: &str,
+    ) -> Result<DispatchOutcome, String> {
+        let prop = prop.to_string();
+        let payload = payload_json.to_string();
+        let s = self.exec(move |w| {
+            let lit = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+            w.call(&format!(
+                "__sess.dispatch({id}, {}, {lit})",
+                serde_json::to_string(&prop).map_err(|e| e.to_string())?
+            ))
+        })?;
+        let v: serde_json::Value =
+            serde_json::from_str(&s).map_err(|e| format!("react: dispatch parse: {e}"))?;
+        Ok(DispatchOutcome {
+            found: v
+                .get("found")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            id: v.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            type_name: v
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            reason: v
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        })
+    }
+
+    /// 已提交实例清单。
+    pub fn instances(&mut self) -> Result<Vec<InstanceInfo>, String> {
+        let s = self.exec(|w| w.call("__sess.instances()"))?;
+        let v: Vec<serde_json::Value> =
+            serde_json::from_str(&s).map_err(|e| format!("react: instances parse: {e}"))?;
+        Ok(v.iter()
+            .map(|e| InstanceInfo {
+                id: e.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                type_name: e
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                handlers: e
+                    .get("handlers")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|h| h.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect())
     }
 
     /// 注册一个宿主原生函数（JSX 宿主的 `solve` 就走这里）。
@@ -515,6 +613,31 @@ const __scene = h(App, {});
         let (_a, sa) = start();
         let (_b, sb) = start();
         assert_eq!(sa, sb, "同输入同输出");
+    }
+
+    #[test]
+    fn error_boundary_catches_and_renders_fallback() {
+        const M: &str = r#"
+const { Component } = React;
+class Boundary extends Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(e) { return { err: String(e && e.message ? e.message : e) }; }
+  render() { return this.state.err ? h('box', { s: [1, 1, 1], id: 'fallback' }) : this.props.children; }
+}
+function Boom() { throw new Error('kaboom'); }
+const __scene = h(Boundary, {}, h(Boom, {}));
+"#;
+        let mut s = ReactSession::new(Runtime::Prod).unwrap();
+        s.begin(M, &pose(&[])).unwrap();
+        s.drain().unwrap();
+        let snap = snap(&mut s);
+        assert_eq!(snap["t"], "box", "错误边界渲染 fallback");
+        assert_eq!(snap["p"]["id"], "fallback");
+        let errs = s.errors().expect("errors");
+        assert!(
+            errs.iter().any(|e| e.contains("kaboom")),
+            "错误被宿主捕获: {errs:?}"
+        );
     }
 
     #[test]
