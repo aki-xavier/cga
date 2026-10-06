@@ -1,4 +1,4 @@
-/* orbit demo 场景的材质表（对应 orbit.cgs 的 material(...) 修饰符） */
+/* orbit demo 场景的材质表 */
 :root { background: #87CEEB; }
 .ground { color: #B0B0B0; roughness: 0.7; }
 .red { color: #C0392B; roughness: 0.25; metalness: 0.25; }

@@ -1,6 +1,6 @@
 //! URDF interop (关节化 P5/P6（调研文档已随完成退役）).
 //!
-//! Export: the CGS joint tree maps 1:1 onto URDF (origin xyz/rpy ↔ at/rpy,
+//! Export: the joint tree maps 1:1 onto URDF (origin xyz/rpy ↔ at/rpy,
 //! axis in the joint frame, limit, gear → mimic). helical/cylindrical/
 //! spherical decompose into 1-DOF series joints (documented downgrade).
 //! Link geometry: a single native primitive (sphere/box/cylinder) exports as
@@ -434,7 +434,7 @@ pub fn jsx_to_urdf(
                 );
             }
             JointKind::Spherical => {
-                // Series Rx → Ry → Rz, matching the CGS spherical motion.
+                // Series Rx → Ry → Rz, matching the spherical motion.
                 let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
                 let names = ["r", "p", "y"];
                 let links = [

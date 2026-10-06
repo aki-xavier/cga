@@ -1,7 +1,7 @@
 """示例纹理资产生成器: .venv/bin/python examples/assets/gen_textures.py
 
 生成 brick.png (砖墙, 灰缝错缝) 与 treadplate.png (金属花纹板),
-均为 256x256 可平铺图案, 供 .cgs 的 material(map="assets/*.png") 使用。
+均为 256x256 可平铺图案, 供场景 material(map="assets/*.png") 使用。
 """
 
 from pathlib import Path

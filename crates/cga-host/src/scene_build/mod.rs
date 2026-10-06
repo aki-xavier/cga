@@ -47,14 +47,14 @@ fn fmt_f64(x: f64) -> String {
     }
 }
 
-fn cgs_num(v: &ArgValue, _line: i32, what: &str) -> Result<f64, String> {
+fn val_num(v: &ArgValue, _line: i32, what: &str) -> Result<f64, String> {
     match v {
         ArgValue::Num(x) => Ok(*x),
         _ => Err(format!("build: {what} needs a number, got {v}")),
     }
 }
 
-fn cgs_vec3(v: &ArgValue, line: i32, what: &str) -> Result<[f64; 3], String> {
+fn val_vec3(v: &ArgValue, line: i32, what: &str) -> Result<[f64; 3], String> {
     match v {
         ArgValue::Vec3(v3) => Ok([v3.x, v3.y, v3.z]),
         ArgValue::List(items) => {
@@ -62,16 +62,16 @@ fn cgs_vec3(v: &ArgValue, line: i32, what: &str) -> Result<[f64; 3], String> {
                 return Err(format!("build: {what} needs [x,y,z], got {v}"));
             }
             Ok([
-                cgs_num(&items[0], line, what)?,
-                cgs_num(&items[1], line, what)?,
-                cgs_num(&items[2], line, what)?,
+                val_num(&items[0], line, what)?,
+                val_num(&items[1], line, what)?,
+                val_num(&items[2], line, what)?,
             ])
         }
         _ => Err(format!("build: {what} needs [x,y,z], got {v}")),
     }
 }
 
-fn cgs_opt_num(v: &ArgValue, def: f64) -> f64 {
+fn val_opt_num(v: &ArgValue, def: f64) -> f64 {
     match v {
         ArgValue::Num(x) => {
             if *x < 0.0 {
@@ -252,7 +252,7 @@ pub(crate) fn csg_op_name(op: CsgOp) -> &'static str {
 }
 
 fn arg_num(args: &HashMap<String, ArgValue>, key: &str) -> f64 {
-    cgs_num(
+    val_num(
         &args.get(key).cloned().unwrap_or(ArgValue::Num(0.0)),
         0,
         key,
@@ -279,7 +279,7 @@ fn validate_geometry_params(
     match name {
         "box" | "ellipsoid" => {
             let key = if name == "box" { "s" } else { "radii" };
-            let v = cgs_vec3(
+            let v = val_vec3(
                 &args.get(key).cloned().unwrap_or(ArgValue::Num(0.0)),
                 line,
                 &format!("{name}.{key}"),
@@ -289,7 +289,7 @@ fn validate_geometry_params(
             }
         }
         "plane" => {
-            let n = cgs_vec3(
+            let n = val_vec3(
                 &args.get("n").cloned().unwrap_or(ArgValue::Num(0.0)),
                 line,
                 "plane.n",

@@ -2,8 +2,8 @@
 # JSX + CSS 场景宿主：React 模式前端
 
 状态：已实现（2026-10-06，路线 A：真 JS；2026-10-07，P1：改用**真 React 运行时**）。适用：`crates/cga-host/src/jsx/`、`crates/cga-host/src/react/`、CLI `render_jsx` / `report_jsx`。
-R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX，且使用与宿主一致的 PascalCase 元素名（`<Scene>` / `<Rotate>` / `<Difference>` …）；互操作**仅导出**（URDF / STL），不提供导入；CGS parser 已退役删除（`scene_lang` → `scene_build`，只剩 builder/kinematics/报告支撑），CGS 文本语法不再被解析。
-决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"CGS 降级为 IR"的保守路线，直接内嵌真 JS 引擎。
+R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX，且使用与宿主一致的 PascalCase 元素名（`<Scene>` / `<Rotate>` / `<Difference>` …）；互操作**仅导出**（URDF / STL），不提供导入；文本语法解析器已删除，只剩 builder/kinematics/报告支撑（`scene_build`）。
+决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
 ## 1. 技术栈与管线
 
@@ -72,19 +72,9 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 
 **透明度与渲染模式**：材质的 `opacity`/`ior`/`absorption` 在**正常模式**下驱动 Whitted 反射/折射（`opacity<1` 的表面发射次级光线），半透明遮挡物按 `1-opacity` 削弱阴影；**忽略透明度模式**（`RenderMode::IgnoreOpacity`）把一切当不透明——不发射次级光线、透明遮挡物按实心投影，用于实体预览与提速。两种模式在不含透明度的场景上输出**逐位一致**（有测试看守）。
 
-已平权的原 CGS 高级特性（JSX 形态）：
-
-| 原 CGS | JSX |
-| --- | --- |
-| `constrain(x) { lhs == rhs; } solve;` | `const [x] = solve([x0], [v => eq(...), v => le(...)])`（数值残差 + Levenberg-GN） |
-| `drill(r=…, through=…, axis=…)` | `<Drill r through axis from to />`（through 吃 tag 名或元素值） |
-| `instances("n")` + `if(len(…)==k)` | `<Instances of="n"/>` 重放 + `<When of="n" count={k}>` 门控 |
-| `face/fnrm/center/lo/hi/size/xdir…` | 同名惰性查询函数（prop 位置解析；向量运算用 `vadd/vsub/vscale`） |
-| `--set` / 原 cgs_pose | `run_jsx_pose` + 全局 `P` 约定（`P.x` 读覆盖）+ 关节名覆盖 |
-
 ## 5. 验收
 
-- 平权验收（R2 时点，CGS 尚在）：orbit/assembly/画廊六场景的 JSX 版与原 CGS 版渲染**逐字节相同**（96×72 PNG）。R4 后 CGS 文件已删除，测试现为 JSX 冒烟。
+- 画廊冒烟：orbit/assembly 等场景均渲染出合法 PNG（96×72）。
 - React 迁移验收（P1）：React 路径与旧的一次性求值路径对 7 个画廊场景渲染**逐字节相同**；旧路径删除后固化为渲染金标（orbit / mechanical / assembly 三场景，覆盖透明、CSG、solve 约束 + tag/when + 嵌套元素属性）。
 - 跨二进制核对：迁移前后两个 CLI 对 7 个场景（640×480 aa=2）输出逐位一致，端到端 +80…+240 ms/进程。
 - React 运行时测试：hooks 求值、局部更新计数、keyed 身份稳定、effect 依赖与清理顺序、卸载清理、同输入同输出、作者错误（语法/运行时）回传。
@@ -98,7 +88,7 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 
 ## 6. 架构终态
 
-.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 React 已提交的实例树翻译成它的调用。下游（渲染/报告/URDF、STL 导出）只认 `SceneRun`。CGS 文本语法已删除（2026-10-06，R4）；一次性求值路径已由真 React 运行时取代（2026-10-07，P1）。
+.jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 React 已提交的实例树翻译成它的调用。下游（渲染/报告/URDF、STL 导出）只认 `SceneRun`。文本语法已删除（2026-10-06，R4）；一次性求值路径已由真 React 运行时取代（2026-10-07，P1）。
 
 ## 7. Rust ↔ JS 引擎桥
 

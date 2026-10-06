@@ -3,7 +3,7 @@
 //!
 //! Pipeline: .jsx source → swc (parse JSX → h() calls) → boa executes real
 //! JS (components, map, Math, …) → element tree → scene builder (reuses the
-//! CGS geometry/material builders and the kinematics registry) → `SceneRun`.
+//! geometry/material builders and the kinematics registry) → `SceneRun`.
 //!
 //! Conventions:
 //! - The scene is the `export default <element>` value.
@@ -394,12 +394,12 @@ fn p_num_list(el: &El, key: &str) -> Result<Option<Vec<f64>>, String> {
     }
 }
 
-fn cgs_of(v: &Value) -> ArgValue {
+fn to_arg(v: &Value) -> ArgValue {
     match v {
         Value::Number(n) => ArgValue::Num(n.as_f64().unwrap_or(0.0)),
         Value::Bool(b) => ArgValue::Bool(*b),
         Value::String(s) => ArgValue::Str(s.clone()),
-        Value::Array(a) => ArgValue::List(a.iter().map(cgs_of).collect()),
+        Value::Array(a) => ArgValue::List(a.iter().map(to_arg).collect()),
         _ => ArgValue::Num(0.0),
     }
 }
@@ -571,7 +571,7 @@ impl Builder {
         }
         for k in MATERIAL_KEYS {
             if let Some(v) = el.props.get(k) {
-                merged.insert(k.to_string(), cgs_of(v));
+                merged.insert(k.to_string(), to_arg(v));
             }
         }
         self.loader
@@ -653,7 +653,7 @@ impl Builder {
                 let mut merged = mat.clone();
                 for (k, v) in &el.props {
                     if MATERIAL_KEYS.contains(&k.as_str()) {
-                        merged.insert(k.clone(), cgs_of(v));
+                        merged.insert(k.clone(), to_arg(v));
                     }
                 }
                 for c in &el.children {
@@ -896,7 +896,7 @@ impl Builder {
             {
                 continue;
             }
-            args.insert(k.clone(), cgs_of(v));
+            args.insert(k.clone(), to_arg(v));
         }
         let args = self
             .loader
@@ -1427,7 +1427,7 @@ impl Builder {
         }
     }
 
-    /// drill 切刀：几何 + 世界变换（语义对齐 CGS drill_stmt）。
+    /// drill 切刀：几何 + 世界变换。
     fn drill_cutter(
         &mut self,
         el: &El,
@@ -2197,7 +2197,7 @@ export default (
         assert!(e.starts_with("JSX line 1: "), "{e}");
         let e = run_jsx("export default <frob />;", None, "").unwrap_err();
         assert!(e.contains("unknown primitive frob"), "{e}");
-        // 带未知参数的未知元素与 CGS 一致先报参数错。
+        // 带未知参数的未知元素先报参数错。
         let e = run_jsx("export default <frob r={1} />;", None, "").unwrap_err();
         assert!(e.contains("frob has no parameter r"), "{e}");
         let e = run_jsx("const a = 1;", None, "").unwrap_err();

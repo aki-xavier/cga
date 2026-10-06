@@ -1,6 +1,5 @@
-//! Builders-only residue of the retired CGS parser (R4): geometry/material
-//! construction, parameter defaults and validation. Statement parsing lives
-//! in the JSX host (crate::jsx).
+//! Geometry/material construction, parameter defaults and validation.
+//! Statement parsing lives in the JSX host (crate::jsx).
 use super::*;
 
 pub struct Builders {
@@ -63,7 +62,7 @@ impl Builders {
         validate_geometry_params(name, args, line)?;
         match name {
             "sphere" => {
-                let r = cgs_num(
+                let r = val_num(
                     &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "sphere.r",
@@ -71,12 +70,12 @@ impl Builders {
                 Ok(Geometry::SphereGeometry(SphereGeometry::new(r)))
             }
             "plane" => {
-                let n = cgs_vec3(
+                let n = val_vec3(
                     &args.get("n").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "plane.n",
                 )?;
-                let d = cgs_num(
+                let d = val_num(
                     &args.get("d").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "plane.d",
@@ -84,12 +83,12 @@ impl Builders {
                 Ok(Geometry::PlaneGeometry(PlaneGeometry::new(n, d)))
             }
             "cylinder" => {
-                let h = cgs_num(
+                let h = val_num(
                     &args.get("h").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cylinder.h",
                 )?;
-                let r = cgs_num(
+                let r = val_num(
                     &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cylinder.r",
@@ -100,7 +99,7 @@ impl Builders {
                 )))
             }
             "box" => {
-                let s = cgs_vec3(
+                let s = val_vec3(
                     &args.get("s").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "box.s",
@@ -108,7 +107,7 @@ impl Builders {
                 Ok(Geometry::BoxGeometry(BoxGeometry::new(s[0], s[1], s[2])))
             }
             "circle" => {
-                let r = cgs_num(
+                let r = val_num(
                     &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "circle.r",
@@ -116,12 +115,12 @@ impl Builders {
                 Ok(Geometry::CircleGeometry(CircleGeometry::new(r)))
             }
             "cone" => {
-                let r = cgs_num(
+                let r = val_num(
                     &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cone.r",
                 )?;
-                let h = cgs_num(
+                let h = val_num(
                     &args.get("h").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cone.h",
@@ -129,17 +128,17 @@ impl Builders {
                 Ok(Geometry::ConeGeometry(ConeGeometry::new(r, h)))
             }
             "torus" => {
-                let r1 = cgs_num(
+                let r1 = val_num(
                     &args.get("R").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "torus.R",
                 )?;
-                let r2 = cgs_num(
+                let r2 = val_num(
                     &args.get("r").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "torus.r",
                 )?;
-                let arc = cgs_num(
+                let arc = val_num(
                     &args
                         .get("arc")
                         .cloned()
@@ -154,17 +153,17 @@ impl Builders {
                 }
             }
             "cyclide" => {
-                let a = cgs_num(
+                let a = val_num(
                     &args.get("a").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.a",
                 )?;
-                let b = cgs_num(
+                let b = val_num(
                     &args.get("b").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.b",
                 )?;
-                let d = cgs_num(
+                let d = val_num(
                     &args.get("d").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "cyclide.d",
@@ -177,7 +176,7 @@ impl Builders {
                 )))
             }
             "ellipsoid" => {
-                let r = cgs_vec3(
+                let r = val_vec3(
                     &args.get("radii").cloned().unwrap_or(ArgValue::Num(0.0)),
                     line,
                     "ellipsoid.radii",
@@ -196,7 +195,7 @@ impl Builders {
     ) -> Result<Material, String> {
         let color = match mat.get("color") {
             Some(v) => {
-                let c = cgs_num(v, 0, "color")?;
+                let c = val_num(v, 0, "color")?;
                 Color::from_hex(c as i32)
             }
             None => Color::from_hex(0xFFFFFF),
@@ -220,23 +219,23 @@ impl Builders {
         if let Some(u) = mat.get("unlit") {
             if arg_truthy(u) {
                 let op = match mat.get("opacity") {
-                    Some(o) => cgs_num(o, 0, "opacity")?,
+                    Some(o) => val_num(o, 0, "opacity")?,
                     None => 1.0,
                 };
                 return Ok(Material::basic(color, clamp01(op)));
             }
         }
-        let roughness = cgs_opt_num(
+        let roughness = val_opt_num(
             &mat.get("roughness").cloned().unwrap_or(ArgValue::Num(-1.0)),
             0.5,
         );
-        let metalness = cgs_opt_num(
+        let metalness = val_opt_num(
             &mat.get("metalness").cloned().unwrap_or(ArgValue::Num(-1.0)),
             0.0,
         );
         let emissive = match mat.get("emissive") {
             Some(v) => {
-                let ev = cgs_num(v, 0, "emissive")?;
+                let ev = val_num(v, 0, "emissive")?;
                 if ev < 0.0 {
                     Color::from_hex(0x000000)
                 } else {
@@ -245,12 +244,12 @@ impl Builders {
             }
             None => Color::from_hex(0x000000),
         };
-        let opacity = cgs_opt_num(
+        let opacity = val_opt_num(
             &mat.get("opacity").cloned().unwrap_or(ArgValue::Num(-1.0)),
             1.0,
         );
-        let ior = cgs_opt_num(&mat.get("ior").cloned().unwrap_or(ArgValue::Num(-1.0)), 1.5);
-        let absorption = cgs_opt_num(
+        let ior = val_opt_num(&mat.get("ior").cloned().unwrap_or(ArgValue::Num(-1.0)), 1.5);
+        let absorption = val_opt_num(
             &mat.get("absorption")
                 .cloned()
                 .unwrap_or(ArgValue::Num(-1.0)),
