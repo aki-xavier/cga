@@ -435,8 +435,8 @@ pub fn jsx_to_urdf(
 }
 
 /// Import URDF as JSX scene text (flat, deterministic, `jsx_gen` style).
-/// Object references keep their basename under `mesh_prefix`.
-pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
+/// URDF → JSX。`<mesh>` visual 跳过（网格支持已移除），其余图元原样平移。
+pub fn urdf_to_jsx(xml: &str) -> Result<String, String> {
     let robot: Robot =
         urdf_rs::read_from_string(xml).map_err(|e| format!("urdf: parse failed: {e}"))?;
     let mut out = String::new();
@@ -479,7 +479,7 @@ pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     // Root-link visuals at top level.
     for l in &robot.links {
         if !child_links.contains(&l.name) {
-            write_visuals(&mut body, l, mesh_prefix)?;
+            write_visuals(&mut body, l)?;
         }
     }
     out.push_str(&body);
@@ -487,8 +487,13 @@ pub fn urdf_to_jsx(xml: &str, mesh_prefix: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn write_visuals(out: &mut String, link: &urdf_rs::Link, _mesh_prefix: &str) -> Result<(), String> {
+fn write_visuals(out: &mut String, link: &urdf_rs::Link) -> Result<(), String> {
     for v in &link.visual {
+        // 网格 visual 跳过：URDF 里常见的 <mesh> 引用不再阻断导入，只是不产生对象
+        // （网格支持已移除，无法转成图元）。
+        if matches!(v.geometry, UGeometry::Mesh { .. }) {
+            continue;
+        }
         let xyz = [v.origin.xyz[0], v.origin.xyz[1], v.origin.xyz[2]];
         let rpy = [v.origin.rpy[0], v.origin.rpy[1], v.origin.rpy[2]];
         let mut prefix = String::new();
@@ -526,13 +531,6 @@ fn write_visuals(out: &mut String, link: &urdf_rs::Link, _mesh_prefix: &str) -> 
                 )
             }
             UGeometry::Sphere { radius } => format!("<sphere r={{ {} }} />", uf(*radius)),
-            UGeometry::Mesh { .. } => {
-                // 网格导入已移除：URDF 里的 <mesh> 引用无法转成图元，显式报错
-                return Err(
-                    "urdf: <mesh> visual geometry is not supported (mesh import was removed)"
-                        .to_string(),
-                );
-            }
             _ => return Err("urdf: unsupported visual geometry".to_string()),
         };
         out.push_str(&format!("    {prefix}{stmt}{suffix}\n"));
@@ -613,7 +611,7 @@ fn write_joint(out: &mut String, robot: &Robot, j: &urdf_rs::Joint) -> Result<()
         .iter()
         .find(|l| l.name == j.child.link)
         .ok_or_else(|| format!("urdf: unknown link {}", j.child.link))?;
-    write_visuals(out, link, "")?;
+    write_visuals(out, link)?;
     out.push_str("    </joint>\n");
     Ok(())
 }
@@ -746,7 +744,7 @@ mod tests {
     <limit lower="-1.5" upper="1.5" effort="10" velocity="1"/>
   </joint>
 </robot>"#;
-        let jsx = urdf_to_jsx(xml, "").unwrap();
+        let jsx = urdf_to_jsx(xml).unwrap();
         assert!(
             jsx.contains("<joint name=\"hip\" type=\"revolute\""),
             "{jsx}"
@@ -767,13 +765,43 @@ mod tests {
     }
 
     #[test]
+    fn test_p6_urdf_import_skips_mesh_visual() {
+        // <mesh> visual 跳过（网格支持已移除），其余图元照常导入
+        let xml = r#"<robot name="x">
+  <link name="base">
+    <visual><origin xyz="0 0 0" rpy="0 0 0"/><geometry><mesh filename="package://p/meshes/a.stl"/></geometry></visual>
+    <visual><origin xyz="0 0 0.1" rpy="0 0 0"/><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+  </link>
+</robot>"#;
+        let jsx = urdf_to_jsx(xml).unwrap();
+        assert!(jsx.contains("<box s={[0.2, 0.2, 0.2]} />"), "{jsx}");
+        assert!(!jsx.contains("mesh"), "网格 visual 不应出现在输出里：{jsx}");
+        // 生成的 JSX 可运行：只有一个盒子对象
+        let run = run_jsx(&jsx, None, "").unwrap();
+        assert_eq!(run.scene.objects.len(), 1);
+    }
+
+    #[test]
+    fn test_p6_urdf_import_mesh_only_link_skipped() {
+        // 只有网格 visual 的链接：不产生对象，也不报错
+        let xml = r#"<robot name="x">
+  <link name="base">
+    <visual><geometry><mesh filename="a.dae"/></geometry></visual>
+  </link>
+</robot>"#;
+        let jsx = urdf_to_jsx(xml).unwrap();
+        let run = run_jsx(&jsx, None, "").unwrap();
+        assert!(run.scene.objects.is_empty());
+    }
+
+    #[test]
     fn test_p6_urdf_import_floating_rejected() {
         let xml = r#"<robot name="x">
   <link name="a"/><link name="b"/>
   <joint name="j" type="floating"><parent link="a"/><child link="b"/></joint>
 </robot>"#;
         assert_eq!(
-            urdf_to_jsx(xml, "").unwrap_err(),
+            urdf_to_jsx(xml).unwrap_err(),
             "urdf: floating joint j is not supported"
         );
     }
