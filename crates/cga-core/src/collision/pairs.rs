@@ -33,7 +33,7 @@ pub(crate) fn pair_separation(a: &Shape, b: &Shape) -> Option<f64> {
 
 // ---- 点–形状带符号距离（实体内部为负） -----------------------------------
 
-fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
+pub(crate) fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
     match *s {
         Shape::Sphere { c, r } => Some(norm(sub(p, c)) - r),
         Shape::Plane { n, d } => Some(dot(n, p) - d), // 半空间：内部为负
@@ -51,7 +51,9 @@ fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
             let rho = norm(sub(q, scale(axis, z)));
             Some(norm([rho - major, z, 0.0]) - minor)
         }
-        Shape::Ellipsoid { c, axes, radii } => sdf_ellipsoid(c, axes, radii, p),
+        Shape::Ellipsoid { c, axes, radii } => {
+            super::contacts::ellipsoid_closest(c, axes, radii, p).map(|x| x.0)
+        }
     }
 }
 
@@ -103,7 +105,7 @@ fn sdf_cone(c: [f64; 3], axis: [f64; 3], r: f64, h: f64, p: [f64; 3]) -> f64 {
 }
 
 /// 2D 点–线段距离。
-fn dist_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(crate) fn dist_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let ab = (b.0 - a.0, b.1 - a.1);
     let ap = (p.0 - a.0, p.1 - a.1);
     let len2 = ab.0 * ab.0 + ab.1 * ab.1;
@@ -117,54 +119,10 @@ fn dist_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-/// 椭球 SDF：外部点精确（单调函数对分求最近点）；内部点 → None（v1 保守，
-/// 内部最近表面点要解内渐屈面，另行立项）。
-fn sdf_ellipsoid(c: [f64; 3], axes: [[f64; 3]; 3], radii: [f64; 3], p: [f64; 3]) -> Option<f64> {
-    let q = sub(p, c);
-    let a = [dot(q, axes[0]), dot(q, axes[1]), dot(q, axes[2])];
-    let s: f64 = (0..3).map(|i| (a[i] / radii[i]) * (a[i] / radii[i])).sum();
-    if s <= 1.0 {
-        return None; // 内部：v1 保守 Unknown
-    }
-    // F(t) = Σ (r_i a_i / (t + r_i²))² − 1，t ≥ 0 单调递减，F(0) > 0，F(∞) = −1。
-    let f = |t: f64| -> f64 {
-        (0..3)
-            .map(|i| {
-                let v = radii[i] * a[i] / (t + radii[i] * radii[i]);
-                v * v
-            })
-            .sum::<f64>()
-            - 1.0
-    };
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-    while f(hi) > 0.0 {
-        hi *= 2.0;
-        if hi > 1e12 {
-            return None; // 数值上找不到根：保守 Unknown
-        }
-    }
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if f(mid) > 0.0 {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let t = 0.5 * (lo + hi);
-    let mut d2 = 0.0;
-    for i in 0..3 {
-        let x = radii[i] * radii[i] * a[i] / (t + radii[i] * radii[i]);
-        d2 += (x - a[i]) * (x - a[i]);
-    }
-    Some(d2.sqrt())
-}
-
 // ---- 平面–X：支撑函数 ----------------------------------------------------
 
 /// 实体在方向 n（单位）上的支撑区间 [lo, hi]（n·x 的最小/最大）。
-fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
+pub(crate) fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
     match *s {
         Shape::Sphere { c, r } => Some((dot(n, c) - r, dot(n, c) + r)),
         Shape::Box { c, axes, half } => {
@@ -212,7 +170,7 @@ fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
 }
 
 /// 平面（半空间 n·x ≤ d）与形状的分离距离。
-fn plane_separation(n: [f64; 3], d: f64, s: &Shape) -> Option<f64> {
+pub(crate) fn plane_separation(n: [f64; 3], d: f64, s: &Shape) -> Option<f64> {
     if let Shape::Plane { n: n2, d: d2 } = *s {
         // 平行：|Δd|（法向同向取差，反向取和）；相交：0（两半空间相交，算接触）。
         return if norm(cross(n, n2)) < 1e-9 {
@@ -238,7 +196,7 @@ fn plane_separation(n: [f64; 3], d: f64, s: &Shape) -> Option<f64> {
 
 // ---- 盒–盒：SAT 15 轴 + 最近特征对 ----------------------------------------
 
-fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
+pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
     let (
         Shape::Box {
             c: ca,
@@ -311,7 +269,7 @@ fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
     Some(best)
 }
 
-fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[f64; 3]> {
+pub(crate) fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[f64; 3]> {
     let mut out = Vec::with_capacity(8);
     for i in 0..8 {
         let mut p = c;
@@ -325,7 +283,7 @@ fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[f64; 3
 }
 
 /// 12 条边（每条两个端点）。
-fn box_edges(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[[f64; 3]; 2]> {
+pub(crate) fn box_edges(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[[f64; 3]; 2]> {
     let mut out = Vec::with_capacity(12);
     for axis in 0..3 {
         let (j, k) = ((axis + 1) % 3, (axis + 2) % 3);

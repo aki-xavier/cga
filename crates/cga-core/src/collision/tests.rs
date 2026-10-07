@@ -426,6 +426,127 @@ fn overlap_union_decomposition() {
     assert_eq!(overlap(&d, id, &sphere(0.5), id), Hit::Unknown);
 }
 
+// ---- 接触信息（C2） ----
+
+#[test]
+fn contacts_sphere_sphere() {
+    let id = ident();
+    // 相离 → 确切无接触
+    assert_eq!(
+        contacts(&sphere(1.0), id, &sphere(1.0), trans(3.0, 0.0, 0.0))
+            .unwrap()
+            .len(),
+        0
+    );
+    // 穿入（b 在 x=1.5）：a 表面点 (1,0,0)，b 表面点 (0.5,0,0)，中点 (0.75,0,0)；normal = b 的分离方向 +x
+    let cs = contacts(&sphere(1.0), id, &sphere(1.0), trans(1.5, 0.0, 0.0)).unwrap();
+    assert_eq!(cs.len(), 1);
+    let c = cs[0];
+    assert!(norm(sub(c.point, [0.75, 0.0, 0.0])) < 1e-9, "{:?}", c.point);
+    assert!(
+        norm(sub(c.normal, [1.0, 0.0, 0.0])) < 1e-9,
+        "{:?}",
+        c.normal
+    );
+    close(c.separation, -0.5);
+}
+
+#[test]
+fn contacts_sphere_plane() {
+    let id = ident();
+    let ground = plane([0.0, 1.0, 0.0], 0.0);
+    // 球 r=1 心在 y=0.5：陷入地面 0.5；接触点中点在 y=−0.25；normal = 地面下移方向 −y
+    let cs = contacts(&sphere(1.0), trans(0.0, 0.5, 0.0), &ground, id).unwrap();
+    assert_eq!(cs.len(), 1);
+    let c = cs[0];
+    assert!(
+        norm(sub(c.point, [0.0, -0.25, 0.0])) < 1e-9,
+        "{:?}",
+        c.point
+    );
+    assert!(
+        norm(sub(c.normal, [0.0, -1.0, 0.0])) < 1e-9,
+        "{:?}",
+        c.normal
+    );
+    close(c.separation, -0.5);
+}
+
+#[test]
+fn contacts_plane_box_resting() {
+    let id = ident();
+    let ground = plane([0.0, 1.0, 0.0], 0.0);
+    // 盒 half=1 心在 y=1：恰好落地（sep=0）；接触点在底面（y=0），normal = +y（盒向上分离）
+    let cs = contacts(&ground, id, &bx(1.0), trans(0.0, 1.0, 0.0)).unwrap();
+    assert_eq!(cs.len(), 1);
+    let c = cs[0];
+    assert!(c.point[1].abs() < 1e-9, "{:?}", c.point);
+    assert!(norm(sub(c.normal, [0.0, 1.0, 0.0])) < 1e-9);
+    close(c.separation, 0.0);
+    // 抬起来 → 确切无接触
+    assert_eq!(
+        contacts(&ground, id, &bx(1.0), trans(0.0, 1.5, 0.0))
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn contacts_box_box_manifold() {
+    let id = ident();
+    // A half=1 @ 原点，B half=1 @ (1.5,0,0)：交区 x∈[0.5,1]。
+    // 接触点 = A 的 x=1 面四角 + B 的 x=0.5 面四角，共 8 个。
+    let cs = contacts(&bx(1.0), id, &bx(1.0), trans(1.5, 0.0, 0.0)).unwrap();
+    assert_eq!(
+        cs.len(),
+        8,
+        "{:?}",
+        cs.iter().map(|c| c.point).collect::<Vec<_>>()
+    );
+    for c in &cs {
+        assert!(
+            c.point[0] >= 0.5 - 1e-9 && c.point[0] <= 1.0 + 1e-9,
+            "{:?}",
+            c.point
+        );
+        assert!((c.point[1].abs() - 1.0).abs() < 1e-9, "{:?}", c.point);
+        assert!((c.point[2].abs() - 1.0).abs() < 1e-9, "{:?}", c.point);
+        assert!(norm(sub(c.normal, [1.0, 0.0, 0.0])) < 1e-9, "normal = +x");
+        close(c.separation, -0.5);
+    }
+}
+
+#[test]
+fn contacts_symmetric_normals() {
+    let id = ident();
+    let a = contacts(&sphere(0.5), id, &bx(1.0), id).unwrap();
+    let b = contacts(&bx(1.0), id, &sphere(0.5), id).unwrap();
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b.iter()) {
+        assert!(norm(sub(x.point, y.point)) < 1e-9);
+        assert!(norm(add(x.normal, y.normal)) < 1e-9, "法向互换取反");
+    }
+}
+
+#[test]
+fn contacts_unknown_pairs() {
+    let id = ident();
+    assert!(contacts(
+        &torus(1.0, 0.25),
+        id,
+        &torus(1.0, 0.25),
+        trans(2.1, 0.0, 0.0)
+    )
+    .is_none());
+    assert!(contacts(&sphere(1.0), id, &circle(1.0), id).is_none());
+    let d = Geometry::CsgGeometry(CsgGeometry::new(
+        CsgOp::Difference,
+        vec![sphere(2.0), sphere(1.0)],
+    ));
+    assert!(contacts(&d, id, &sphere(1.0), id).is_none());
+}
+
 #[test]
 fn separation_symmetry() {
     let id = ident();

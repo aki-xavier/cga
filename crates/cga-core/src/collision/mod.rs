@@ -15,8 +15,11 @@ use crate::affine::{mat3_inv, mat3_to_mat4};
 use crate::geometry::Geometry;
 use crate::mat4::{mat4_mul, transform_point};
 
+mod contacts;
 mod pairs;
 mod shape;
+
+pub use contacts::contacts;
 
 /// 三值判定（D2）：确切命中 / 确切不命中 / 认证路径给不出确切答案。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

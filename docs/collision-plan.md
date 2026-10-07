@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 碰撞检测：定位与开发计划
 
-状态：**C0 + C1 已实施（2026-10-07）**，C2–C4 计划。适用：`cga-core/src/collision/`、`cga-host/src/collision.rs`（场景扫描）、`cga-host`（JSX 查询、报告、运动学闭环）。
+状态：**C0–C2 已实施（2026-10-07）**，C3–C4 计划。适用：`cga-core/src/collision/`、`cga-host/src/collision.rs`（场景扫描）、`cga-host`（JSX 查询、报告、运动学闭环）。
 
 ## 0. 结论与定位
 
@@ -131,9 +131,30 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C2 · 接触信息
 
+**已实施（2026-10-07）**。已交付：
+
+- `cga_core::collision::contacts(a, wa, b, wb) -> Option<Vec<Contact>>`：域与
+  `separation` 一致（`None` = Unknown）。`Contact { point, normal, separation }`：
+  normal 是 **b 的分离方向**（穿入时平移 b 即可分开；相离时从 a 最近点指向 b
+  最近点）；接触点取两侧最近表面点的中点。
+- 各形状的最近点/支撑点：球/平面/盒/柱（含无限长）/锥（截面三角形最近点映回
+  3D）/环面（截面圆）/椭球（外部对分；内部 → Unknown）。平面–X 给最深支撑点；
+  平面–平面 v1 不给（接触是条线）。
+- 盒–盒接触流形：A 内顶点 + B 内顶点 + 边×面交点，1e-9 去重；面–面穿入给
+  交区矩形的 8 角点（有解析断言）。
+- `CollisionScan::scan_contacts`（接触解只跑在 Yes 对上）；`contact_markers`
+  （红色发光小球 + 法向黄色细柱，普通对象通道直接渲染）。
+- 验收：接触点坐标解析断言（球-球中点、球-面穿入深度中点、盒落地支撑点、
+  盒-盒 8 角点流形）、法向互换取反的对称性、Unknown 域与 separation 一致、
+  接触标记渲染金标（fnv1a 钉死）。
+
+<details><summary>C2 原始计划条文（已按上表交付，留档）</summary>
+
 - `contacts()`：凸对的最近点对 + 法向；平面接触给接触面中心；多点接触（盒-盒面面）给凸包角点。
 - 接触标记可视化（小marker球/法向短线，走普通对象通道）+ 渲染 golden。
 - 验收：接触点坐标解析断言；golden PNG。
+
+</details>
 
 ### C3 · 螺旋 CCD
 
