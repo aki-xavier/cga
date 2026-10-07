@@ -187,9 +187,30 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C4 · 运动学闭环与文档
 
+**已实施（2026-10-07）**。已交付：
+
+- `sweep_joint(run, joint_name) -> JointSweepOutcome`：1-DOF 关节（revolute /
+  continuous / prismatic / helical）的 q 从行程低端扫到高端（continuous 扫
+  一整圈）。关节 frame 的世界矩阵 `F = world·M(q)⁻¹`，螺旋轴过 F 原点、
+  方向 `F·axis`；helical 加节距平移，prismatic 纯平移。各 mesh 先退到
+  `q=lo`（`F·M(lo)·M(q)⁻¹·F⁻¹` 共轭），再走 `sweep_toi` 的认证螺旋扫掠。
+- 嵌套闭包：扫父关节时全部后代关节的 meshes 刚体随动（`parent` 链 BFS）；
+  运动集合内部不互相误报；同组免检。
+- v1 边界：其余关节**冻结**（齿轮/凸轮联动扫描另行立项）；多 DOF / fixed /
+  无 limit → `skipped` 注明原因。
+- 验收：闭式解（单关节臂撞立柱 `q* = β − acos((ρ²+d²−s²)/(2ρd))`，1e-9）、
+  嵌套闭包（base/elbow 各扫各的，各自的闭式接触角都吻合）、跳过路径、
+  无干涉干净返回。
+- 文档：本文件状态改"全部已实施"；`jsx-css-host.md` v1 边界已在 C1 移除
+  `dist()`；README 特性表与覆盖率已含碰撞检测。
+
+<details><summary>C4 原始计划条文（已按上表交付，留档）</summary>
+
 - 关节行程干涉扫描：`q ∈ limit` 区间上扫 `sweep_toi`/分离度，报告"行程内何处干涉"。
 - 文档：本文件状态改"已实施"，§5 勾选；`jsx-css-host.md` v1 边界移除 `dist()`；README 特性表加碰撞检测行。
 - 验收：法兰/机械臂示例场景行程扫描输出干涉区间，与解析预期一致。
+
+</details>
 
 ## 5. 测试计划
 

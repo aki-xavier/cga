@@ -122,6 +122,164 @@ impl CollisionScan {
     }
 }
 
+/// 关节行程干涉扫描（C4）：joint 的 q 从行程低端扫到高端（continuous 扫一整圈），
+/// 其连杆（含嵌套子关节的 meshes，刚体随动）对场景其余对象逐一求螺旋 TOI。
+///
+/// v1 边界：只扫 1-DOF 关节（revolute/continuous/prismatic/helical）；其余关节
+/// **冻结**（齿轮/凸轮耦合的联动扫描另行立项）；多 DOF / fixed / 无 limit 的
+/// revolute → `skipped` 注明原因。
+pub struct JointSweepOutcome {
+    pub joint: String,
+    /// 最早确切干涉：(对象下标, q*)。`q*` 在行程区间内。
+    pub first: Option<(usize, f64)>,
+    /// 无法判定的对象（三值诚实）。
+    pub unknown: Vec<usize>,
+    /// 非 None = 未执行（原因）。
+    pub skipped: Option<String>,
+}
+
+/// 见 [`JointSweepOutcome`]。
+pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome {
+    let kin = &run.kinematics;
+    let Some(j) = kin.joints.iter().find(|j| j.name == joint_name) else {
+        return JointSweepOutcome {
+            joint: joint_name.to_string(),
+            first: None,
+            unknown: Vec::new(),
+            skipped: Some("no such joint".to_string()),
+        };
+    };
+    let skip = |reason: &str| JointSweepOutcome {
+        joint: joint_name.to_string(),
+        first: None,
+        unknown: Vec::new(),
+        skipped: Some(reason.to_string()),
+    };
+    if !j.kind.is_1dof() {
+        return skip("not a 1-DOF joint (cylindrical/spherical/planar/fixed)");
+    }
+    let q_cur = j.q.first().copied().unwrap_or(0.0);
+    let (lo, hi) = match j.limit {
+        Some([lo, hi]) => (lo, hi),
+        None if j.kind == crate::scene_build::JointKind::Continuous => {
+            (q_cur, q_cur + std::f64::consts::TAU)
+        }
+        None => return skip("no limit (revolute needs limit; continuous sweeps one turn)"),
+    };
+    if hi <= lo {
+        return skip("empty limit range");
+    }
+
+    // 关节 frame（运动前）的世界矩阵：F = world · M(q)⁻¹；螺旋轴过 F 原点、
+    // 方向 = F·axis。
+    use crate::scene_build::{joint_motion, mat4_inv};
+    use cga_core::mat4_mul;
+    let pitch = j.pitch.unwrap_or(0.0);
+    let mq = joint_motion(&j.kind, j.axis, &j.q, pitch);
+    let f = mat4_mul(j.world, mat4_inv(mq));
+    let o = [f[3], f[7], f[11]];
+    let axis_w = {
+        let a = [
+            f[0] * j.axis[0] + f[1] * j.axis[1] + f[2] * j.axis[2],
+            f[4] * j.axis[0] + f[5] * j.axis[1] + f[6] * j.axis[2],
+            f[8] * j.axis[0] + f[9] * j.axis[1] + f[10] * j.axis[2],
+        ];
+        let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        if n < 1e-12 {
+            return skip("degenerate joint axis");
+        }
+        [a[0] / n, a[1] / n, a[2] / n]
+    };
+
+    // q(t) = lo + t·(hi−lo) 的物理螺旋速度（sweep_toi 要物理量纲）。
+    let rate = hi - lo;
+    let (w, v) = match j.kind {
+        crate::scene_build::JointKind::Prismatic => ([0.0; 3], v3scale(axis_w, rate)),
+        _ => {
+            let w = v3scale(axis_w, rate);
+            // ṗ = ω×(p−o) ⇒ v = o×ω；helical 再加节距平移 pitch·rate 沿轴。
+            let mut v = v3cross(o, w);
+            if j.kind == crate::scene_build::JointKind::Helical {
+                v = v3add(v, v3scale(axis_w, pitch * rate));
+            }
+            (w, v)
+        }
+    };
+    let xi = [w[0], w[1], w[2], v[0], v[1], v[2]];
+
+    // 运动集合：本关节 + 全部嵌套后代的 meshes（它们刚体随动）。
+    let mut members: Vec<usize> = Vec::new();
+    let mut stack = vec![j.name.clone()];
+    while let Some(name) = stack.pop() {
+        if let Some(jj) = kin.joints.iter().find(|jj| jj.name == name) {
+            members.extend_from_slice(&jj.meshes);
+            for child in kin
+                .joints
+                .iter()
+                .filter(|c| c.parent.as_deref() == Some(name.as_str()))
+            {
+                stack.push(child.name.clone());
+            }
+        }
+    }
+
+    // 各 mesh 从当前姿态退到 q=lo：wa_lo = (F·M(lo)·M(q)⁻¹·F⁻¹)·wa_cur。
+    let m_lo = joint_motion(&j.kind, j.axis, &[lo], pitch);
+    let delta_lo = mat4_mul(f, mat4_mul(mat4_mul(m_lo, mat4_inv(mq)), mat4_inv(f)));
+    let mut out = JointSweepOutcome {
+        joint: joint_name.to_string(),
+        first: None,
+        unknown: Vec::new(),
+        skipped: None,
+    };
+    let scene = &run.scene;
+    for &mi in &members {
+        let obj = &scene.objects[mi];
+        let wa = mat4_mul(delta_lo, obj.motor().to_matrix());
+        for (k, other) in scene.objects.iter().enumerate() {
+            if members.contains(&k) {
+                continue; // 同一运动集合：刚体随动，不算干涉
+            }
+            let (gi, gk) = (obj.group, other.group);
+            if gi != 0 && gi == gk {
+                continue; // 同组免检
+            }
+            let (h, t) = cga_core::collision::sweep_toi(
+                xi,
+                &obj.geometry,
+                wa,
+                &other.geometry,
+                other.motor().to_matrix(),
+                1.0,
+            );
+            match h {
+                Hit::Yes => {
+                    let q = lo + t.unwrap_or(0.0) * rate;
+                    if out.first.is_none_or(|(_, bq)| q < bq) {
+                        out.first = Some((k, q));
+                    }
+                }
+                Hit::Unknown => out.unknown.push(k),
+                Hit::No => {}
+            }
+        }
+    }
+    out
+}
+
+fn v3scale(a: [f64; 3], s: f64) -> [f64; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+fn v3add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn v3cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
 /// 螺旋扫掠场景版（C3）：对象 `a` 以螺旋速度 `xi`（物理角速度 + 线速度）运动，
 /// 对场景其余对象逐一求 TOI。同组（`group` 非 0 且相等）跳过——同组是刚体
 /// 绑定，理应一起动。
@@ -345,6 +503,112 @@ mod tests {
         let want = std::f64::consts::FRAC_PI_2 - 2.0 * (1.0f64 / 6.0).asin();
         assert!((t - want).abs() < 1e-9, "t={t} want={want}");
         assert!(out.unknown.is_empty(), "{:?}", out.unknown);
+    }
+
+    fn run_of(src: &str) -> crate::SceneRun {
+        crate::run_jsx(src, None, ".").expect("run")
+    }
+
+    #[test]
+    fn sweep_joint_closed_form() {
+        // 关节臂：revolute 绕原点 z 转，臂上球 r=0.2 在半径 1.2；立柱球 r=0.5
+        // 在 (1.5, 1.0, 0)。行程 [0, 1] 从 q=0 出发。
+        // 接触：|c(q) − p| = 0.7 ⇒ cosΔ = (ρ²+d²−s²)/(2ρd)，q* = β − Δ。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <translate t={[1.5, 1.0, 0]}><sphere r={0.5} /></translate>
+    <joint name="arm" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
+      <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
+    </joint>
+  </scene>
+);
+"#;
+        let out = sweep_joint(&run_of(src), "arm");
+        assert!(out.skipped.is_none(), "{:?}", out.skipped);
+        let (idx, q) = out.first.expect("应撞到立柱");
+        assert_eq!(idx, 0, "立柱是对象 0");
+        let beta = 1.0f64.atan2(1.5);
+        let d = (1.5f64 * 1.5 + 1.0).sqrt();
+        let rho = 1.2;
+        let want = beta - ((rho * rho + d * d - 0.7 * 0.7) / (2.0 * rho * d)).acos();
+        assert!((q - want).abs() < 1e-9, "q={q} want={want}");
+        assert!(out.unknown.is_empty());
+    }
+
+    #[test]
+    fn sweep_joint_nested_closure() {
+        // 嵌套关节：扫 base 时 elbow 的连杆球刚体随动（半径 2.4 绕原点）。
+        // 立柱球 r=0.5 在 (2.0, 1.5, 0)。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <translate t={[2.0, 1.5, 0]}><sphere r={0.5} /></translate>
+    <joint name="base" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
+      <joint name="elbow" type="revolute" axis={[0, 0, 1]} at={[1.2, 0, 0]} limit={[0, 1.0]}>
+        <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
+      </joint>
+    </joint>
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        // 扫 base：球绕原点半径 2.4
+        let out = sweep_joint(&run, "base");
+        let (idx, q) = out.first.expect("base 应撞到立柱");
+        assert_eq!(idx, 0);
+        let beta = 1.5f64.atan2(2.0);
+        let d = 2.5f64;
+        let want = beta - ((2.4 * 2.4 + d * d - 0.7 * 0.7) / (2.0 * 2.4 * d)).acos();
+        assert!((q - want).abs() < 1e-9, "base: q={q} want={want}");
+        // 扫 elbow：球绕 (1.2, 0) 半径 1.2
+        let out2 = sweep_joint(&run, "elbow");
+        let (idx2, q2) = out2.first.expect("elbow 应撞到立柱");
+        assert_eq!(idx2, 0);
+        let beta2 = 1.5f64.atan2(0.8);
+        let d2 = (0.8f64 * 0.8 + 1.5 * 1.5).sqrt();
+        let want2 = beta2 - ((1.44 + d2 * d2 - 0.49) / (2.0 * 1.2 * d2)).acos();
+        assert!((q2 - want2).abs() < 1e-9, "elbow: q={q2} want={want2}");
+    }
+
+    #[test]
+    fn sweep_joint_skips_and_clean() {
+        // 多 DOF / fixed / 无 limit / 未知关节 → skipped；无干涉 → first=None
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <translate t={[10.0, 0.0, 0]}><sphere r={0.5} /></translate>
+    <joint name="fix" type="fixed" at={[0, 0, 0]}><sphere r={0.2} /></joint>
+    <joint name="ball" type="spherical" axis={[0, 0, 1]} at={[0, 0, 0]}><sphere r={0.2} /></joint>
+    <joint name="free" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]}><sphere r={0.2} /></joint>
+    <joint name="arm" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
+      <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
+    </joint>
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        assert_eq!(
+            sweep_joint(&run, "fix").skipped.as_deref(),
+            Some("not a 1-DOF joint (cylindrical/spherical/planar/fixed)")
+        );
+        assert!(sweep_joint(&run, "ball").skipped.is_some());
+        assert!(
+            sweep_joint(&run, "free").skipped.is_some(),
+            "revolute 无 limit"
+        );
+        assert_eq!(
+            sweep_joint(&run, "nope").skipped.as_deref(),
+            Some("no such joint")
+        );
+        let clean = sweep_joint(&run, "arm");
+        assert!(clean.skipped.is_none());
+        assert_eq!(clean.first, None, "立柱在 x=10，行程内碰不到");
+        // 运动集合不互相误报：arm 自己的球不在干涉里
+        assert!(clean.unknown.is_empty());
     }
 
     #[test]

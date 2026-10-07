@@ -90,7 +90,7 @@ fn translate4(t: [f64; 3]) -> [f64; 16] {
     ]
 }
 
-fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
+pub(crate) fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
     let mut a = [[0.0f64; 8]; 4];
     for i in 0..4 {
         for j in 0..4 {
