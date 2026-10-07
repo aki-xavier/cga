@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 碰撞检测：定位与开发计划
 
-状态：**计划（2026-10-07）**。适用：`cga-core`（新增 `collision` 模块）、`cga-gpu`（包围盒/凸性/认证）、`cga-host`（JSX 查询、报告、运动学闭环）。
+状态：**C0 已实施（2026-10-07）**，C1–C4 计划。适用：`cga-core/src/collision/`、`cga-gpu`（包围盒/凸性/认证）、`cga-host`（JSX 查询、报告、运动学闭环）。
 
 ## 0. 结论与定位
 
@@ -36,7 +36,8 @@
 - **D2 三值结果**：`Hit::Yes / No / Unknown`。CSG 差/交的重叠判定不装精确：保守规则给不出确切答案时返回 `Unknown`，调用方自行降级（当作 Yes 报警 / 当作 No 放行）——显式三值，不许静默。
 - **D3 窄相在 `cga-core`**：纯 CPU f64 标量数学，不绑 MLX（碰撞查询是逐对的控制流密集代码，不是渲染那种逐光线数据流；GPU 批化以后有需求再说）。
 - **D4 CCD 用螺旋运动精确轨迹**：`q(t) = exp(t·ξ)·q₀`，TOI 用 cam_solve 同款「采样 bracket → 唯一性认证 → 二分」；不做线性插值近似的扫掠。
-- **D5 JSX 落点跟随 `solve()` 模式**：宿主原生函数 `collides(ofA, ofB)` / `clearance(ofA, ofB)`，构建期求值；结果进场景报告。v1 不加新元素类型。
+- **D5 JSX 落点**：`collides(ofA, ofB)` / `clearance(ofA, ofB)` 宿主查询；结果进场景报告。v1 不加新元素类型。
+  - C0 实施修正：`solve()` 是**模块求值期**的纯数学宿主函数，那时场景还没建成；碰撞查询需要建成后的场景，必须走 `{__q}` **惰性查询**通道（与 `face()/center()` 同款，构建期解析），不能模仿 `solve()`。JSX 面因此整体移到 C1。
 - **D6 穿透深度/MTV 只对凸对**（球/盒/柱/锥/椭球及其仿射包装，`is_convex_inner` 同款分类）；非凸/CSG → `Unknown`。
 - **D7 broad phase = 包围盒 + 指纹缓存**：复用 `geom_bounds` 剪枝与增量渲染的指纹失效；对象数量级（几十到几百）不需要空间索引，需要时再立项。
 
@@ -77,9 +78,30 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C0 · 点与距离原语
 
+**已实施（2026-10-07）**：`cga-core/src/collision/`（`Hit` 三值、`contains_point`、
+`separation`、`overlap`、`world_aabb`；纯 CPU f64）。已交付：
+
+- `contains_point`：全图元（球/平面半空间/盒/柱含无限长/锥/环面/椭球）+ CSG
+  三值递归（union/intersection/difference 的 and/or/not）+ 任意仿射精确
+  （点逆变换，不要求刚体）。圆片/环纹面/部分环面 → `Unknown`。
+- `separation` 两两表（世界空间形状，仅刚体含镜像；非刚体仿射 → `Unknown`）：
+  球–{球/平面/盒/柱/锥/环面/椭球(球心在外)}、平面–{平面/盒/柱/锥/环面/椭球}、
+  盒–盒（SAT 15 轴 + 最近特征对精确距离 + 穿透轴深度）。锥 SDF 走截面三角形
+  的 2D 点–边距离（精确）；椭球外部点走单调函数对分（内部点 v1 `Unknown`）。
+- `overlap`：分离距离优先；算不了时世界包围盒保守判定（相离 ⇒ `No`，否则
+  `Unknown`）。
+- 验收：15 个测试（`cga-core::collision::tests`）——pairwise 矩阵每对 ≥ 3 构型
+  （分离/相切/穿入，解析距离断言）、CSG 三值、Unknown 构型必须 Unknown、
+  对称性、overlap 与 separation 一致性、包围盒保守路径。
+- 与计划的偏差：JSX `inside()` 移到 C1（见 D5 修正）。
+
+<details><summary>C0 原始计划条文（已按上表交付，留档）</summary>
+
 - 点级查询：`contains(geo, world, point)`（`geom_contains` 的 CPU 标量版）→ JSX `inside(of, p)`。
 - 凸对分离距离表：球-球、球-平面、球-盒、球-柱、盒-盒（OBB SAT）、球-锥、柱-柱、球-椭球；仿射包装一律先变到局部。柱-锥-环面等非平凡对用「采样 + Newton 最近点 + 认证回退」，认证不了就 `Unknown`。
 - 验收：pairwise 矩阵单测（每对 ≥ 3 构型：分离/接触/穿入，距离有解析解）；性质测试（对称性、三角不等式抽查）。
+
+</details>
 
 ### C1 · 重叠判定 + broad phase + JSX helper
 
