@@ -335,8 +335,9 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
     if sep > 0.0 {
         return Some(Vec::new());
     }
-    // 分离方向 = SAT 最小穿透轴（朝向 b）。穿入时 box_box 已算过一遍 15 轴，
-    // 这里重算一次找轴（接触流形是低频路径，清晰度优先）。
+    // 分离方向 = SAT 最小穿透轴（朝向 b）。注意 §7 审计：深穿透时该轴只是
+    // MTV 方向的近似（深度同理是上界）；面接触/浅穿透时精确。穿入时 box_box
+    // 已算过一遍 15 轴，这里重算一次找轴（接触流形是低频路径，清晰度优先）。
     let t = sub(cb, ca);
     let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
         (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()

@@ -172,7 +172,9 @@ pub(crate) fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
 /// 平面（半空间 n·x ≤ d）与形状的分离距离。
 pub(crate) fn plane_separation(n: [f64; 3], d: f64, s: &Shape) -> Option<f64> {
     if let Shape::Plane { n: n2, d: d2 } = *s {
-        // 平行：|Δd|（法向同向取差，反向取和）；相交：0（两半空间相交，算接触）。
+        // 平行：|Δd|（法向同向取差，反向取和）；相交：0。注意：两个相交半空间
+        // 有无限重叠体积，MTV 无定义——这里的 0 是**表面距离**语义（表面相交
+        // 即接触），不是穿入深度。
         return if norm(cross(n, n2)) < 1e-9 {
             Some(if dot(n, n2) > 0.0 {
                 (d - d2).abs()
@@ -240,7 +242,11 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
         }
     }
     if !separated {
-        // 穿入：SAT 最小穿透轴深度（OBB 的 MTV 在这 15 轴之一上）。
+        // 穿入：SAT 最小穿透轴深度。**语义边界（第一性原理审计，见
+        // docs/collision-plan.md §7）：这只是 15 个候选轴上的最小平移，
+        // 真 MTV 是所有方向上的最小值 ⇒ 此值是 MTV 的上界（深穿透的棱–棱
+        // 情形可能高估深度）。布尔接触判定是精确的（分离轴定理）；
+        // 浅穿透/面接触时深度精确。**精确 MTV 需要 Minkowski 差最近点，另行立项。
         return Some(-min_overlap);
     }
     // 相离：最近特征对（顶点–面 + 边–边）精确距离。
