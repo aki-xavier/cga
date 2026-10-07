@@ -158,8 +158,32 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C3 · 螺旋 CCD
 
+**已实施（2026-10-07）**。已交付：
+
+- `cga_core::collision::sweep_toi(xi, a, wa, b, wb, t_max)`：`xi = [ω; v]` 物理
+  螺旋速度（注意 `Multivector::velocity` 存二重矢量系数，内部喂一半），
+  轨迹 `M(t) = exp(t·ξ)·wa` 精确螺旋（非线性插值近似）。
+- 认证（不报假阴性/假阳性）：`f(t)` = 分离距离是 1-Lipschitz 的，
+  `|f'| ≤ vmax`（vmax = 螺旋最大点速度上界 = 轴向节距速度 + |ω|·包围盒角点到
+  螺旋轴的最大距离，沿轨迹不变）。区间下界 > 0 ⇒ 认证无接触；符号翻转 ⇒
+  对分求根；8 分细分到深度上限仍无法认证（擦边退化）⇒ `Unknown`；几何对
+  不支持 ⇒ `Unknown`；初始已接触 ⇒ `(Yes, Some(0.0))`。
+- 场景版 `sweep_scene(xi, i, scene, t_max) -> SweepOutcome { first, unknown }`
+  （同组跳过；`unknown` 列出无法判定的对象——它们可能在 first 之前接触）。
+- 验收（全部闭式/解析断言，1e-9）：旋转臂 vs 立柱（接触角闭式解）+
+  接触时刻分离度自洽（≈0 且稍前 > 0）、认证无接触（t_max 截断）、初始穿入、
+  纯平移、球–盒、**凸轮交叉验证**（cam_solve 的 circle–circle 分支 = 球心共面
+  时的球–球：`cos q* = −0.875` 闭式解逐位吻合）、环面–环面 Unknown、
+  `sweep_scene` 最早接触与同组跳过。
+- 注意（已写进模块文档）：擦边（grazing）接触在认证框架下是 `Unknown`——
+  这是诚实的边界情形，不是漏报。
+
+<details><summary>C3 原始计划条文（已按上表交付，留档）</summary>
+
 - `sweep_toi()`：螺旋轨迹上的分离函数符号 bracket + 唯一性认证 + 二分（cam_solve 同款）；运动中的物体对场景中每个静止物逐一求 TOI，取最小。
 - 验收：旋转臂 vs 立柱——接触角有闭式解，对比；`cam_solve` 的凸轮接触用 `sweep_toi`/`contacts` 复现（交叉验证）。
+
+</details>
 
 ### C4 · 运动学闭环与文档
 

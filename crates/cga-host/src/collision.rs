@@ -122,6 +122,49 @@ impl CollisionScan {
     }
 }
 
+/// 螺旋扫掠场景版（C3）：对象 `a` 以螺旋速度 `xi`（物理角速度 + 线速度）运动，
+/// 对场景其余对象逐一求 TOI。同组（`group` 非 0 且相等）跳过——同组是刚体
+/// 绑定，理应一起动。
+pub struct SweepOutcome {
+    /// 最早的确切接触（对象下标, toi）。
+    pub first: Option<(usize, f64)>,
+    /// 无法判定的对象（三值诚实：它们可能在 first 之前接触，由调用方决定如何处理）。
+    pub unknown: Vec<usize>,
+}
+
+/// 见 [`SweepOutcome`]。
+pub fn sweep_scene(xi: [f64; 6], a: usize, scene: &Scene, t_max: f64) -> SweepOutcome {
+    let obj = &scene.objects[a];
+    let wa = obj.motor().to_matrix();
+    let mut out = SweepOutcome {
+        first: None,
+        unknown: Vec::new(),
+    };
+    for (j, o) in scene.objects.iter().enumerate() {
+        if j == a || (obj.group != 0 && obj.group == o.group) {
+            continue;
+        }
+        let (h, t) = cga_core::collision::sweep_toi(
+            xi,
+            &obj.geometry,
+            wa,
+            &o.geometry,
+            o.motor().to_matrix(),
+            t_max,
+        );
+        match h {
+            Hit::Yes => {
+                let t = t.unwrap_or(0.0);
+                if out.first.is_none_or(|(_, bt)| t < bt) {
+                    out.first = Some((j, t));
+                }
+            }
+            Hit::Unknown => out.unknown.push(j),
+            Hit::No => {}
+        }
+    }
+    out
+}
 /// 接触标记（C2 可视化）：每个接触点一个红色发光小球，法向一根黄色细柱——
 /// 普通对象通道，直接 `scene.add_object` 即可渲染。`size` = 标记球半径
 /// （按场景尺度取，如包围盒对角线的 1–2%）。
@@ -281,6 +324,27 @@ mod tests {
         scan.scan(&sc);
         assert_eq!(scan.computed, 2);
         assert_eq!(scan.cache_hits, 1);
+    }
+
+    #[test]
+    fn sweep_scene_first_contact() {
+        // 旋转臂（对象 0：球 r=0.5 在 (0,3,0)，绕原点 z 顺时针 ω=1）：
+        // 先撞对象 1（(3,0,0) 的球，t* = π/2 − 2asin(1/6) ≈ 1.2359），
+        // 后撞对象 2（(0,-3,0) 的球，t = π − Δφ* ≈ 2.807）。对象 3 与臂同组 → 跳过。
+        let mut sc = Scene::new(None);
+        sc.add_object(sphere_obj(0.0, 0.5, 7));
+        sc.objects[0].position = [0.0, 3.0, 0.0];
+        sc.add_object(sphere_obj(3.0, 0.5, 0));
+        sc.add_object(sphere_obj(0.0, 0.5, 0));
+        sc.objects[2].position = [0.0, -3.0, 0.0];
+        sc.add_object(sphere_obj(1.5, 0.5, 7)); // 同组（7）：在路径附近但免检
+        sc.objects[3].position = [1.5, 1.5, 0.0];
+        let out = sweep_scene([0.0, 0.0, -1.0, 0.0, 0.0, 0.0], 0, &sc, 3.0);
+        let (j, t) = out.first.expect("最早接触");
+        assert_eq!(j, 1, "先撞 (3,0,0) 的立柱");
+        let want = std::f64::consts::FRAC_PI_2 - 2.0 * (1.0f64 / 6.0).asin();
+        assert!((t - want).abs() < 1e-9, "t={t} want={want}");
+        assert!(out.unknown.is_empty(), "{:?}", out.unknown);
     }
 
     #[test]

@@ -547,6 +547,132 @@ fn contacts_unknown_pairs() {
     assert!(contacts(&d, id, &sphere(1.0), id).is_none());
 }
 
+// ---- 螺旋 CCD（C3） ----
+
+#[test]
+fn sweep_toi_rotating_arm_closed_form() {
+    // 旋转臂：球 r=0.5 在半径 3 处从 (0,3,0) 出发，绕原点 z 顺时针（ω=−1）；
+    // 立柱：球 r=0.5 在 (3,0,0)。接触当弦长 2R·sin(Δφ/2) = 1 → Δφ* = 2·asin(1/6)，
+    // t* = π/2 − Δφ*。
+    let arm0 = trans(0.0, 3.0, 0.0);
+    let post = trans(3.0, 0.0, 0.0);
+    let xi = [0.0, 0.0, -1.0, 0.0, 0.0, 0.0];
+    let (h, t) = sweep_toi(xi, &sphere(0.5), arm0, &sphere(0.5), post, 2.0);
+    let want = std::f64::consts::FRAC_PI_2 - 2.0 * (1.0f64 / 6.0).asin();
+    assert_eq!(h, Hit::Yes);
+    let t = t.unwrap();
+    assert!((t - want).abs() < 1e-9, "t={t} want={want}");
+    // 自洽：找到的接触时刻分离度 ≈ 0，稍前 > 0
+    let m = mat4_mul(
+        Multivector::velocity([0.0, 0.0, -0.5], [0.0; 3])
+            .exp(t)
+            .to_matrix(),
+        arm0,
+    );
+    close(
+        separation(&sphere(0.5), m, &sphere(0.5), post).unwrap(),
+        0.0,
+    );
+    let m_before = mat4_mul(
+        Multivector::velocity([0.0, 0.0, -0.5], [0.0; 3])
+            .exp(t - 1e-3)
+            .to_matrix(),
+        arm0,
+    );
+    assert!(separation(&sphere(0.5), m_before, &sphere(0.5), post).unwrap() > 0.0);
+}
+
+#[test]
+fn sweep_toi_certified_no_contact() {
+    // 同一构型但 t_max 小于接触时刻 → 认证 No（不是"没采到"，是 Lipschitz 界证明）。
+    let (h, t) = sweep_toi(
+        [0.0, 0.0, -1.0, 0.0, 0.0, 0.0],
+        &sphere(0.5),
+        trans(0.0, 3.0, 0.0),
+        &sphere(0.5),
+        trans(3.0, 0.0, 0.0),
+        1.0,
+    );
+    assert_eq!((h, t), (Hit::No, None));
+}
+
+#[test]
+fn sweep_toi_already_touching_and_translation() {
+    let id = ident();
+    // 初始已穿入 → (Yes, Some(0))
+    let (h, t) = sweep_toi(
+        [0.0; 6],
+        &sphere(1.0),
+        id,
+        &sphere(1.0),
+        trans(1.5, 0.0, 0.0),
+        1.0,
+    );
+    assert_eq!((h, t), (Hit::Yes, Some(0.0)));
+    // 纯平移：球 r=1 从原点以 v=+x 撞 x=5 的球 → t* = 5 − 2 = 3
+    let (h, t) = sweep_toi(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        &sphere(1.0),
+        id,
+        &sphere(1.0),
+        trans(5.0, 0.0, 0.0),
+        10.0,
+    );
+    assert_eq!(h, Hit::Yes);
+    close(t.unwrap(), 3.0);
+}
+
+#[test]
+fn sweep_toi_sphere_box() {
+    // 球 r=0.5 从 (−3,0,0) 以 v=+x 撞半宽 1 的盒 → 接触面 x=−1，t* = 3 − 1.5 = 1.5
+    let (h, t) = sweep_toi(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        &sphere(0.5),
+        trans(-3.0, 0.0, 0.0),
+        &bx(1.0),
+        ident(),
+        10.0,
+    );
+    assert_eq!(h, Hit::Yes);
+    close(t.unwrap(), 1.5);
+}
+
+#[test]
+fn sweep_toi_cam_contact_closed_form() {
+    // 凸轮几何的交叉验证：cam_solve 的 circle–circle 分支（separation_branches）
+    // 是"共面圆心距 − (r1+r2)"，与球–球在球心共面时逐点相同。
+    // 从动件圆心绕 pivot (2,0,0) 转臂 1.5：c(q) = (2 + 1.5cos q, 1.5 sin q)，
+    // 驱动件在原点 r=0.5。接触：|c|² = 6.25 + 6cos q = (r1+r2)² = 1
+    // → cos q* = −0.875 → q* = acos(−0.875)。ω=+1 ⇒ t* = q*。
+    // 绕 pivot 的旋转螺旋：ṗ = ω×(p − o) ⇒ v = o×ω = (2,0,0)×(0,0,1) = (0,−2,0)。
+    let xi = [0.0, 0.0, 1.0, 0.0, -2.0, 0.0];
+    let (h, t) = sweep_toi(
+        xi,
+        &sphere(0.5),
+        trans(3.5, 0.0, 0.0),
+        &sphere(0.5),
+        ident(),
+        3.0,
+    );
+    assert_eq!(h, Hit::Yes);
+    let want = (-0.875f64).acos();
+    assert!((t.unwrap() - want).abs() < 1e-9, "t={:?} want={want}", t);
+}
+
+#[test]
+fn sweep_toi_unknown_pair() {
+    // 环面–环面：分离距离未实现 → Unknown（不许假装扫过）
+    let (h, _) = sweep_toi(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        &torus(1.0, 0.25),
+        ident(),
+        &torus(1.0, 0.25),
+        trans(5.0, 0.0, 0.0),
+        10.0,
+    );
+    assert_eq!(h, Hit::Unknown);
+}
+
 #[test]
 fn separation_symmetry() {
     let id = ident();
