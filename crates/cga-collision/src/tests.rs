@@ -2,6 +2,7 @@
 //! 对称性、Unknown 构型必须报 Unknown。
 
 use super::*;
+use crate::shape::Shape;
 use cga_core::geometry::{
     BoxGeometry, CircleGeometry, ConeGeometry, CylinderGeometry, EllipsoidGeometry, PlaneGeometry,
     SphereGeometry, TorusGeometry,
@@ -671,6 +672,162 @@ fn sweep_toi_unknown_pair() {
         10.0,
     );
     assert_eq!(h, Hit::Unknown);
+}
+
+#[test]
+fn box_box_mtv_exact_matches_brute_force() {
+    // 对拍：精确 MTV（Minkowski 差 zonotope 最近点）vs 全方向采样参考
+    // （每个方向的精确分离平移 ra+rb−|t·n|，取 2000 个方向的最小值——是 MTV 的
+    // 上界逼近）。断言：① 精确 ≤ SAT 15 轴最小值（SAT 是子集 ⇒ 上界）；
+    // ② 精确 ≈ 参考值（采样分辨率内）。
+    let id = ident();
+    let cases: Vec<([f64; 16], f64, [f64; 16], f64)> = vec![
+        // 面穿入（SAT 精确的情形）
+        (id, 1.0, trans(1.5, 0.0, 0.0), 1.0),
+        // 深穿透 + 旋转（棱–棱）
+        (
+            id,
+            1.0,
+            mat4_mul(
+                trans(0.9, 0.7, 0.3),
+                Multivector::rotor([1.0, 1.0, 0.0], 0.7).to_matrix(),
+            ),
+            0.8,
+        ),
+        // 深穿透细杆交叉
+        (id, 1.0, mat4_mul(trans(0.3, 0.4, 0.0), rotz(0.9)), 1.2),
+    ];
+    for (wa, _ha, wb, _hb) in &cases {
+        let a = bx(1.0);
+        let b = bx(1.0);
+        let sep = separation(&a, *wa, &b, *wb).unwrap();
+        assert!(sep < 0.0, "构型应穿入: {sep}");
+        let exact = -sep;
+        // 强对拍：沿 MTV 方向的单向分离平移必须恰等于 |MTV|（边界点自身的方向
+        // 就是见证方向）。这与采样无关，是解析等式。
+        let (sa, sb) = (
+            crate::shape::to_shape(&a, *wa).unwrap(),
+            crate::shape::to_shape(&b, *wb).unwrap(),
+        );
+        let (
+            Shape::Box {
+                c: ca,
+                axes: aa,
+                half: ha,
+            },
+            Shape::Box {
+                c: cb,
+                axes: ab,
+                half: hb,
+            },
+        ) = (sa, sb)
+        else {
+            panic!("not boxes")
+        };
+        let t = sub(cb, ca);
+        let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
+            (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+        };
+        // 从 zonotope 端取 MTV 向量（内部可见）。
+        let mtv = crate::pairs::box_mtv_exact(ca, aa, ha, cb, ab, hb);
+        let n = scale(mtv, 1.0 / exact);
+        let along = ext(n, aa, ha) + ext(n, ab, hb) - dot(t, n).abs();
+        assert!(
+            (along - exact).abs() < 1e-9,
+            "MTV 方向的单向分离应恰等于 |MTV|: along={along} exact={exact}"
+        );
+        // 参考：全方向采样（上界逼近，只断言不小于精确值）。
+        let brute = mtv_brute(&a, *wa, &b, *wb, 2000);
+        assert!(
+            exact <= brute + 1e-9,
+            "精确 MTV 不得超过参考上界: exact={exact} brute={brute}"
+        );
+        // SAT 子集上界性质
+        let sat = sat15_min(&a, *wa, &b, *wb);
+        assert!(exact <= sat + 1e-9, "SAT 是上界: exact={exact} sat={sat}");
+    }
+}
+
+/// 全方向采样参考：黄金角螺旋布点。
+fn mtv_brute(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16], n_samples: usize) -> f64 {
+    let (sa, sb) = (
+        crate::shape::to_shape(a, wa).unwrap(),
+        crate::shape::to_shape(b, wb).unwrap(),
+    );
+    let (
+        Shape::Box {
+            c: ca,
+            axes: aa,
+            half: ha,
+        },
+        Shape::Box {
+            c: cb,
+            axes: ab,
+            half: hb,
+        },
+    ) = (sa, sb)
+    else {
+        panic!("not boxes")
+    };
+    let t = sub(cb, ca);
+    let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
+        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+    };
+    let mut best = f64::INFINITY;
+    let golden = std::f64::consts::PI * (3.0 - 5.0f64.sqrt());
+    for i in 0..n_samples {
+        let z = 1.0 - 2.0 * (i as f64 + 0.5) / n_samples as f64;
+        let r = (1.0 - z * z).max(0.0).sqrt();
+        let th = golden * i as f64;
+        let n = [r * th.cos(), r * th.sin(), z];
+        best = best.min(ext(n, aa, ha) + ext(n, ab, hb) - dot(t, n).abs());
+    }
+    best
+}
+
+/// SAT 15 轴的最小穿透（参考实现）。
+fn sat15_min(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> f64 {
+    let (sa, sb) = (
+        crate::shape::to_shape(a, wa).unwrap(),
+        crate::shape::to_shape(b, wb).unwrap(),
+    );
+    let (
+        Shape::Box {
+            c: ca,
+            axes: aa,
+            half: ha,
+        },
+        Shape::Box {
+            c: cb,
+            axes: ab,
+            half: hb,
+        },
+    ) = (sa, sb)
+    else {
+        panic!("not boxes")
+    };
+    let t = sub(cb, ca);
+    let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
+        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+    };
+    let mut best = f64::INFINITY;
+    let mut sat = |l: [f64; 3]| {
+        let ll = norm(l);
+        if ll < 1e-9 {
+            return;
+        }
+        let l = scale(l, 1.0 / ll);
+        best = best.min(ext(l, aa, ha) + ext(l, ab, hb) - dot(t, l).abs());
+    };
+    for ax in aa.iter().chain(ab.iter()) {
+        sat(*ax);
+    }
+    for axa in aa {
+        for axb in ab {
+            sat(cross(axa, axb));
+        }
+    }
+    best
 }
 
 #[test]

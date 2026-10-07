@@ -214,12 +214,11 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
     else {
         return None;
     };
-    // SAT：6 个面法向 + 9 个叉积轴。
+    // SAT：6 个面法向 + 9 个叉积轴（分离轴定理：布尔相离判定是精确的）。
     let t = sub(cb, ca);
     let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
         (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
     };
-    let mut min_overlap = f64::INFINITY;
     let mut separated = false;
     let mut sat = |l: [f64; 3]| {
         let ll = norm(l);
@@ -227,11 +226,9 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
             return; // 两轴平行，叉积退化：跳过
         }
         let l = scale(l, 1.0 / ll);
-        let overlap = extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs();
-        if overlap < 0.0 {
+        if extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs() < 0.0 {
             separated = true;
         }
-        min_overlap = min_overlap.min(overlap);
     };
     for ax in aa.iter().chain(ab.iter()) {
         sat(*ax);
@@ -242,12 +239,10 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
         }
     }
     if !separated {
-        // 穿入：SAT 最小穿透轴深度。**语义边界（第一性原理审计，见
-        // docs/collision-plan.md §7）：这只是 15 个候选轴上的最小平移，
-        // 真 MTV 是所有方向上的最小值 ⇒ 此值是 MTV 的上界（深穿透的棱–棱
-        // 情形可能高估深度）。布尔接触判定是精确的（分离轴定理）；
-        // 浅穿透/面接触时深度精确。**精确 MTV 需要 Minkowski 差最近点，另行立项。
-        return Some(-min_overlap);
+        // 穿入：精确 MTV = Minkowski 差 zonotope 上离原点最近的边界点
+        // （审计 §7：SAT 15 轴最小穿透只是上界，深穿透棱–棱情形会高估）。
+        let mtv = box_mtv_exact(ca, aa, ha, cb, ab, hb);
+        return Some(-norm(mtv));
     }
     // 相离：最近特征对（顶点–面 + 边–边）精确距离。
     let va = box_vertices(ca, aa, ha);
@@ -273,6 +268,156 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
         }
     }
     Some(best)
+}
+
+/// 两盒穿入的精确 MTV（作用在 b 上可分离）。
+///
+/// 第一性原理：Z = A ⊖ B 是 6 生成元 zonotope（中心 c = cA − cB）；原点在内
+/// ⇔ 相交；MTV = 原点到 ∂Z 的最近点。面枚举：每个非平行生成元对 (i,j) 给出
+/// 面法向 n = unit(e_i × e_j)；落在该面平面上的生成元集合（zone）≥ 2 时面是
+/// 2D zonotope（中心对称多边形），顶点按角度排序走两条链。对面取各面到原点的
+/// 最近点（投影在面内 → 垂足，否则面边界边）。
+pub(crate) fn box_mtv_exact(
+    ca: [f64; 3],
+    aa: [[f64; 3]; 3],
+    ha: [f64; 3],
+    cb: [f64; 3],
+    ab: [[f64; 3]; 3],
+    hb: [f64; 3],
+) -> [f64; 3] {
+    let e = [
+        scale(aa[0], ha[0]),
+        scale(aa[1], ha[1]),
+        scale(aa[2], ha[2]),
+        scale(ab[0], hb[0]),
+        scale(ab[1], hb[1]),
+        scale(ab[2], hb[2]),
+    ];
+    let c = sub(ca, cb);
+    let mut best_d2 = f64::INFINITY;
+    let mut best = [0.0; 3];
+    for i in 0..6 {
+        for j in i + 1..6 {
+            let cr = cross(e[i], e[j]);
+            if norm(cr) < 1e-12 {
+                continue;
+            }
+            let n0 = unit(cr);
+            for s in [1.0, -1.0] {
+                let n = scale(n0, s);
+                // zone：与面平行的生成元；面心 = c + 非 zone 生成元的支撑。
+                let zone: Vec<usize> = (0..6).filter(|&k| dot(e[k], n).abs() < 1e-12).collect();
+                let mut fc = c;
+                for (k, &ek) in e.iter().enumerate() {
+                    if !zone.contains(&k) {
+                        fc = add(fc, scale(ek, if dot(ek, n) >= 0.0 { 1.0 } else { -1.0 }));
+                    }
+                }
+                // 面法向朝外（离 c 远的一侧）。
+                let (n, fc) = if dot(n, sub(fc, c)) < 0.0 {
+                    let nf = scale(n, -1.0);
+                    let mut f2 = c;
+                    for (k, &ek) in e.iter().enumerate() {
+                        if !zone.contains(&k) {
+                            f2 = add(f2, scale(ek, if dot(ek, nf) >= 0.0 { 1.0 } else { -1.0 }));
+                        }
+                    }
+                    (nf, f2)
+                } else {
+                    (n, fc)
+                };
+                // 2D zonotope 多边形（zone 生成元排序走链）。
+                let poly = zone_polygon(&e, &zone, n, fc);
+                // 原点到该面的最近点。
+                let t = dot(n, fc);
+                let proj = scale(n, t);
+                let cand = if point_in_convex_2d(&poly, fc, n, proj) {
+                    proj
+                } else {
+                    // 面边界边的最近点
+                    let mut q = poly[0];
+                    let mut d2min = f64::INFINITY;
+                    for k in 0..poly.len() {
+                        let p0 = poly[k];
+                        let p1 = poly[(k + 1) % poly.len()];
+                        let qk = closest_point_on_seg3(proj, p0, p1);
+                        let d2 = dot(sub(proj, qk), sub(proj, qk));
+                        if d2 < d2min {
+                            d2min = d2;
+                            q = qk;
+                        }
+                    }
+                    q
+                };
+                let d2 = dot(cand, cand);
+                if d2 < best_d2 {
+                    best_d2 = d2;
+                    best = cand;
+                }
+            }
+        }
+    }
+    best
+}
+
+/// zone 生成元张成的 2D zonotope 的边界多边形（3D 点，中心对称，质心 = fc）。
+fn zone_polygon(e: &[[f64; 3]; 6], zone: &[usize], n: [f64; 3], fc: [f64; 3]) -> Vec<[f64; 3]> {
+    let u = unit(e[zone[0]]);
+    let v = cross(n, u);
+    let mut g2: Vec<(f64, [f64; 3])> = zone
+        .iter()
+        .map(|&k| {
+            let g = e[k];
+            let mut ang = dot(g, v).atan2(dot(g, u));
+            let mut g = g;
+            if ang < 0.0 {
+                ang += std::f64::consts::PI;
+                g = scale(g, -1.0); // −g 与 g 是同一条边方向
+            }
+            (ang, g)
+        })
+        .collect();
+    g2.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    // 两条链：V0 = −Σg，依次 +2g 到 V_m = +Σg；另一半边界中心对称 W_k = −V_k。
+    let mut sum = [0.0; 3];
+    for (_, g) in &g2 {
+        sum = add(sum, *g);
+    }
+    let mut chain = vec![scale(sum, -1.0)];
+    for (_, g) in &g2 {
+        chain.push(add(*chain.last().unwrap(), scale(*g, 2.0)));
+    }
+    let m = chain.len() - 1;
+    let mut pts: Vec<[f64; 3]> = chain.clone();
+    for c in chain.iter().take(m).skip(1) {
+        pts.push(scale(*c, -1.0));
+    }
+    pts.iter().map(|p| add(*p, fc)).collect()
+}
+
+/// 点在平面凸多边形内（质心侧判定，与绕向无关）。多边形在法向 n 的平面上。
+fn point_in_convex_2d(poly: &[[f64; 3]], fc: [f64; 3], n: [f64; 3], p: [f64; 3]) -> bool {
+    for k in 0..poly.len() {
+        let a = poly[k];
+        let b = poly[(k + 1) % poly.len()];
+        let edge = sub(b, a);
+        let side = dot(cross(edge, sub(p, a)), n);
+        let centroid_side = dot(cross(edge, sub(fc, a)), n);
+        if side * centroid_side < -1e-12 {
+            return false;
+        }
+    }
+    true
+}
+
+fn closest_point_on_seg3(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    let ab = sub(b, a);
+    let len2 = dot(ab, ab);
+    if len2 < 1e-24 {
+        return a;
+    }
+    let t = (dot(sub(p, a), ab) / len2).clamp(0.0, 1.0);
+    add(a, scale(ab, t))
 }
 
 pub(crate) fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[f64; 3]> {

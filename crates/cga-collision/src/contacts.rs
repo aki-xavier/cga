@@ -8,7 +8,9 @@
 //!   `None` = Unknown（未实现的对、CSG 差/交、非刚体仿射等，与 `separation` 同域）。
 
 use super::*;
-use pairs::{box_box, box_edges, box_vertices, dist_seg, plane_separation, sdf, support_range};
+use pairs::{
+    box_box, box_edges, box_mtv_exact, box_vertices, dist_seg, plane_separation, sdf, support_range,
+};
 use shape::Shape;
 
 /// 两个实体的接触列表。域与 [`separation`](crate::separation) 一致。
@@ -335,39 +337,44 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
     if sep > 0.0 {
         return Some(Vec::new());
     }
-    // 分离方向 = SAT 最小穿透轴（朝向 b）。注意 §7 审计：深穿透时该轴只是
-    // MTV 方向的近似（深度同理是上界）；面接触/浅穿透时精确。穿入时 box_box
-    // 已算过一遍 15 轴，这里重算一次找轴（接触流形是低频路径，清晰度优先）。
-    let t = sub(cb, ca);
-    let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
-    };
-    let mut best_axis = [1.0, 0.0, 0.0];
-    let mut min_overlap = f64::INFINITY;
-    let mut consider = |l: [f64; 3]| {
-        let ll = norm(l);
-        if ll < 1e-9 {
-            return;
-        }
-        let l = scale(l, 1.0 / ll);
-        let ov = extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs();
-        if ov < min_overlap {
-            min_overlap = ov;
-            best_axis = l;
-        }
-    };
-    for ax in aa.iter().chain(ab.iter()) {
-        consider(*ax);
-    }
-    for axa in aa {
-        for axb in ab {
-            consider(cross(axa, axb));
-        }
-    }
-    let normal = if dot(best_axis, t) >= 0.0 {
-        best_axis
+    // 分离方向 = 精确 MTV 方向（box_mtv_exact）。相切（|mtv|≈0）时退化为
+    // SAT 最小穿透轴。
+    let mtv = box_mtv_exact(ca, aa, ha, cb, ab, hb);
+    let l = norm(mtv);
+    let normal = if l > 1e-12 {
+        scale(mtv, 1.0 / l)
     } else {
-        scale(best_axis, -1.0)
+        let t = sub(cb, ca);
+        let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
+            (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+        };
+        let mut best_axis = [1.0, 0.0, 0.0];
+        let mut min_overlap = f64::INFINITY;
+        let mut consider = |l: [f64; 3]| {
+            let ll = norm(l);
+            if ll < 1e-9 {
+                return;
+            }
+            let l = scale(l, 1.0 / ll);
+            let ov = extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs();
+            if ov < min_overlap {
+                min_overlap = ov;
+                best_axis = l;
+            }
+        };
+        for ax in aa.iter().chain(ab.iter()) {
+            consider(*ax);
+        }
+        for axa in aa {
+            for axb in ab {
+                consider(cross(axa, axb));
+            }
+        }
+        if dot(best_axis, t) >= 0.0 {
+            best_axis
+        } else {
+            scale(best_axis, -1.0)
+        }
     };
 
     // 接触点：A 在 B 内的顶点 + B 在 A 内的顶点 + A 的边 × B 的面 + B 的边 × A 的面。
