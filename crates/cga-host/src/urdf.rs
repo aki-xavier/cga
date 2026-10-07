@@ -13,7 +13,7 @@ use cga_core::GeometryParams;
 use cga_mesh::BakeExt;
 
 use crate::jsx::run_jsx;
-use crate::scene_build::{JointDef, JointKind, Kinematics, SceneRun};
+use crate::scene_build::{JointKind, Kinematics, SceneRun};
 use cga_gpu::geom_to_camera;
 
 fn uf(v: f64) -> String {
@@ -228,7 +228,20 @@ fn urdf_kind(k: &JointKind) -> Option<&'static str> {
     }
 }
 
-fn limit_xml(j: &JointDef, ty: &str) -> Result<String, String> {
+/// URDF 的 joint 视图：pair + 生成树方向（上游 → 下游）。
+struct UrdfJoint<'a> {
+    name: String,
+    kind: &'a JointKind,
+    axis: [f64; 3],
+    at: [f64; 3],
+    rpy: [f64; 3],
+    pitch: Option<f64>,
+    limit: Option<[f64; 2]>,
+    parent: String,
+    child: String,
+}
+
+fn limit_xml(j: &UrdfJoint, ty: &str) -> Result<String, String> {
     match ty {
         "revolute" | "prismatic" => {
             let [lo, hi] = j
@@ -245,10 +258,10 @@ fn limit_xml(j: &JointDef, ty: &str) -> Result<String, String> {
 }
 
 fn mimic_xml(kin: &Kinematics, name: &str) -> String {
-    match kin.gears.iter().find(|g| g.driven == name) {
+    match kin.gears.iter().find(|g| g.b == name) {
         Some(g) => format!(
             "<mimic joint=\"{}\" multiplier=\"{}\" offset=\"{}\"/>",
-            g.driver,
+            g.a,
             uf(g.ratio),
             uf(g.offset)
         ),
@@ -256,7 +269,7 @@ fn mimic_xml(kin: &Kinematics, name: &str) -> String {
     }
 }
 
-fn joint_origin(j: &JointDef) -> String {
+fn joint_origin(j: &UrdfJoint) -> String {
     format!("<origin xyz=\"{}\" rpy=\"{}\"/>", uv(j.at), uv(j.rpy))
 }
 
@@ -299,39 +312,64 @@ pub fn jsx_to_urdf(
         Ok(())
     };
 
-    // base_link carries every mesh outside any joint body.
+    // URDF link 名：`{link 名}_link`；不属于任何 link 的几何折进**锚定**连杆。
+    let link_urdf_name = |name: &str| format!("{name}_link");
     let owned: std::collections::BTreeSet<usize> = kin
-        .joints
+        .links
         .iter()
-        .flat_map(|j| j.meshes.iter().copied())
+        .flat_map(|l| l.meshes.iter().copied())
         .collect();
     let free: Vec<usize> = (0..run.scene.objects.len())
         .filter(|i| !owned.contains(i))
         .collect();
-    emit_link(
-        "base_link",
-        &free,
-        cga_core::mat4_identity(),
-        &mut meshes,
-        &mut xml,
-    )?;
-
-    for j in &kin.joints {
+    let mut anchor_emitted = false;
+    for l in &kin.links {
+        let is_anchor = kin.anchor.as_deref() == Some(l.name.as_str());
+        let mut ids = l.meshes.clone();
+        if is_anchor {
+            ids.extend_from_slice(&free);
+            anchor_emitted = true;
+        }
         emit_link(
-            &format!("{}_link", j.name),
-            &j.meshes,
-            j.world,
+            &link_urdf_name(&l.name),
+            &ids,
+            l.world,
+            &mut meshes,
+            &mut xml,
+        )?;
+    }
+    if !anchor_emitted && !free.is_empty() {
+        emit_link(
+            "base_link",
+            &free,
+            cga_core::mat4_identity(),
             &mut meshes,
             &mut xml,
         )?;
     }
 
-    let parent_link = |j: &JointDef| -> String {
-        match &j.parent {
-            Some(p) => format!("{p}_link"),
-            None => "base_link".to_string(),
+    // pair → URDF joint（生成树方向；反向边是 G1 边界，显式报错）。
+    let mut joints: Vec<UrdfJoint> = Vec::new();
+    for (i, p) in kin.pairs.iter().enumerate() {
+        if p.tree_down == p.a {
+            return Err(format!(
+                "urdf: pair {} 的生成树方向与声明方向相反（G1 不支持；把 a/b 换写）",
+                p.name.clone().unwrap_or_else(|| format!("pair_{i}"))
+            ));
         }
-    };
+        joints.push(UrdfJoint {
+            name: p.name.clone().unwrap_or_else(|| format!("pair_{i}")),
+            kind: &p.kind,
+            axis: p.axis,
+            at: p.at,
+            rpy: p.rpy,
+            pitch: p.pitch,
+            limit: p.limit,
+            parent: link_urdf_name(&p.tree_up),
+            child: link_urdf_name(&p.tree_down),
+        });
+    }
+
     let joint_xml = |xml: &mut String,
                      name: &str,
                      ty: &str,
@@ -353,7 +391,7 @@ pub fn jsx_to_urdf(
         xml.push_str("  </joint>\n");
     };
 
-    for j in &kin.joints {
+    for j in &joints {
         let origin = joint_origin(j);
         let mimic = mimic_xml(kin, &j.name);
         match j.kind {
@@ -362,17 +400,17 @@ pub fn jsx_to_urdf(
             | JointKind::Prismatic
             | JointKind::Fixed
             | JointKind::Planar => {
-                let ty = urdf_kind(&j.kind).unwrap();
+                let ty = urdf_kind(j.kind).unwrap();
                 let limit = limit_xml(j, ty)?;
                 let extra = format!("{limit}{mimic}");
                 joint_xml(
                     &mut xml,
                     &j.name,
                     ty,
-                    &parent_link(j),
-                    &format!("{}_link", j.name),
+                    &j.parent,
+                    &j.child,
                     &origin,
-                    if j.kind == JointKind::Fixed {
+                    if j.kind == &JointKind::Fixed {
                         None
                     } else {
                         Some(j.axis)
@@ -387,20 +425,23 @@ pub fn jsx_to_urdf(
                     &mut xml,
                     &j.name,
                     "revolute",
-                    &parent_link(j),
-                    &format!("{}_screw", j.name),
+                    &j.parent,
+                    &format!("{}_screw", j.name.trim_end_matches("_link")),
                     &origin,
                     Some(j.axis),
                     limit.trim(),
                 );
-                xml.push_str(&format!("  <link name=\"{}_screw\"/>\n", j.name));
+                xml.push_str(&format!(
+                    "  <link name=\"{}_screw\"/>\n",
+                    j.name.trim_end_matches("_link")
+                ));
                 let pitch = j.pitch.unwrap_or(0.0);
                 joint_xml(
                     &mut xml,
                     &format!("{}_slide", j.name),
                     "prismatic",
-                    &format!("{}_screw", j.name),
-                    &format!("{}_link", j.name),
+                    &format!("{}_screw", j.name.trim_end_matches("_link")),
+                    &j.child,
                     "<origin xyz=\"0 0 0\" rpy=\"0 0 0\"/>",
                     Some(j.axis),
                     &format!(
@@ -416,19 +457,22 @@ pub fn jsx_to_urdf(
                     &mut xml,
                     &format!("{}_rot", j.name),
                     "revolute",
-                    &parent_link(j),
-                    &format!("{}_cyl", j.name),
+                    &j.parent,
+                    &format!("{}_cyl", j.name.trim_end_matches("_link")),
                     &origin,
                     Some(j.axis),
                     limit.trim(),
                 );
-                xml.push_str(&format!("  <link name=\"{}_cyl\"/>\n", j.name));
+                xml.push_str(&format!(
+                    "  <link name=\"{}_cyl\"/>\n",
+                    j.name.trim_end_matches("_link")
+                ));
                 joint_xml(
                     &mut xml,
                     &format!("{}_slide", j.name),
                     "prismatic",
-                    &format!("{}_cyl", j.name),
-                    &format!("{}_link", j.name),
+                    &format!("{}_cyl", j.name.trim_end_matches("_link")),
+                    &j.child,
                     "<origin xyz=\"0 0 0\" rpy=\"0 0 0\"/>",
                     Some(j.axis),
                     "<limit lower=\"-inf\" upper=\"inf\" effort=\"0\" velocity=\"0\"/>",
@@ -438,16 +482,13 @@ pub fn jsx_to_urdf(
                 // Series Rx → Ry → Rz, matching the spherical motion.
                 let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
                 let names = ["r", "p", "y"];
-                let links = [
-                    parent_link(j),
-                    format!("{}_sx", j.name),
-                    format!("{}_sy", j.name),
-                ];
+                let stem = j.name.trim_end_matches("_link").to_string();
+                let links = [j.parent.clone(), format!("{stem}_sx"), format!("{stem}_sy")];
                 for i in 0..3 {
                     let child = if i == 2 {
-                        format!("{}_link", j.name)
+                        j.child.clone()
                     } else {
-                        format!("{}_s{}", j.name, ["x", "y"][i])
+                        format!("{stem}_s{}", ["x", "y"][i])
                     };
                     let o = if i == 0 {
                         origin.clone()
@@ -482,16 +523,15 @@ mod tests {
 
     const ARM: &str = r#"export default (
   <scene>
-    <joint name="shoulder" type="revolute" axis={[0,0,1]} q={0.3} limit={[-1.57, 1.57]}>
-      <cylinder r={0.05} h={0.4} />
-      <joint name="elbow" type="prismatic" axis={[1,0,0]} at={[0.3,0,0]} limit={[0, 0.2]}>
-        <box s={[0.2, 0.2, 0.2]} />
-        <gear driver="elbow" driven="wrist" ratio={2} offset={0.1} />
-        <joint name="wrist" type="revolute" axis={[0,1,0]} at={[0.5,0,0]} limit={[-1, 1]}>
-          <sphere r={0.08} />
-        </joint>
-      </joint>
-    </joint>
+    <link name="base" />
+    <link name="upper"><cylinder r={0.05} h={0.4} /></link>
+    <link name="fore"><box s={[0.2, 0.2, 0.2]} /></link>
+    <link name="hand"><sphere r={0.08} /></link>
+    <pair kind="revolute" name="shoulder" a="base" b="upper" axis={[0,0,1]} q={0.3} limit={[-1.57, 1.57]} />
+    <pair kind="prismatic" name="elbow" a="upper" b="fore" axis={[1,0,0]} at={[0.3,0,0]} limit={[0, 0.2]} />
+    <pair kind="revolute" name="wrist" a="fore" b="hand" axis={[0,1,0]} at={[0.5,0,0]} limit={[-1, 1]} />
+    <gear a="elbow" b="wrist" ratio={2} offset={0.1} />
+    <anchor link="base" />
   </scene>
 );"#;
 
@@ -519,7 +559,8 @@ mod tests {
             "{x}"
         );
         assert!(x.contains("<sphere radius=\"0.08\"/>"), "{x}");
-        assert!(x.contains("<parent link=\"shoulder_link\"/>"), "{x}");
+        assert!(x.contains("<parent link=\"upper_link\"/>"), "{x}");
+        assert!(x.contains("<parent link=\"fore_link\"/>"), "{x}");
         assert!(x.contains("<parent link=\"base_link\"/>"), "{x}");
     }
 
@@ -540,7 +581,7 @@ mod tests {
     #[test]
     fn test_p5_urdf_export_helical_degrades() {
         let e = jsx_to_urdf(
-            r#"export default <joint name="screw" type="helical" axis={[0,0,1]} pitch={0.05} q={1} limit={[-2, 2]}><sphere r={0.1} /></joint>;"#,
+            r#"export default <scene><link name="base" /><link name="l"><sphere r={0.1} /></link><pair kind="helical" name="screw" a="base" b="l" axis={[0,0,1]} pitch={0.05} q={1} limit={[-2, 2]} /><anchor link="base" /></scene>;"#,
             None,
             "",
             "bot",
@@ -570,7 +611,7 @@ mod tests {
     fn test_p5_urdf_export_csg_bakes_to_stl() {
         // 非图元（解析 CSG）链接几何：导出方向三角化成 STL，文件写进 UrdfExport.meshes
         let e = jsx_to_urdf(
-            r#"export default <joint name="j" type="fixed"><difference><box s={[0.8,0.8,0.8]} /><sphere r={0.3} /></difference></joint>;"#,
+            r#"export default <scene><link name="base" /><link name="j"><difference><box s={[0.8,0.8,0.8]} /><sphere r={0.3} /></difference></link><pair kind="fixed" name="j" a="base" b="j" /><anchor link="base" /></scene>;"#,
             None,
             "",
             "bot",
@@ -594,7 +635,7 @@ mod tests {
     #[test]
     fn test_p5_urdf_export_needs_limit() {
         let e = jsx_to_urdf(
-            r#"export default <joint name="j" type="revolute"><sphere r={0.1} /></joint>;"#,
+            r#"export default <scene><link name="base" /><link name="l"><sphere r={0.1} /></link><pair kind="revolute" name="j" a="base" b="l" /><anchor link="base" /></scene>;"#,
             None,
             "",
             "bot",

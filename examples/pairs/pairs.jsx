@@ -5,18 +5,30 @@ export default (
     <DirectionalLight direction={[0.4, 1.0, 0.5]} intensity={0.5} />
     <PointLight position={[-5, 6, 4]} intensity={0.55} />
     <AmbientLight intensity={0.38} />
-    <Revolute name="revolute" axis={[0,0,1]} at={ [-4.0, 1.0, 0.0] } q={0.6}><Box s={[0.5,0.5,0.5]} color={0xC0392B} roughness={0.4} metalness={0.4} /></Revolute>
-    <Gear driver="revolute" driven="prismatic" ratio={0.5} />
-    <Prismatic name="prismatic" axis={[0,1,0]} at={ [-3.0, 1.0, 0.0] } limit={[-1,1]}><Box s={[0.5,0.5,0.5]} color={0xF1C40F} roughness={0.4} metalness={0.4} /></Prismatic>
-    <Continuous name="continuous" axis={[0,0,1]} at={ [-2.0, 1.0, 0.0] }><Box s={[0.5,0.5,0.5]} color={0xE67E22} roughness={0.4} metalness={0.4} /></Continuous>
-    <Helical name="helical" axis={[0,0,1]} at={ [-1.0, 1.0, 0.0] } pitch={0.3} q={0.5}><Box s={[0.5,0.5,0.5]} color={0x2ECC71} roughness={0.4} metalness={0.4} /></Helical>
-    <Cylindrical name="cylindrical" axis={[0,0,1]} at={ [0.0, 1.0, 0.0] } q={[0.4,0.2]}><Box s={[0.5,0.5,0.5]} color={0x1ABC9C} roughness={0.4} metalness={0.4} /></Cylindrical>
-    <Spherical name="spherical" at={ [1.0, 1.0, 0.0] } q={[0.2,0.3,0.1]}><Box s={[0.5,0.5,0.5]} color={0x3498DB} roughness={0.4} metalness={0.4} /></Spherical>
-    <Planar name="planar" axis={[0,0,1]} at={ [2.0, 1.0, 0.0] } q={[0.2,0.1,0.3]}><Box s={[0.5,0.5,0.5]} color={0x9B59B6} roughness={0.4} metalness={0.4} /></Planar>
-    <Fixed name="fixed" at={ [3.0, 1.0, 0.0] }><Box s={[0.5,0.5,0.5]} color={0x95A5A6} roughness={0.4} metalness={0.4} /></Fixed>
-    <Revolute name="cam_driver" axis={[0,0,1]} at={ [0.0, 3.0, 0.0] } q={0.3}><Cylinder r={0.4} h={0.2} /></Revolute>
-    <Cam driver="cam_driver" driven="cam_follower" driverProfile={{kind:"circle", c:[0.12,0,0], n:[0,0,1], r:0.4}} drivenProfile={{kind:"circle", c:[0,0,0], n:[0,0,1], r:0.12}} />
-    <Prismatic name="cam_follower" axis={[1,0,0]} at={ [0.9, 3.0, 0.0] } limit={[-0.4,-0.1]}><Sphere r={0.12} /></Prismatic>
+    <Link name="base" />
+    <Anchor link="base" />
+    <Link name="revolute"><Box s={[0.5,0.5,0.5]} color={0xC0392B} roughness={0.4} metalness={0.4} /></Link>
+    <Revolute name="revolute" a="base" b="revolute" at={ [-4.0, 1.0, 0.0] } axis={[0,0,1]} q={0.6} />
+    <Gear a="revolute" b="prismatic" ratio={0.5} />
+    <Link name="prismatic"><Box s={[0.5,0.5,0.5]} color={0xF1C40F} roughness={0.4} metalness={0.4} /></Link>
+    <Prismatic name="prismatic" a="base" b="prismatic" at={ [-3.0, 1.0, 0.0] } axis={[0,1,0]} limit={[-1,1]} />
+    <Link name="continuous"><Box s={[0.5,0.5,0.5]} color={0xE67E22} roughness={0.4} metalness={0.4} /></Link>
+    <Continuous name="continuous" a="base" b="continuous" at={ [-2.0, 1.0, 0.0] } axis={[0,0,1]} />
+    <Link name="helical"><Box s={[0.5,0.5,0.5]} color={0x2ECC71} roughness={0.4} metalness={0.4} /></Link>
+    <Helical name="helical" a="base" b="helical" at={ [-1.0, 1.0, 0.0] } axis={[0,0,1]} pitch={0.3} q={0.5} />
+    <Link name="cylindrical"><Box s={[0.5,0.5,0.5]} color={0x1ABC9C} roughness={0.4} metalness={0.4} /></Link>
+    <Cylindrical name="cylindrical" a="base" b="cylindrical" at={ [0.0, 1.0, 0.0] } axis={[0,0,1]} q={[0.4,0.2]} />
+    <Link name="spherical"><Box s={[0.5,0.5,0.5]} color={0x3498DB} roughness={0.4} metalness={0.4} /></Link>
+    <Spherical name="spherical" a="base" b="spherical" at={ [1.0, 1.0, 0.0] } q={[0.2,0.3,0.1]} />
+    <Link name="planar"><Box s={[0.5,0.5,0.5]} color={0x9B59B6} roughness={0.4} metalness={0.4} /></Link>
+    <Planar name="planar" a="base" b="planar" at={ [2.0, 1.0, 0.0] } axis={[0,0,1]} q={[0.2,0.1,0.3]} />
+    <Link name="fixed"><Box s={[0.5,0.5,0.5]} color={0x95A5A6} roughness={0.4} metalness={0.4} /></Link>
+    <Fixed name="fixed" a="base" b="fixed" at={ [3.0, 1.0, 0.0] } />
+    <Link name="cam_driver_link"><Cylinder r={0.4} h={0.2} /></Link>
+    <Revolute name="cam_driver" a="base" b="cam_driver_link" axis={[0,0,1]} at={ [0.0, 3.0, 0.0] } q={0.3} />
+    <Cam a="cam_driver_link" b="cam_follower_link" aProfile={{kind:"circle", c:[0.12,0,0], n:[0,0,1], r:0.4}} bProfile={{kind:"circle", c:[0,0,0], n:[0,0,1], r:0.12}} />
+    <Link name="cam_follower_link"><Sphere r={0.12} /></Link>
+    <Prismatic name="cam_follower" a="base" b="cam_follower_link" axis={[1,0,0]} at={ [0.9, 3.0, 0.0] } limit={[-0.4,-0.1]} />
     <Plane n={[0,1,0]} d={0} color={0x3A4046} roughness={0.9} />
   </Scene>
 );

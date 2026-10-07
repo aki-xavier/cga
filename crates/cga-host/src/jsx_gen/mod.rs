@@ -92,75 +92,104 @@ pub fn gen_post_mat(r: f64, h: f64, color: u32, roughness: f64, metalness: f64) 
     )
 }
 
-/// 运动副全景：8 种关节类型（revolute / continuous / prismatic / helical /
+/// 运动副全景（图模型版）：8 种副类型（revolute / continuous / prismatic / helical /
 /// cylindrical / spherical / planar / fixed）各一个，外加两种高副——`<Gear>` 齿轮耦合
 /// 与 `<Cam>` 凸轮接触。输出平铺 JSX（PascalCase 元素名），确定性、可 diff；
-/// 场景报告里会逐条出现 `joint` / `gear` / `cam` 行。
+/// 场景报告里会逐条出现 `link` / `pair` / `gear` / `cam` / `anchor` 行。
 ///
-/// 顺序约束：`<Gear>` 必须在 driver 之后、driven 之前；`<Cam>` 同理。因此
-/// `revolute → <Gear> → prismatic` 与 `cam_driver → <Cam> → cam_follower` 被显式排布。
+/// 图模型（docs/kinematics-graph.md）：连杆是平铺的 `<Link>`，副是连杆之间的
+/// 无向 `<Pair>`（约束是边，不是容器）；`<Anchor>` 选定世界固连体。
+/// `revolute → <Gear> → prismatic` 与 `cam_driver → <Cam> → cam_follower` 显式排布。
 pub fn gen_pairs_showcase() -> String {
     fn body(color: u32) -> String {
         format!(
             "<Box s={{[0.5,0.5,0.5]}} color={{0x{color:06X}}} roughness={{0.4}} metalness={{0.4}} />"
         )
     }
+    fn pair_link(name: &str, kind: &str, x: f64, extra: &str, color: u32) -> String {
+        format!(
+            "    <Link name=\"{name}\">{}</Link>\n    <{tag} name=\"{name}\" a=\"base\" b=\"{name}\" at={{ {} }}{extra} />\n",
+            body(color),
+            fmt_v([x, 1.0, 0.0]),
+            tag = match kind {
+                "revolute" => "Revolute",
+                "continuous" => "Continuous",
+                "prismatic" => "Prismatic",
+                "helical" => "Helical",
+                "cylindrical" => "Cylindrical",
+                "spherical" => "Spherical",
+                "planar" => "Planar",
+                _ => "Fixed",
+            },
+        )
+    }
     let mut out = gen_header([7.0, 5.0, 10.0], [0.0, 1.0, 0.0]);
-    // 低副一排（y=1），x 从 -4 到 3。revolute 同时充当齿轮耦合的 driver。
-    out.push_str(&format!(
-        "    <Revolute name=\"revolute\" axis={{[0,0,1]}} at={{ {} }} q={{0.6}}>{}</Revolute>\n",
-        fmt_v([-4.0, 1.0, 0.0]),
-        body(0xC0392B)
+    out.push_str("    <Link name=\"base\" />\n    <Anchor link=\"base\" />\n");
+    // 低副一排（y=1），x 从 -4 到 3。revolute 同时充当齿轮耦合的驱动侧。
+    out.push_str(&pair_link(
+        "revolute",
+        "revolute",
+        -4.0,
+        " axis={[0,0,1]} q={0.6}",
+        0xC0392B,
     ));
-    out.push_str("    <Gear driver=\"revolute\" driven=\"prismatic\" ratio={0.5} />\n");
-    out.push_str(&format!(
-        "    <Prismatic name=\"prismatic\" axis={{[0,1,0]}} at={{ {} }} limit={{[-1,1]}}>{}</Prismatic>\n",
-        fmt_v([-3.0, 1.0, 0.0]),
-        body(0xF1C40F)
+    out.push_str("    <Gear a=\"revolute\" b=\"prismatic\" ratio={0.5} />\n");
+    out.push_str(&pair_link(
+        "prismatic",
+        "prismatic",
+        -3.0,
+        " axis={[0,1,0]} limit={[-1,1]}",
+        0xF1C40F,
     ));
-    out.push_str(&format!(
-        "    <Continuous name=\"continuous\" axis={{[0,0,1]}} at={{ {} }}>{}</Continuous>\n",
-        fmt_v([-2.0, 1.0, 0.0]),
-        body(0xE67E22)
+    out.push_str(&pair_link(
+        "continuous",
+        "continuous",
+        -2.0,
+        " axis={[0,0,1]}",
+        0xE67E22,
     ));
-    out.push_str(&format!(
-        "    <Helical name=\"helical\" axis={{[0,0,1]}} at={{ {} }} pitch={{0.3}} q={{0.5}}>{}</Helical>\n",
-        fmt_v([-1.0, 1.0, 0.0]),
-        body(0x2ECC71)
+    out.push_str(&pair_link(
+        "helical",
+        "helical",
+        -1.0,
+        " axis={[0,0,1]} pitch={0.3} q={0.5}",
+        0x2ECC71,
     ));
-    out.push_str(&format!(
-        "    <Cylindrical name=\"cylindrical\" axis={{[0,0,1]}} at={{ {} }} q={{[0.4,0.2]}}>{}</Cylindrical>\n",
-        fmt_v([0.0, 1.0, 0.0]),
-        body(0x1ABC9C)
+    out.push_str(&pair_link(
+        "cylindrical",
+        "cylindrical",
+        0.0,
+        " axis={[0,0,1]} q={[0.4,0.2]}",
+        0x1ABC9C,
     ));
-    out.push_str(&format!(
-        "    <Spherical name=\"spherical\" at={{ {} }} q={{[0.2,0.3,0.1]}}>{}</Spherical>\n",
-        fmt_v([1.0, 1.0, 0.0]),
-        body(0x3498DB)
+    out.push_str(&pair_link(
+        "spherical",
+        "spherical",
+        1.0,
+        " q={[0.2,0.3,0.1]}",
+        0x3498DB,
     ));
-    out.push_str(&format!(
-        "    <Planar name=\"planar\" axis={{[0,0,1]}} at={{ {} }} q={{[0.2,0.1,0.3]}}>{}</Planar>\n",
-        fmt_v([2.0, 1.0, 0.0]),
-        body(0x9B59B6)
+    out.push_str(&pair_link(
+        "planar",
+        "planar",
+        2.0,
+        " axis={[0,0,1]} q={[0.2,0.1,0.3]}",
+        0x9B59B6,
     ));
-    out.push_str(&format!(
-        "    <Fixed name=\"fixed\" at={{ {} }}>{}</Fixed>\n",
-        fmt_v([3.0, 1.0, 0.0]),
-        body(0x95A5A6)
-    ));
-    // 高副：凸轮接触。driver = 偏心圆盘（revolute），driven = 滚子推杆（prismatic）。
+    out.push_str(&pair_link("fixed", "fixed", 3.0, "", 0x95A5A6));
+    // 高副：凸轮接触。驱动侧 = 偏心圆盘（revolute），从动侧 = 滚子推杆（prismatic）。
     // 限位只框住两支接触解中的一支，保证 cam_solve 的"唯一接触"成立。
     out.push_str(&format!(
-        "    <Revolute name=\"cam_driver\" axis={{[0,0,1]}} at={{ {} }} q={{0.3}}><Cylinder r={{0.4}} h={{0.2}} /></Revolute>\n",
+        "    <Link name=\"cam_driver_link\"><Cylinder r={{0.4}} h={{0.2}} /></Link>\n    <Revolute name=\"cam_driver\" a=\"base\" b=\"cam_driver_link\" axis={{[0,0,1]}} at={{ {} }} q={{0.3}} />\n",
         fmt_v([0.0, 3.0, 0.0])
     ));
     out.push_str(
-        "    <Cam driver=\"cam_driver\" driven=\"cam_follower\" \
-         driverProfile={{kind:\"circle\", c:[0.12,0,0], n:[0,0,1], r:0.4}} \
-         drivenProfile={{kind:\"circle\", c:[0,0,0], n:[0,0,1], r:0.12}} />\n",
+        "    <Cam a=\"cam_driver_link\" b=\"cam_follower_link\" \
+         aProfile={{kind:\"circle\", c:[0.12,0,0], n:[0,0,1], r:0.4}} \
+         bProfile={{kind:\"circle\", c:[0,0,0], n:[0,0,1], r:0.12}} />\n",
     );
     out.push_str(&format!(
-        "    <Prismatic name=\"cam_follower\" axis={{[1,0,0]}} at={{ {} }} limit={{[-0.4,-0.1]}}><Sphere r={{0.12}} /></Prismatic>\n",
+        "    <Link name=\"cam_follower_link\"><Sphere r={{0.12}} /></Link>\n    <Prismatic name=\"cam_follower\" a=\"base\" b=\"cam_follower_link\" axis={{[1,0,0]}} at={{ {} }} limit={{[-0.4,-0.1]}} />\n",
         fmt_v([0.9, 3.0, 0.0])
     ));
     out.push_str("    <Plane n={[0,1,0]} d={0} color={0x3A4046} roughness={0.9} />\n");
@@ -212,10 +241,11 @@ mod tests {
         let text = gen_pairs_showcase();
         let run = crate::jsx::run_jsx(&text, None, ".").expect("pairs showcase must run");
         let k = &run.kinematics;
-        assert_eq!(k.joints.len(), 10, "8 种关节 + cam driver/follower");
+        assert_eq!(k.pairs.len(), 10, "8 种副 + cam driver/follower");
         assert_eq!(k.gears.len(), 1, "1 个齿轮耦合（高副）");
         assert_eq!(k.cams.len(), 1, "1 个凸轮接触（高副）");
-        let kinds: Vec<&str> = k.joints.iter().map(|j| j.kind.name()).collect();
+        assert_eq!(k.anchor.as_deref(), Some("base"));
+        let kinds: Vec<&str> = k.pairs.iter().map(|p| p.kind.name()).collect();
         let all = [
             "revolute",
             "continuous",
@@ -227,13 +257,21 @@ mod tests {
             "fixed",
         ];
         for t in all {
-            assert!(kinds.contains(&t), "缺少关节类型 {t}: {kinds:?}");
+            assert!(kinds.contains(&t), "缺少副类型 {t}: {kinds:?}");
         }
+        // gear 推导：prismatic = 0.5·0.6 = 0.3
+        let pri = k
+            .pairs
+            .iter()
+            .find(|p| p.name.as_deref() == Some("prismatic"))
+            .unwrap();
+        assert!((pri.q[0] - 0.3).abs() < 1e-12, "gear 推导: {}", pri.q[0]);
         let rep = crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, k);
         for t in all {
             assert!(rep.contains(&format!("type={t}")), "报告缺少 type={t}");
         }
-        assert!(rep.contains("gear 0 driver="), "报告缺 gear 行");
-        assert!(rep.contains("cam 0 driver="), "报告缺 cam 行");
+        assert!(rep.contains("gear 0 a=\"revolute\""), "报告缺 gear 行");
+        assert!(rep.contains("cam 0 a=\"cam_driver_link\""), "报告缺 cam 行");
+        assert!(rep.contains("anchor \"base\""), "报告缺 anchor 行");
     }
 }

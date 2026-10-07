@@ -96,14 +96,16 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 | `<Material …>` | 透明兼容壳——材质键本来就可以带在任何元素上（内联 prop + 继承） |
 | `<Union/Difference/Intersection>` | CSG 块（≥2 子几何，纯解析图元的递归布尔） |
 | `<AmbientLight/DirectionalLight/PointLight/Camera/Background>` | 灯光与相机 |
-| `<Joint name type axis at rpy q limit pitch>` | P1 关节（嵌套成父子树） |
-| `<Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed …>` | 关节副的**组件写法**（类型进组件名），等价于 `<joint type=…>`；其余 props/children 原样转发 |
-| `<Gear driver driven ratio offset>` | P2 齿轮耦合（高副）；也可写 `<gear>` |
-| `<Cam driver driven driverProfile drivenProfile>` | P3 凸轮接触求解（高副）；也可写 `<cam>`。profile 是普通对象 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}` |
+| `<Link name>` | 连杆（体图节点）：几何容器，frame 来自图求解（`docs/kinematics-graph.md`） |
+| `<Pair kind a b at axis rpy q limit pitch name>` | 运动副（体图边）：两连杆间的**无向**约束；`a`/`b` 对称，生成树方向由求解器从 `<Anchor>` 推导 |
+| `<Anchor link>` | 世界锚定：哪个连杆固连世界（至多一个） |
+| `<Gear a b ratio offset>` | 齿轮耦合（q 图上的方程，无方向）：`q_b = ratio·q_a + offset` |
+| `<Cam a b aProfile bProfile>` | 凸轮接触（对称约束；求解方向由求解器定）：profile 是 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}` |
+| `<Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed …>` | 副类型的**组件写法**（kind 进组件名），等价于 `<pair kind=…>`；不再接收 children（约束没有子内容） |
 | `<Tag name>` | 标签注册表（**等价 prop 形式**：`tag="name"`） |
 | `<Group name>` / `group="…"` prop | 分组：子树产出对象的缓存/失效/拾取单元（**不是**渲染层叠，见 §6 档 2）；无 `name` 时是透明容器 |
 
-运动副也可用 **React 组件**写法：`Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed`（低副，`<joint type=…>` 的别名）与 `Gear`/`Cam`（高副）。它们定义在 `assets/kinematics-pairs.js`（随预置一起注入），只是把类型写进组件名、再展开成同样的 `{t:'joint'|'gear'|'cam'}` 节点，因此**代数核心与求解仍在 Rust**（`scene_build/kinematics.rs`），报告 / URDF / pose 覆盖不受影响。`q` 在 1-DOF 关节是数字、在多 DOF 关节是数组（cylindrical `[qr,qp]`，spherical / planar 三个数）。生成器 `jsx_gen::gen_pairs_showcase()` 一次输出全部 8 种关节 + 齿轮/凸轮高副（见 `demo_pairs`）。
+运动学是**图模型**（`docs/kinematics-graph.md`，无因果建模）：连杆是平铺的 `<Link>`，运动副是连杆间的无向 `<Pair>`（约束是边不是容器），世界锚定是 `<Anchor>`；求解器从锚点 BFS 定向生成树并前向传播位姿。运动副也可用 **React 组件**写法：`Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed`（低副，`<pair kind=…>` 的别名）与 `Gear`/`Cam`（高副，q 方程无方向），定义在 `assets/kinematics-pairs.js`（随预置一起注入），只是把类型写进组件名、再展开成同样的 `{t:'pair'|'gear'|'cam'}` 节点，**代数核心与求解仍在 Rust**（`scene_build/kinematics.rs` 的 `solve_graph`）。`q` 在 1-DOF 副是数字、在多 DOF 副是数组（cylindrical `[qr,qp]`，spherical / planar 三个数）。旧的 `<joint>` 嵌套写法已删除（显式报错并指向迁移文档）。生成器 `jsx_gen::gen_pairs_showcase()` 一次输出全部 8 种副 + 齿轮/凸轮高副（见 `demo_pairs`）。
 
 v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、交互伪类、`@` 规则（`@media` / `@import` / `@keyframes` 等）、CSS 嵌套、`calc()` 与数学函数、`style={{…}}`（用 JSX prop 承担）。需要时各自单独立项。CSS 的差距清单与已实施的收敛记录见 `docs/css-conformance.md`。（原 `dist()` 边界已由碰撞检测落地：`clearance()`/`collides()`/`inside()`，见 `docs/collision-plan.md`。）
 
@@ -118,8 +120,8 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 - 多帧/事件测试：`SceneSession` 输入变化只让消费者平移（create=0、恰好 1 个对象移动）、`onClick` 派发使状态跨三帧累积（create=0）、同输入序列同输出。
 - 组件 + hooks（状态/记忆/上下文/副作用）+ `map` + 三元控制流出 4 个对象。
 - CSS 验收（`test_css_*`，全集见 `docs/css-conformance.md` §8）：31 行选择器匹配表（复合多类 / 四类组合器 / `*` / `[attr]` / `:root` 根限定 / tag 大小写 / 组合链）、10 格级联矩阵（`#id` > `.class` > `tag` > `*`、源码顺序、`!important` 跨规则与压过内联普通声明）、值转换（`rgb`/`hsl`/具名/hex/八位 hex → opacity、百分比、`var()` 与 fallback、`--x` 别名、未知属性静默）、错误契约（`@` 规则、CSS 嵌套、伪类/伪元素、不支持的值与单位、缺失变量）、以及父规则声明向子几何的继承。
-- JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。
-- 多 DOF 关节的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种关节 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行。
+- 图模型（`docs/kinematics-graph.md`）：`<Link>/<Pair>/<Anchor>` 全部元素可用；gear 推导 q（`0.5·0.6=0.3`）与对象归属正确；`<pair kind>` 与组件写法等价；反向声明的副（a/b 写反）生成树反向传播成立；报告含 pair/link/gear/cam/anchor 行。
+- 多 DOF 副的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种副 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行；再生的 `pairs.png` 与图模型迁移前**逐位一致**。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - 帧间增量（§6）：实例版本随创建 / props 更新 / 结构变更正确抬升（`react::tests::instance_versions_track_changes`）；复用构建与全量构建逐字段一致（`incremental_build_reuses_unchanged_subtrees`）；兄弟组合器样式表关闭复用（`incremental_build_disabled_by_sibling_rules`）；增量渲染与全帧渲染逐位一致（cga-gpu `test_incremental_*` ×5 + `session_render_incremental_is_bitexact`）；分组流向 `Object::group`（`group_prop_and_element`）。
 - 碰撞（`docs/collision-plan.md` C0–C4）：`clearance`/`collides`/`inside` 惰性查询解析正确（含 `qadd` 组合），Unknown 报构建错误；`CollisionScan` 同组免检 + 跨帧指纹缓存（动一个对象只重算含它的对）；报告 `collide` 行；画廊 8 场景 Yes/Unknown 计数基线 + animation 太阳球陷入地面 0.05 的语义抽查；接触点解析断言与标记渲染金标（C2）；螺旋 CCD 闭式验证与关节行程扫描（C3/C4）。
@@ -132,7 +134,7 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 
 **档 2 · 分组（作者标注的失效/拾取单元）**。`<Group name>` 或 `group="…"` prop 把子树产出的对象打进同一个分组（`Object::group` → `SceneRun::groups` 的下标）。注册表 append-only，跨帧 id 稳定（复用的对象带旧 id）。分组**不是 z-index**：渲染器是光线追踪，前后关系由求交决定；分组只做缓存失效与拾取归属的元数据。
 
-**档 0 · 子树复用（构建侧）**。React 实例带两个版本：自身版本 `__v`（创建 / props 更新 / 子节点增删移动时递增）与子树版本 `__s`（后代最大值），随快照下发（schema v2）。`annotate_reuse` 把「祖先链 `__v` 全不变（上下文：变换/继承样式/兄弟位置不变）+ 自身 `__s` 不变（子树内容不变）+ 子树纯（无灯光/相机/joint/tag/when/instances 等副作用元素，props 里无 `{__q}` 惰性查询）+ 不在 tag/joint/when 动态上下文之下」的子树标上上一帧的对象区间，`walk` 整棵克隆复用。三条保守闸：样式表含兄弟组合器（`+`/`~`——兄弟的 class 变化抬不动本节点版本号）时整个会话关闭复用；含惰性查询的节点会**污染路径**——它的输出随 tag 注册表漂移但版本不变，其子树一律不得复用（有测试看守：查询跟随者必须跟到目标的新位置）；CSG 块是最小复用单元（其子树不单独复用）。`SceneSession::build_stats()` 报告复用率；正确性由「复用构建 ≡ 全量构建逐字段相等」的测试看守。
+**档 0 · 子树复用（构建侧）**。React 实例带两个版本：自身版本 `__v`（创建 / props 更新 / 子节点增删移动时递增）与子树版本 `__s`（后代最大值），随快照下发（schema v2）。`annotate_reuse` 把「祖先链 `__v` 全不变（上下文：变换/继承样式/兄弟位置不变）+ 自身 `__s` 不变（子树内容不变）+ 子树纯（无灯光/相机/link/pair/anchor/tag/when/instances 等副作用元素，props 里无 `{__q}` 惰性查询）+ 不在 tag/link/when 动态上下文之下」的子树标上上一帧的对象区间，`walk` 整棵克隆复用。三条保守闸：样式表含兄弟组合器（`+`/`~`——兄弟的 class 变化抬不动本节点版本号）时整个会话关闭复用；含惰性查询的节点会**污染路径**——它的输出随 tag 注册表漂移但版本不变，其子树一律不得复用（有测试看守：查询跟随者必须跟到目标的新位置）；CSG 块是最小复用单元（其子树不单独复用）。`SceneSession::build_stats()` 报告复用率；正确性由「复用构建 ≡ 全量构建逐字段相等」的测试看守。
 
 **档 1 · 像素级增量（渲染侧）**。`IncrementalRenderer`（cga-gpu）缓存上一帧的光线级结果，帧间按对象指纹 diff：相机 / 灯光 / 背景 / 对象数变化 → 全帧；否则脏集 = 变化对象的新旧屏幕包围盒 ∪ 阴影级联（形状/透明度变化的对象在新旧位置上能投到的接收者；地面等无界平面解析阴影足迹，无法界定则全帧）∪ 透明级联（正常模式下场景含透明对象时，其像素全脏——反射/折射次级光线可达任意对象）；脏光线 ≥ 总数一半 → 全帧（沿用渲染器既有的 2× 回退）。子集追踪与全帧追踪同一光线取值逐位一致（光线互相独立，渲染器既有的剔除机制已依赖这一点），测试逐位断言看守；无变化帧直接返回上一帧图像（dirty=0）。`SceneSession::render_incremental(w,h,aa,mode)` 是会话侧入口；`render_frames` 示例已切到增量渲染并打印每帧统计（`animation.jsx` 320×240 aa=2：脏光线约 18–25%）。
 

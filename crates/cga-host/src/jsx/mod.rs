@@ -30,8 +30,8 @@ use swc_core::ecma::visit::VisitMutWith;
 use cga_core::Multivector;
 
 use crate::scene_build::{
-    cam_solve, joint_motion, rpy4, ArgValue, Builders, CamProfile, CamRel, CamSolved, Driven,
-    GearRel, JointDef, JointKind, Kinematics, TagInstance, TagRegistry,
+    solve_graph, ArgValue, Builders, CamDecl, CamProfile, CamSolved, GearDecl, GearRel, GraphDecl,
+    JointKind, Kinematics, LinkDef, PairDecl, PairDef, TagInstance, TagRegistry,
 };
 use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::Color;
@@ -1498,8 +1498,14 @@ fn var_substitute(raw: &str, customs: &HashMap<String, String>) -> Result<String
 struct Builder<'p> {
     loader: Builders,
     kin: Kinematics,
-    joint_stack: Vec<String>,
-    driven_by: HashMap<String, Driven>,
+    /// 图模型（docs/kinematics-graph.md）：图求解注入的连杆位姿与求解记录。
+    link_worlds: HashMap<String, [f64; 16]>,
+    pair_records: Vec<PairDef>,
+    cam_records: Vec<CamSolved>,
+    pair_out: usize,
+    cam_out: usize,
+    /// 当前正在发射的 link（`kin.links` 下标；发射与复用都登记 meshes）。
+    cur_link: Option<usize>,
     tags: TagRegistry,
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
@@ -1733,10 +1739,8 @@ impl<'p> Builder<'p> {
             .with_group(group),
         );
         let idx = scene.objects.len() - 1;
-        if let Some(jname) = self.joint_stack.last().cloned() {
-            if let Some(j) = self.kin.joints.iter_mut().rev().find(|j| j.name == jname) {
-                j.meshes.push(idx);
-            }
+        if let Some(li) = self.cur_link {
+            self.kin.links[li].meshes.push(idx);
         }
         self.register_tags(&geo, world, world);
     }
@@ -1761,6 +1765,12 @@ impl<'p> Builder<'p> {
             scene.objects.extend_from_slice(&prev[range]);
             self.reused_subtrees += 1;
             self.reused_objects += scene.objects.len() - start;
+            // 复用路径也要登记当前 link 的 meshes（对象换了下标区间）。
+            if let Some(li) = self.cur_link {
+                for idx in start..scene.objects.len() {
+                    self.kin.links[li].meshes.push(idx);
+                }
+            }
             self.ranges
                 .insert(cur.el as *const El, start..scene.objects.len());
             return Ok(());
@@ -1786,7 +1796,12 @@ impl<'p> Builder<'p> {
         // 公共属性（2026-10-07 RFC）：变换 prop（t/rotate/scale/mirror，
         // 固定顺序 T·R·S·Mirror）+ tag prop（注册表命名）。修饰符元素
         // （translate/rotate/scale/mirror）豁免——它们的 prop 是自己的语义。
-        let local = self.local_matrix(el)?;
+        // <link> 也豁免：它的 frame 来自图求解（link_el 自己处理变换与 tag prop）。
+        let local = if el.tag == "link" {
+            None
+        } else {
+            self.local_matrix(el)?
+        };
         let ctx = match local {
             Some(m) => mat4_mul(ctx, m),
             None => ctx,
@@ -1804,8 +1819,12 @@ impl<'p> Builder<'p> {
             self.group_stack.push(g);
         }
         // tag prop：与 <tag name> 元素同语义，注册框架取本元素的 frame
-        // （自身变换 prop 之后）。
-        let tag = p_str(el, "tag")?;
+        // （自身变换 prop 之后）。<link> 的 tag prop 由 link_el 处理。
+        let tag = if el.tag == "link" {
+            None
+        } else {
+            p_str(el, "tag")?
+        };
         let has_tag = tag.is_some();
         if let Some(name) = tag {
             self.pending_tags.push((name, ctx));
@@ -1990,7 +2009,13 @@ impl<'p> Builder<'p> {
                 self.pending_tags.pop();
                 Ok(())
             }
-            "joint" => self.joint_el(el, stack, ctx, mat, scene, cam),
+            "link" => self.link_el(el, stack, mat, scene, cam),
+            "pair" => self.pair_el(el),
+            "anchor" => self.anchor_el(el),
+            "joint" => Err(
+                "JSX: <joint> 已被 <link>/<pair>/<anchor> 取代（运动学图模型，见 docs/kinematics-graph.md）"
+                    .to_string(),
+            ),
             "gear" => self.gear_el(el),
             "cam" => self.cam_el(el),
             "drill" => {
@@ -2179,269 +2204,95 @@ impl<'p> Builder<'p> {
         Ok(())
     }
 
-    fn joint_el<'a>(
+    /// <link>：体图节点。frame 来自图求解（`link_worlds`），自身的变换 prop 在
+    /// 求解位姿之上复合；父 ctx 被忽略（D6：树内位置只决定几何归属）。
+    fn link_el<'a>(
         &mut self,
         el: &'a El,
         stack: &mut Vec<Frame<'a>>,
-        ctx: [f64; 16],
         mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
-        let name = p_str(el, "name")?.ok_or_else(|| "JSX: joint needs a name".to_string())?;
-        let type_err = "JSX: joint.type must be \"revolute\", \"continuous\", \"prismatic\", \"helical\", \"cylindrical\", \"spherical\", \"planar\" or \"fixed\"";
-        let kind = match p_str(el, "type")?.as_deref() {
-            Some(s) => JointKind::parse(s).ok_or_else(|| type_err.to_string())?,
-            None => return Err(type_err.to_string()),
-        };
-        if self.kin.joints.iter().any(|j| j.name == name) {
-            return Err(format!("JSX: duplicate joint name {name}"));
+        if self.cur_link.is_some() {
+            return Err("JSX: <link> 不能嵌套".to_string());
         }
-        let axis = p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
-        let an = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-        if an < 1e-12 {
-            return Err("JSX: joint.axis must be nonzero".to_string());
-        }
-        let axis = [axis[0] / an, axis[1] / an, axis[2] / an];
-        let at = self.p_vec3_lazy(el, "at")?.unwrap_or([0.0; 3]);
-        let rpy = p_vec3(el, "rpy")?.unwrap_or([0.0; 3]);
-        let limit: Option<[f64; 2]> = match p_num_list(el, "limit")? {
-            Some(l) if l.len() == 2 => Some([l[0], l[1]]),
-            Some(_) => return Err("JSX: joint.limit must be [lo, hi]".to_string()),
-            None => None,
-        };
-        let pitch = p_num(el, "pitch")?;
-        if kind == JointKind::Helical && pitch.is_none() {
-            return Err("JSX: helical joint needs pitch=".to_string());
-        }
-        let driven = self.driven_by.remove(&name);
-        let q: Vec<f64> = match driven {
-            Some(Driven::Gear(rel)) => {
-                if !kind.is_1dof() {
-                    return Err(format!("JSX: gear needs 1-DOF joints, got {}", kind.name()));
-                }
-                let dq = self
-                    .kin
-                    .joints
-                    .iter()
-                    .find(|j| j.name == rel.driver)
-                    .map(|j| j.q[0])
-                    .unwrap_or(0.0);
-                vec![rel.ratio * dq + rel.offset]
-            }
-            Some(Driven::Cam(rel)) => {
-                if !kind.is_1dof() {
-                    return Err(format!(
-                        "JSX: cam needs a 1-DOF driven joint, got {}",
-                        kind.name()
-                    ));
-                }
-                let [lo, hi] =
-                    limit.ok_or_else(|| "JSX: cam driven joint needs limit=".to_string())?;
-                let driver = self
-                    .kin
-                    .joints
-                    .iter()
-                    .find(|j| j.name == rel.driver)
-                    .cloned()
-                    .ok_or_else(|| format!("JSX: unknown joint {}", rel.driver))?;
-                let q = cam_solve(
-                    &rel,
-                    &driver,
-                    ctx,
-                    &kind,
-                    axis,
-                    at,
-                    pitch.unwrap_or(0.0),
-                    lo,
-                    hi,
-                    0,
-                )?;
-                self.kin.cams.push(CamSolved {
-                    driver: rel.driver.clone(),
-                    driven: name.clone(),
-                    q,
-                });
-                vec![q]
-            }
-            None => {
-                let arity = kind.q_arity();
-                if arity == 0 {
-                    Vec::new()
-                } else if let Some(&o) = self.pose.get(&name) {
-                    let has_q = prop(el, "q")
-                        .map(|v| !matches!(v, Value::Null))
-                        .unwrap_or(false);
-                    if has_q {
-                        return Err(format!(
-                            "JSX: joint {name} has a pose override, q must be omitted"
-                        ));
-                    }
-                    if !kind.is_1dof() {
-                        return Err(format!(
-                            "JSX: pose override needs a 1-DOF joint, got {}",
-                            kind.name()
-                        ));
-                    }
-                    vec![o]
-                } else {
-                    // q 允许单数（1-DOF）或数组（多 DOF）；不要用 p_num 探类型，
-                    // 它对数组会直接报错，导致多 DOF 关节无法书写。
-                    match prop(el, "q") {
-                        None | Some(Value::Null) => vec![0.0; arity],
-                        Some(Value::Number(_)) => {
-                            if arity != 1 {
-                                return Err(format!(
-                                    "JSX: {} joint q must be {}",
-                                    kind.name(),
-                                    kind.q_shape()
-                                ));
-                            }
-                            vec![p_num(el, "q")?.unwrap_or(0.0)]
-                        }
-                        Some(Value::Array(_)) => {
-                            let l = p_num_list(el, "q")?.unwrap_or_default();
-                            if l.len() != arity {
-                                return Err(format!(
-                                    "JSX: {} joint q must be {}",
-                                    kind.name(),
-                                    kind.q_shape()
-                                ));
-                            }
-                            l
-                        }
-                        Some(v) => {
-                            return Err(format!(
-                                "JSX: {name} q must be a number or number list, got {v}"
-                            ))
-                        }
-                    }
-                }
-            }
-        };
-        if kind.is_1dof() {
-            if let Some([lo, hi]) = limit {
-                let x = q[0];
-                if x < lo || x > hi {
-                    return Err(format!(
-                        "JSX: joint {name} q={x} outside limit [{lo}, {hi}]"
-                    ));
-                }
-            }
-        }
-        let m = joint_motion(&kind, axis, &q, pitch.unwrap_or(0.0));
-        let world = mat4_mul(mat4_mul(ctx, mat4_mul(translate4(at), rpy4(rpy))), m);
-        let parent = self.joint_stack.last().cloned();
-        self.kin.joints.push(JointDef {
+        let name = p_str(el, "name")?.ok_or_else(|| "JSX: link needs a name".to_string())?;
+        let world = *self
+            .link_worlds
+            .get(&name)
+            .ok_or_else(|| format!("JSX: link {name} 没有求解位姿"))?;
+        let idx = self.kin.links.len();
+        self.kin.links.push(LinkDef {
             name: name.clone(),
-            kind,
-            axis,
-            at,
-            rpy,
-            q,
-            pitch,
-            limit,
-            parent,
             meshes: Vec::new(),
             world,
         });
-        self.joint_stack.push(name);
+        // 自身的变换 prop 在求解位姿之上复合。
+        let local = self.local_matrix(el)?;
+        let ctx_link = match local {
+            Some(m) => mat4_mul(world, m),
+            None => world,
+        };
+        // link 的 tag prop：注册框架 = 求解位姿（含自身变换）而非父 ctx。
+        let tag = p_str(el, "tag")?;
+        let has_tag = tag.is_some();
+        if let Some(t) = tag {
+            self.pending_tags.push((t, ctx_link));
+        }
+        self.cur_link = Some(idx);
+        let mut r = Ok(());
         for (i, c) in el.children.iter().enumerate() {
-            self.walk(Frame::new(c, i), stack, world, mat, scene, cam)?;
-        }
-        self.joint_stack.pop();
-        Ok(())
-    }
-
-    fn gear_el(&mut self, el: &El) -> Result<(), String> {
-        let driver = p_str(el, "driver")?.ok_or_else(|| "JSX: gear needs driver".to_string())?;
-        let driven = p_str(el, "driven")?.ok_or_else(|| "JSX: gear needs driven".to_string())?;
-        let ratio = p_num(el, "ratio")?.ok_or_else(|| "JSX: gear needs ratio".to_string())?;
-        let offset = p_num(el, "offset")?.unwrap_or(0.0);
-        let dj = self
-            .kin
-            .joints
-            .iter()
-            .find(|j| j.name == driver)
-            .ok_or_else(|| format!("JSX: unknown joint {driver}"))?;
-        if !dj.kind.is_1dof() {
-            return Err(format!(
-                "JSX: gear needs 1-DOF joints, got {}",
-                dj.kind.name()
-            ));
-        }
-        if self.kin.joints.iter().any(|j| j.name == driven) {
-            return Err(format!("JSX: gear must precede the driven joint {driven}"));
-        }
-        if self.driven_by.contains_key(&driven) {
-            return Err(format!("JSX: joint {driven} is already driven"));
-        }
-        let rel = GearRel {
-            driver,
-            driven: driven.clone(),
-            ratio,
-            offset,
-        };
-        self.driven_by.insert(driven, Driven::Gear(rel.clone()));
-        self.kin.gears.push(rel);
-        Ok(())
-    }
-
-    fn cam_el(&mut self, el: &El) -> Result<(), String> {
-        let driver = p_str(el, "driver")?.ok_or_else(|| "JSX: cam needs driver".to_string())?;
-        let driven = p_str(el, "driven")?.ok_or_else(|| "JSX: cam needs driven".to_string())?;
-        let prof = |key: &str| -> Result<CamProfile, String> {
-            let v = prop(el, key).ok_or_else(|| format!("JSX: cam needs {key}"))?;
-            let o = v
-                .as_object()
-                .ok_or_else(|| format!("JSX: cam {key} must be a profile object"))?;
-            let kind = o
-                .get("kind")
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("JSX: cam {key} needs kind"))?;
-            let num = |k: &str| o.get(k).and_then(Value::as_f64);
-            let v3 = |k: &str| -> Option<[f64; 3]> {
-                o.get(k)?
-                    .as_array()?
-                    .iter()
-                    .map(Value::as_f64)
-                    .collect::<Option<Vec<_>>>()?
-                    .try_into()
-                    .ok()
-            };
-            match kind {
-                "circle" => Ok(CamProfile::Circle {
-                    c: v3("c").unwrap_or([0.0; 3]),
-                    n: v3("n").unwrap_or([0.0, 0.0, 1.0]),
-                    r: num("r").ok_or_else(|| format!("JSX: cam {key} circle needs r"))?,
-                }),
-                "plane" => Ok(CamProfile::Plane {
-                    n: v3("n").unwrap_or([0.0, 1.0, 0.0]),
-                    d: num("d").unwrap_or(0.0),
-                }),
-                _ => Err("JSX: cam profiles must be circle or plane".to_string()),
+            if let Err(e) = self.walk(Frame::new(c, i), stack, ctx_link, mat, scene, cam) {
+                r = Err(e);
+                break;
             }
+        }
+        self.cur_link = None;
+        if has_tag {
+            self.pending_tags.pop();
+        }
+        r
+    }
+
+    /// <pair>：无向运动副。pass 2 只是按声明序取出求解记录（校验在图求解里）。
+    fn pair_el(&mut self, el: &El) -> Result<(), String> {
+        if !el.children.is_empty() {
+            return Err("JSX: <pair> 不能有子内容（约束是边，不是容器）".to_string());
+        }
+        let Some(p) = self.pair_records.get(self.pair_out).cloned() else {
+            return Err("JSX: pair 记录与声明数量不符（内部错误）".to_string());
         };
-        let driver_profile = prof("driverProfile")?;
-        let driven_profile = prof("drivenProfile")?;
-        if !self.kin.joints.iter().any(|j| j.name == driver) {
-            return Err(format!("JSX: unknown joint {driver}"));
-        }
-        if self.kin.joints.iter().any(|j| j.name == driven) {
-            return Err(format!("JSX: cam must precede the driven joint {driven}"));
-        }
-        if self.driven_by.contains_key(&driven) {
-            return Err(format!("JSX: joint {driven} is already driven"));
-        }
-        self.driven_by.insert(
-            driven.clone(),
-            Driven::Cam(CamRel {
-                driver,
-                driven,
-                driver_profile,
-                driven_profile,
-            }),
-        );
+        self.pair_out += 1;
+        self.kin.pairs.push(p);
+        Ok(())
+    }
+
+    fn anchor_el(&mut self, el: &El) -> Result<(), String> {
+        let l = p_str(el, "link")?.ok_or_else(|| "JSX: anchor needs link".to_string())?;
+        self.kin.anchor = Some(l);
+        Ok(())
+    }
+
+    /// <gear a b ratio offset>：q 图上的方程（无方向；求解方向已在图求解里推导）。
+    fn gear_el(&mut self, el: &El) -> Result<(), String> {
+        self.kin.gears.push(GearRel {
+            a: p_str(el, "a")?.ok_or_else(|| "JSX: gear needs a".to_string())?,
+            b: p_str(el, "b")?.ok_or_else(|| "JSX: gear needs b".to_string())?,
+            ratio: p_num(el, "ratio")?.ok_or_else(|| "JSX: gear needs ratio".to_string())?,
+            offset: p_num(el, "offset")?.unwrap_or(0.0),
+        });
+        Ok(())
+    }
+
+    /// <cam a b aProfile bProfile>：接触约束（求解在图求解里完成）。
+    fn cam_el(&mut self, el: &El) -> Result<(), String> {
+        let _ = el;
+        let Some(c) = self.cam_records.get(self.cam_out).cloned() else {
+            return Err("JSX: cam 记录与声明数量不符（内部错误）".to_string());
+        };
+        self.cam_out += 1;
+        self.kin.cams.push(c);
         Ok(())
     }
 }
@@ -2979,7 +2830,7 @@ pub fn run_jsx(
 }
 
 /// JSX scene with pose overrides: injected as the `P` global for JS
-/// variables, and matched by name for 1-DOF joints whose `q` is omitted.
+/// variables, and matched by name for 1-DOF pairs whose `q` is omitted.
 pub fn run_jsx_pose(
     jsx_src: &str,
     css_src: Option<&str>,
@@ -3043,6 +2894,139 @@ fn eval_js_react(
     })
 }
 
+/// cam profile 解析（`<cam>` 的 aProfile/bProfile）。
+fn parse_cam_profile(el: &El, key: &str) -> Result<CamProfile, String> {
+    let v = prop(el, key).ok_or_else(|| format!("JSX: cam needs {key}"))?;
+    let o = v
+        .as_object()
+        .ok_or_else(|| format!("JSX: cam {key} must be a profile object"))?;
+    let kind = o
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("JSX: cam {key} needs kind"))?;
+    let num = |k: &str| o.get(k).and_then(Value::as_f64);
+    let v3 = |k: &str| -> Option<[f64; 3]> {
+        o.get(k)?
+            .as_array()?
+            .iter()
+            .map(Value::as_f64)
+            .collect::<Option<Vec<_>>>()?
+            .try_into()
+            .ok()
+    };
+    match kind {
+        "circle" => Ok(CamProfile::Circle {
+            c: v3("c").unwrap_or([0.0; 3]),
+            n: v3("n").unwrap_or([0.0, 0.0, 1.0]),
+            r: num("r").ok_or_else(|| format!("JSX: cam {key} circle needs r"))?,
+        }),
+        "plane" => Ok(CamProfile::Plane {
+            n: v3("n").unwrap_or([0.0, 1.0, 0.0]),
+            d: num("d").unwrap_or(0.0),
+        }),
+        _ => Err("JSX: cam profiles must be circle or plane".to_string()),
+    }
+}
+
+/// Pass 1：收集图声明（docs/kinematics-graph.md；只读标签与 props，不建几何）。
+/// 校验的其余部分（未知引用/闭环/孤岛/q/gear/cam）都在 `solve_graph` 里。
+fn collect_decl(el: &El, decl: &mut GraphDecl) -> Result<(), String> {
+    match el.tag.as_str() {
+        "link" => {
+            let name = p_str(el, "name")?.ok_or_else(|| "JSX: link needs a name".to_string())?;
+            decl.links.push(name);
+        }
+        "pair" => {
+            let kind_err = "JSX: pair.kind must be \"revolute\", \"continuous\", \"prismatic\", \"helical\", \"cylindrical\", \"spherical\", \"planar\" or \"fixed\"";
+            let kind = match p_str(el, "kind")?.or(p_str(el, "type")?).as_deref() {
+                Some(s) => JointKind::parse(s).ok_or_else(|| kind_err.to_string())?,
+                None => return Err(kind_err.to_string()),
+            };
+            let arity = kind.q_arity();
+            let limit = match p_num_list(el, "limit")? {
+                Some(l) if l.len() == 2 => Some([l[0], l[1]]),
+                Some(l) => return Err(format!("JSX: pair limit must be [lo, hi], got {l:?}")),
+                None => None,
+            };
+            let (q_init, q_given) = match prop(el, "q") {
+                None | Some(Value::Null) => (Vec::new(), false),
+                Some(Value::Number(_)) => {
+                    if arity != 1 {
+                        return Err(format!(
+                            "JSX: {} pair q must be {}",
+                            kind.name(),
+                            kind.q_shape()
+                        ));
+                    }
+                    (vec![p_num(el, "q")?.unwrap_or(0.0)], true)
+                }
+                Some(Value::Array(_)) => {
+                    let l = p_num_list(el, "q")?.unwrap_or_default();
+                    if l.len() != arity {
+                        return Err(format!(
+                            "JSX: {} pair q must be {}",
+                            kind.name(),
+                            kind.q_shape()
+                        ));
+                    }
+                    (l, true)
+                }
+                Some(v) => {
+                    return Err(format!(
+                        "JSX: pair q must be a number or number list, got {v}"
+                    ))
+                }
+            };
+            decl.pairs.push(PairDecl {
+                name: p_str(el, "name")?,
+                kind,
+                a: p_str(el, "a")?.ok_or_else(|| "JSX: pair needs a".to_string())?,
+                b: p_str(el, "b")?.ok_or_else(|| "JSX: pair needs b".to_string())?,
+                at: p_vec3(el, "at")?.unwrap_or([0.0; 3]),
+                axis: p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]),
+                rpy: p_vec3(el, "rpy")?.unwrap_or([0.0; 3]),
+                q_init,
+                q_given,
+                pitch: p_num(el, "pitch")?,
+                limit,
+            });
+        }
+        "anchor" => {
+            let l = p_str(el, "link")?.ok_or_else(|| "JSX: anchor needs link".to_string())?;
+            if decl.anchor.replace(l).is_some() {
+                return Err("JSX: anchor 至多一个".to_string());
+            }
+        }
+        "gear" => {
+            decl.gears.push(GearDecl {
+                a: p_str(el, "a")?.ok_or_else(|| "JSX: gear needs a".to_string())?,
+                b: p_str(el, "b")?.ok_or_else(|| "JSX: gear needs b".to_string())?,
+                ratio: p_num(el, "ratio")?.ok_or_else(|| "JSX: gear needs ratio".to_string())?,
+                offset: p_num(el, "offset")?.unwrap_or(0.0),
+            });
+        }
+        "cam" => {
+            decl.cams.push(CamDecl {
+                a: p_str(el, "a")?.ok_or_else(|| "JSX: cam needs a".to_string())?,
+                b: p_str(el, "b")?.ok_or_else(|| "JSX: cam needs b".to_string())?,
+                a_profile: parse_cam_profile(el, "aProfile")?,
+                b_profile: parse_cam_profile(el, "bProfile")?,
+            });
+        }
+        "joint" => {
+            return Err(
+                "JSX: <joint> 已被 <link>/<pair>/<anchor> 取代（运动学图模型，见 docs/kinematics-graph.md）"
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+    for c in &el.children {
+        collect_decl(c, decl)?;
+    }
+    Ok(())
+}
+
 // ---- 增量构建（档 0）-------------------------------------------------------
 
 /// 有全局副作用或依赖全局状态的元素：永不作为复用锚点，且其存在使祖先子树不纯。
@@ -3054,16 +3038,18 @@ const SIDE_EFFECT_TAGS: &[&str] = &[
     "camera",
     "background",
     "tag",
-    "joint",
+    "link",
+    "pair",
+    "anchor",
     "gear",
     "cam",
     "instances",
     "when",
 ];
 
-/// 动态上下文（`pending_tags` / `joint_stack` / tag 注册表查询）：处于这些元素
+/// 动态上下文（`pending_tags` / `cur_link` / tag 注册表查询）：处于这些元素
 /// 之下的子树即使内容未变也不能复用——它们的产出还依赖树外的状态。
-const DYNAMIC_TAGS: &[&str] = &["tag", "joint", "when"];
+const DYNAMIC_TAGS: &[&str] = &["tag", "link", "when"];
 
 /// props 里（递归）是否含惰性查询 `{__q: …}`：字符串引用（`center("ball")` 等）
 /// 要查 tag 注册表——那是树外状态，版本号抬不动它。含查询的元素不纯。
@@ -3230,11 +3216,26 @@ fn build_scene_run_cached(
         }
     }
     let mut cam: Option<PerspectiveCamera> = None;
+    // 图模型（docs/kinematics-graph.md）：pass 1 收集声明 → 图求解 → pass 2 注入。
+    let mut decl = GraphDecl::default();
+    collect_decl(&root, &mut decl)?;
+    let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
+    let solution = solve_graph(&decl, &pose_map)?;
+    let link_worlds: HashMap<String, [f64; 16]> = decl
+        .links
+        .iter()
+        .cloned()
+        .zip(solution.link_world.iter().copied())
+        .collect();
     let mut b = Builder {
         loader: Builders::new(asset_root),
         kin: Kinematics::default(),
-        joint_stack: Vec::new(),
-        driven_by: HashMap::new(),
+        link_worlds,
+        pair_records: solution.pairs,
+        cam_records: solution.cams,
+        pair_out: 0,
+        cam_out: 0,
+        cur_link: None,
         tags: TagRegistry::new(),
         pending_tags: Vec::new(),
         rules,
@@ -4819,13 +4820,17 @@ export default (
     }
 
     #[test]
-    fn test_jsx_joint_gear() {
+    fn test_jsx_link_pair_gear() {
         let run = run_jsx(
             r#"export default (
   <scene>
-    <joint name="a" type="revolute" axis={[0,0,1]} q={0.4}><sphere r={0.1} /></joint>
-    <gear driver="a" driven="b" ratio={-0.5} />
-    <joint name="b" type="prismatic" axis={[0,0,1]}><box s={[0.1,0.1,0.1]} /></joint>
+    <link name="base" />
+    <link name="la"><sphere r={0.1} /></link>
+    <link name="lb"><box s={[0.1,0.1,0.1]} /></link>
+    <pair kind="revolute" name="a" a="base" b="la" axis={[0,0,1]} q={0.4} />
+    <pair kind="prismatic" name="b" a="la" b="lb" axis={[0,0,1]} />
+    <gear a="a" b="b" ratio={-0.5} />
+    <anchor link="base" />
   </scene>
 );"#,
             None,
@@ -4833,17 +4838,18 @@ export default (
         )
         .expect("run");
         let k = &run.kinematics;
-        assert_eq!(k.joints.len(), 2);
-        assert!((k.joints[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
-        assert_eq!(k.joints[0].meshes, vec![0], "joint a 拥有 mesh 0");
-        assert_eq!(k.joints[1].meshes, vec![1], "joint b 拥有 mesh 1");
+        assert_eq!(k.pairs.len(), 2);
+        assert!((k.pairs[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
+        assert_eq!(k.links[1].name, "la");
+        assert_eq!(k.links[1].meshes, vec![0], "link la 拥有 mesh 0");
+        assert_eq!(k.links[2].meshes, vec![1], "link lb 拥有 mesh 1");
+        assert_eq!(k.pairs[0].tree_up, "base");
+        assert_eq!(k.pairs[1].tree_up, "la");
         let rep =
             crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
-        assert!(rep.contains("joint 0 \"a\" type=revolute"), "{rep}");
-        assert!(
-            rep.contains("gear 0 driver=\"a\" driven=\"b\" ratio=-0.5"),
-            "{rep}"
-        );
+        assert!(rep.contains("pair 0 \"a\" type=revolute"), "{rep}");
+        assert!(rep.contains("gear 0 a=\"a\" b=\"b\" ratio=-0.5"), "{rep}");
+        assert!(rep.contains("anchor \"base\""), "{rep}");
     }
 
     #[test]
@@ -4891,15 +4897,15 @@ export default <sphere r={0.1} />;"#,
         .expect("should fail");
         assert!(e.contains("did not converge"), "{e}");
 
-        // pose：关节级覆盖 + 报告 pose 行。
+        // pose：pair 级覆盖 + 报告 pose 行。
         let run = run_jsx_pose(
-            r#"export default <joint name="j" type="revolute"><sphere r={0.1} /></joint>;"#,
+            r#"export default <scene><link name="base" /><link name="l"><sphere r={0.1} /></link><pair kind="revolute" name="j" a="base" b="l" /><anchor link="base" /></scene>;"#,
             None,
             "",
             &[("j".to_string(), 0.7)],
         )
         .expect("run");
-        assert!((run.kinematics.joints[0].q[0] - 0.7).abs() < 1e-12);
+        assert!((run.kinematics.pairs[0].q[0] - 0.7).abs() < 1e-12);
         let rep =
             crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
         assert!(rep.contains("pose j=0.7"), "{rep}");
@@ -4931,14 +4937,18 @@ export default <sphere r={0.1} />;"#,
     }
 
     #[test]
-    fn test_jsx_joint_pair_components() {
-        // 低副（平移/旋转）与高副（齿轮）用 React 组件写法，语义与 <joint>/<gear> 相同。
+    fn test_jsx_pair_components() {
+        // 低副（平移/旋转）与高副（齿轮）用 React 组件写法，语义与 <pair>/<gear> 相同。
         let run = run_jsx(
             r#"export default (
   <scene>
-    <Revolute name="a" axis={[0,0,1]} q={0.4}><sphere r={0.1} /></Revolute>
-    <Gear driver="a" driven="b" ratio={-0.5} />
-    <Prismatic name="b" axis={[0,0,1]}><box s={[0.1,0.1,0.1]} /></Prismatic>
+    <link name="base" />
+    <link name="la"><sphere r={0.1} /></link>
+    <link name="lb"><box s={[0.1,0.1,0.1]} /></link>
+    <Revolute name="a" a="base" b="la" axis={[0,0,1]} q={0.4} />
+    <Prismatic name="b" a="la" b="lb" axis={[0,0,1]} />
+    <Gear a="a" b="b" ratio={-0.5} />
+    <anchor link="base" />
   </scene>
 );"#,
             None,
@@ -4946,38 +4956,42 @@ export default <sphere r={0.1} />;"#,
         )
         .expect("run");
         let k = &run.kinematics;
-        assert_eq!(k.joints.len(), 2);
-        assert_eq!(k.joints[0].kind, JointKind::Revolute);
-        assert_eq!(k.joints[1].kind, JointKind::Prismatic);
-        assert!((k.joints[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
-        assert_eq!(k.joints[0].meshes, vec![0], "Revolute 拥有 mesh 0");
-        assert_eq!(k.joints[1].meshes, vec![1], "Prismatic 拥有 mesh 1");
+        assert_eq!(k.pairs[0].kind, JointKind::Revolute);
+        assert_eq!(k.pairs[1].kind, JointKind::Prismatic);
+        assert!((k.pairs[1].q[0] + 0.2).abs() < 1e-12, "gear 推导 q_b=-0.2");
+        assert_eq!(k.links[1].meshes, vec![0], "link la 拥有 mesh 0");
+        assert_eq!(k.links[2].meshes, vec![1], "link lb 拥有 mesh 1");
 
-        // 高副 <Cam> 组件转发到 cam 元素（此处验证确实进入了 cam 分支）。
+        // 高副 <Cam> 组件转发到 cam 元素（此处验证确实进入了 cam 校验）。
         let e = run_jsx(
-            r#"export default <scene><Cam driver="a" driven="b"
-                 driverProfile={{kind:"plane",n:[0,1,0],d:0}}
-                 drivenProfile={{kind:"plane",n:[0,1,0],d:0}} /></scene>;"#,
+            r#"export default <scene><Cam a="x" b="y"
+                 aProfile={{kind:"plane",n:[0,1,0],d:0}}
+                 bProfile={{kind:"plane",n:[0,1,0],d:0}} /></scene>;"#,
             None,
             "",
         )
         .err()
         .expect("should fail");
         assert!(
-            e.contains("unknown joint a"),
+            e.contains("cam 引用未知 link"),
             "Cam 组件应进入 cam 校验: {e}"
         );
     }
 
     #[test]
-    fn test_jsx_multi_dof_joint_q_arrays() {
-        // 多自由度关节的 q 是数组（cylindrical [qr,qp] / spherical / planar [x,y,theta]）。
+    fn test_jsx_multi_dof_pair_q_arrays() {
+        // 多自由度副的 q 是数组（cylindrical [qr,qp] / spherical / planar [x,y,theta]）。
         let run = run_jsx(
             r#"export default (
   <scene>
-    <Cylindrical name="c" axis={[0,0,1]} q={[0.4,0.2]}><sphere r={0.1} /></Cylindrical>
-    <Spherical name="s" q={[0.1,0.2,0.3]}><sphere r={0.1} /></Spherical>
-    <Planar name="p" axis={[0,0,1]} q={[0.1,0.2,0.3]}><sphere r={0.1} /></Planar>
+    <link name="base" />
+    <link name="l1"><sphere r={0.1} /></link>
+    <link name="l2"><sphere r={0.1} /></link>
+    <link name="l3"><sphere r={0.1} /></link>
+    <Cylindrical name="c" a="base" b="l1" axis={[0,0,1]} q={[0.4,0.2]} />
+    <Spherical name="s" a="l2" b="base" q={[0.1,0.2,0.3]} />
+    <Planar name="p" a="base" b="l3" axis={[0,0,1]} q={[0.1,0.2,0.3]} />
+    <anchor link="base" />
   </scene>
 );"#,
             None,
@@ -4985,13 +4999,15 @@ export default <sphere r={0.1} />;"#,
         )
         .expect("run");
         let k = &run.kinematics;
-        assert_eq!(k.joints[0].q, vec![0.4, 0.2], "cylindrical q");
-        assert_eq!(k.joints[1].q, vec![0.1, 0.2, 0.3], "spherical q");
-        assert_eq!(k.joints[2].q, vec![0.1, 0.2, 0.3], "planar q");
+        assert_eq!(k.pairs[0].q, vec![0.4, 0.2], "cylindrical q");
+        assert_eq!(k.pairs[1].q, vec![0.1, 0.2, 0.3], "spherical q");
+        assert_eq!(k.pairs[2].q, vec![0.1, 0.2, 0.3], "planar q");
+        // Spherical 写反了（a="l2" b="base"）：树方向反向传播也成立（无向语义）。
+        assert_eq!(k.pairs[1].tree_down, "l2");
 
         // 数量不符仍显式报错。
         let e = run_jsx(
-            r#"export default <scene><Cylindrical name="c" q={[1,2,3]} /></scene>;"#,
+            r#"export default <scene><link name="base" /><link name="x" /><Cylindrical name="c" a="base" b="x" q={[1,2,3]} /><anchor link="base" /></scene>;"#,
             None,
             "",
         )

@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 运动学图模型：无因果（acausal）建模的设计建议
 
-状态：**设计建议（2026-10-08）**。用户拍板：**不保留包含式**（`<joint>` 嵌套写法将删除并迁移）。本文档是调研记录 + 建模语言设计 + 阶段计划。适用：`cga-host/src/scene_build/kinematics.rs`、`cga-host/src/jsx/`、`jsx_gen`、URDF 导出。
+状态：**G0–G3 已实施（2026-10-08）**，G4 完成于同批（URDF 适配），G5（closure）为后续立项。用户拍板：**不保留包含式**（`<joint>` 嵌套写法已删除，显式报错指向本文档）。本文档是调研记录 + 建模语言设计 + 阶段计划。适用：`cga-host/src/scene_build/kinematics.rs`（`solve_graph`）、`cga-host/src/jsx/`、`jsx_gen`、URDF 导出。
 
 ## 0. 调研：Modelica 的无因果建模（1998–2008）
 
@@ -68,6 +68,25 @@
 
 ## 4. 阶段与验收
 
+**已实施（2026-10-08）**：
+
+- **G1 ✓**：`<Link>/<Pair>/<Anchor>` 元素 + 两遍构建（pass 1 `collect_decl` 收集
+  声明 → `solve_graph` 图求解 → pass 2 注入 `link_worlds` 的正式 walk）。
+  生成树 BFS 定向（反向边矩阵取逆）、q 赋值（pose > prop > 0）、gear 无因果
+  不动点（a 侧缺省取 0 为种子，与旧模型一致）、cam 逐个解（自由 q = anchor→b
+  路径上第一个未固定 pair）。`<joint>` 已删除（显式迁移报错）。
+  **最强验收**：`demo_pairs` 再生的 `pairs.png` 与迁移前**逐位一致**。
+- **G2 ✓**：`<Gear a b>` / `<Cam a b aProfile bProfile>` 无因果命名；
+  gear 双侧给定查矛盾、ratio=0 反解报错；cam 的"谁解谁"由求解器从固定状态推导。
+- **G3 ✓**：构图期诊断全集（重名 link/pair、未知引用、缺锚、多锚、孤岛、
+  闭环无 closure、q 越限（pin 预检 + 终检）、gear 矛盾、限位格式）。
+- **G4 ✓（同批）**：URDF 从定向生成树导出（反向边 = 显式 G1 边界错误）；
+  报告输出 link/pair/anchor/gear/cam 行；`sweep_joint` 适配 pair +
+  tree_down 子树；`kinematics-pairs.js` 组件改 pair 形式（不再有 children）。
+- **G5（立项）**：`<closure>` 闭链约束求解（计划见 §3 与 docs/collision-plan.md）。
+
+<details><summary>原计划阶段表（留档）</summary>
+
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | G0 | 本文档 + `Kinematics` 图数据结构（nodes/edges/anchor） | 文档评审 |
@@ -76,6 +95,8 @@
 | G3 | 构图期诊断全集（D8） | 每类错误一个测试，错误带名字 |
 | G4 | URDF 导出与报告适配（图 → URDF 树需选根定向，内部细节） | 导出金标不变 |
 | G5（立项） | `<closure>` 闭链约束求解 | 四连杆闭式验证 |
+
+</details>
 
 ## 5. 风险
 

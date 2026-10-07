@@ -138,15 +138,20 @@ pub struct JointSweepOutcome {
     pub skipped: Option<String>,
 }
 
-/// 见 [`JointSweepOutcome`]。
+/// 见 [`JointSweepOutcome`]。`joint_name` 实际是 **pair 名**（图模型；
+/// 函数名保留以免调用点改动，文档以 pair 为准）。
 pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome {
     let kin = &run.kinematics;
-    let Some(j) = kin.joints.iter().find(|j| j.name == joint_name) else {
+    let Some(j) = kin
+        .pairs
+        .iter()
+        .find(|p| p.name.as_deref() == Some(joint_name))
+    else {
         return JointSweepOutcome {
             joint: joint_name.to_string(),
             first: None,
             unknown: Vec::new(),
-            skipped: Some("no such joint".to_string()),
+            skipped: Some("no such pair".to_string()),
         };
     };
     let skip = |reason: &str| JointSweepOutcome {
@@ -156,7 +161,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         skipped: Some(reason.to_string()),
     };
     if !j.kind.is_1dof() {
-        return skip("not a 1-DOF joint (cylindrical/spherical/planar/fixed)");
+        return skip("not a 1-DOF pair (cylindrical/spherical/planar/fixed)");
     }
     let q_cur = j.q.first().copied().unwrap_or(0.0);
     let (lo, hi) = match j.limit {
@@ -170,13 +175,12 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         return skip("empty limit range");
     }
 
-    // 关节 frame（运动前）的世界矩阵：F = world · M(q)⁻¹；螺旋轴过 F 原点、
-    // 方向 = F·axis。
+    // 关节 frame（运动前）的世界矩阵 = fa_world（F_a 的世界位姿，求解器已给）。
     use crate::scene_build::{joint_motion, mat4_inv};
     use cga_core::mat4_mul;
     let pitch = j.pitch.unwrap_or(0.0);
     let mq = joint_motion(&j.kind, j.axis, &j.q, pitch);
-    let f = mat4_mul(j.world, mat4_inv(mq));
+    let f = j.fa_world;
     let o = [f[3], f[7], f[11]];
     let axis_w = {
         let a = [
@@ -186,7 +190,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         ];
         let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
         if n < 1e-12 {
-            return skip("degenerate joint axis");
+            return skip("degenerate pair axis");
         }
         [a[0] / n, a[1] / n, a[2] / n]
     };
@@ -207,19 +211,20 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
     };
     let xi = [w[0], w[1], w[2], v[0], v[1], v[2]];
 
-    // 运动集合：本关节 + 全部嵌套后代的 meshes（它们刚体随动）。
+    // 运动集合：tree_down 子树的全部连杆的 meshes（刚体随动）。
+    let mut member_links: Vec<&str> = vec![j.tree_down.as_str()];
+    let mut i = 0;
+    while i < member_links.len() {
+        let name = member_links[i];
+        for p in kin.pairs.iter().filter(|p| p.tree_up == name) {
+            member_links.push(p.tree_down.as_str());
+        }
+        i += 1;
+    }
     let mut members: Vec<usize> = Vec::new();
-    let mut stack = vec![j.name.clone()];
-    while let Some(name) = stack.pop() {
-        if let Some(jj) = kin.joints.iter().find(|jj| jj.name == name) {
-            members.extend_from_slice(&jj.meshes);
-            for child in kin
-                .joints
-                .iter()
-                .filter(|c| c.parent.as_deref() == Some(name.as_str()))
-            {
-                stack.push(child.name.clone());
-            }
+    for l in kin.links.iter() {
+        if member_links.contains(&l.name.as_str()) {
+            members.extend_from_slice(&l.meshes);
         }
     }
 
@@ -519,9 +524,10 @@ export default (
   <scene>
     <camera />
     <translate t={[1.5, 1.0, 0]}><sphere r={0.5} /></translate>
-    <joint name="arm" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
-      <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
-    </joint>
+    <link name="base" />
+    <link name="arm_link"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <pair kind="revolute" name="arm" a="base" b="arm_link" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]} />
+    <anchor link="base" />
   </scene>
 );
 "#;
@@ -546,11 +552,12 @@ export default (
   <scene>
     <camera />
     <translate t={[2.0, 1.5, 0]}><sphere r={0.5} /></translate>
-    <joint name="base" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
-      <joint name="elbow" type="revolute" axis={[0, 0, 1]} at={[1.2, 0, 0]} limit={[0, 1.0]}>
-        <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
-      </joint>
-    </joint>
+    <link name="base" />
+    <link name="upper" />
+    <link name="fore"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <pair kind="revolute" name="base" a="base" b="upper" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]} />
+    <pair kind="revolute" name="elbow" a="upper" b="fore" axis={[0, 0, 1]} at={[1.2, 0, 0]} limit={[0, 1.0]} />
+    <anchor link="base" />
   </scene>
 );
 "#;
@@ -581,19 +588,23 @@ export default (
   <scene>
     <camera />
     <translate t={[10.0, 0.0, 0]}><sphere r={0.5} /></translate>
-    <joint name="fix" type="fixed" at={[0, 0, 0]}><sphere r={0.2} /></joint>
-    <joint name="ball" type="spherical" axis={[0, 0, 1]} at={[0, 0, 0]}><sphere r={0.2} /></joint>
-    <joint name="free" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]}><sphere r={0.2} /></joint>
-    <joint name="arm" type="revolute" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]}>
-      <translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate>
-    </joint>
+    <link name="base" />
+    <link name="l_fix"><sphere r={0.2} /></link>
+    <link name="l_ball"><sphere r={0.2} /></link>
+    <link name="l_free"><sphere r={0.2} /></link>
+    <link name="l_arm"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <pair kind="fixed" name="fix" a="base" b="l_fix" at={[0, 0, 0]} />
+    <pair kind="spherical" name="ball" a="base" b="l_ball" axis={[0, 0, 1]} at={[0, 0, 0]} />
+    <pair kind="revolute" name="free" a="base" b="l_free" axis={[0, 0, 1]} at={[0, 0, 0]} />
+    <pair kind="revolute" name="arm" a="base" b="l_arm" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]} />
+    <anchor link="base" />
   </scene>
 );
 "#;
         let run = run_of(src);
         assert_eq!(
             sweep_joint(&run, "fix").skipped.as_deref(),
-            Some("not a 1-DOF joint (cylindrical/spherical/planar/fixed)")
+            Some("not a 1-DOF pair (cylindrical/spherical/planar/fixed)")
         );
         assert!(sweep_joint(&run, "ball").skipped.is_some());
         assert!(
@@ -602,7 +613,7 @@ export default (
         );
         assert_eq!(
             sweep_joint(&run, "nope").skipped.as_deref(),
-            Some("no such joint")
+            Some("no such pair")
         );
         let clean = sweep_joint(&run, "arm");
         assert!(clean.skipped.is_none());

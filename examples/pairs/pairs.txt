@@ -26,16 +26,28 @@ object 9 translate([0.63343,3,0]) material(color=0xFFFFFF, roughness=0.5, metaln
 bounds 9 lo=[0.51343,2.88,-0.12] hi=[0.75343,3.12,0.12]
 object 10 material(color=0x3A4046, roughness=0.9, metalness=0, emissive=0x000000, opacity=1, ior=1.5, absorption=0) plane(n=[0,1,0], d=0);
 bounds 10 none
-joint 0 "revolute" type=revolute parent=none axis=[0,0,1] at=[-4,1,0] q=0.6
-joint 1 "prismatic" type=prismatic parent=none axis=[0,1,0] at=[-3,1,0] q=0.3 limit=[-1,1]
-joint 2 "continuous" type=continuous parent=none axis=[0,0,1] at=[-2,1,0] q=0
-joint 3 "helical" type=helical parent=none axis=[0,0,1] at=[-1,1,0] q=0.5 pitch=0.3
-joint 4 "cylindrical" type=cylindrical parent=none axis=[0,0,1] at=[0,1,0] q=[0.4,0.2]
-joint 5 "spherical" type=spherical parent=none axis=[0,0,1] at=[1,1,0] q=[0.2,0.3,0.1]
-joint 6 "planar" type=planar parent=none axis=[0,0,1] at=[2,1,0] q=[0.2,0.1,0.3]
-joint 7 "fixed" type=fixed parent=none axis=[0,0,1] at=[3,1,0] q=[]
-joint 8 "cam_driver" type=revolute parent=none axis=[0,0,1] at=[0,3,0] q=0.3
-joint 9 "cam_follower" type=prismatic parent=none axis=[1,0,0] at=[0.9,3,0] q=-0.26657 limit=[-0.4,-0.1]
-gear 0 driver="revolute" driven="prismatic" ratio=0.5 offset=0
-cam 0 driver="cam_driver" driven="cam_follower" q=-0.26657
-summary objects=11 lights=3 no_bounds=1 joints=10 gears=1 cams=1 bbox_lo=[-4.347495,0.652505,-0.5] bbox_hi=[3.25,3.4,0.5]
+link 0 "base" meshes=0
+link 1 "revolute" translate([-4,1,0]) rotate(axis=[0,0,1], angle=0.6) meshes=1
+link 2 "prismatic" translate([-3,1.3,0]) meshes=1
+link 3 "continuous" translate([-2,1,0]) meshes=1
+link 4 "helical" translate([-1,1,0.15]) rotate(axis=[0,0,1], angle=0.5) meshes=1
+link 5 "cylindrical" translate([0,1,0.2]) rotate(axis=[0,0,1], angle=0.4) meshes=1
+link 6 "spherical" translate([1,1,0]) rotate(axis=[0.5591,0.757129,0.337881], angle=0.381565) meshes=1
+link 7 "planar" translate([1.9,1.2,0]) rotate(axis=[0,0,1], angle=0.3) meshes=1
+link 8 "fixed" translate([3,1,0]) meshes=1
+link 9 "cam_driver_link" translate([0,3,0]) rotate(axis=[0,0,1], angle=0.3) meshes=1
+link 10 "cam_follower_link" translate([0.63343,3,0]) meshes=1
+anchor "base"
+pair 0 "revolute" type=revolute a="base" b="revolute" up="base" down="revolute" axis=[0,0,1] at=[-4,1,0] q=0.6
+pair 1 "prismatic" type=prismatic a="base" b="prismatic" up="base" down="prismatic" axis=[0,1,0] at=[-3,1,0] q=0.3 limit=[-1,1]
+pair 2 "continuous" type=continuous a="base" b="continuous" up="base" down="continuous" axis=[0,0,1] at=[-2,1,0] q=0
+pair 3 "helical" type=helical a="base" b="helical" up="base" down="helical" axis=[0,0,1] at=[-1,1,0] q=0.5 pitch=0.3
+pair 4 "cylindrical" type=cylindrical a="base" b="cylindrical" up="base" down="cylindrical" axis=[0,0,1] at=[0,1,0] q=[0.4,0.2]
+pair 5 "spherical" type=spherical a="base" b="spherical" up="base" down="spherical" axis=[0,0,1] at=[1,1,0] q=[0.2,0.3,0.1]
+pair 6 "planar" type=planar a="base" b="planar" up="base" down="planar" axis=[0,0,1] at=[2,1,0] q=[0.2,0.1,0.3]
+pair 7 "fixed" type=fixed a="base" b="fixed" up="base" down="fixed" axis=[0,0,1] at=[3,1,0] q=[]
+pair 8 "cam_driver" type=revolute a="base" b="cam_driver_link" up="base" down="cam_driver_link" axis=[0,0,1] at=[0,3,0] q=0.3
+pair 9 "cam_follower" type=prismatic a="base" b="cam_follower_link" up="base" down="cam_follower_link" axis=[1,0,0] at=[0.9,3,0] q=-0.26657 limit=[-0.4,-0.1]
+gear 0 a="revolute" b="prismatic" ratio=0.5 offset=0
+cam 0 a="cam_driver_link" b="cam_follower_link" q=-0.26657
+summary objects=11 lights=3 no_bounds=1 links=11 pairs=10 gears=1 cams=1 bbox_lo=[-4.347495,0.652505,-0.5] bbox_hi=[3.25,3.4,0.5]

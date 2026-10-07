@@ -1,7 +1,7 @@
 use cga_core::{decompose_rigid, Geometry, Quaternion};
 use std::f64::consts::PI;
 
-use crate::scene_build::{csg_op_name, JointDef, Kinematics, TagInstance, TagRegistry};
+use crate::scene_build::{csg_op_name, Kinematics, TagInstance, TagRegistry};
 use cga_gpu::geom_kernels::geom_to_camera;
 use cga_gpu::scene::{Object, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::{vec3_unit, Color};
@@ -243,32 +243,46 @@ fn fmt_instance(name: &str, j: usize, inst: &TagInstance) -> String {
     format!("tag \"{}\" {j} {prefix}{geom};", escape_name(name))
 }
 
-fn fmt_joint(i: usize, j: &JointDef) -> String {
-    let parent = match &j.parent {
-        Some(p) => format!("\"{}\"", escape_name(p)),
-        None => "none".to_string(),
+fn fmt_link(i: usize, l: &crate::scene_build::LinkDef) -> String {
+    let (motor, _) = decompose_rigid(l.world);
+    let (t, axis, angle) = frame_of(&motor.to_matrix());
+    format!(
+        "link {i} \"{}\" {}meshes={}",
+        escape_name(&l.name),
+        fmt_prefix(t, axis, angle),
+        l.meshes.len()
+    )
+}
+
+fn fmt_pair(i: usize, p: &crate::scene_build::PairDef) -> String {
+    let name = match &p.name {
+        Some(n) => format!("\"{}\"", escape_name(n)),
+        None => "_".to_string(),
     };
-    let q = if j.q.len() == 1 {
-        fmt_num(j.q[0])
+    let q = if p.q.len() == 1 {
+        fmt_num(p.q[0])
     } else {
-        let parts: Vec<String> = j.q.iter().map(|x| fmt_num(*x)).collect();
+        let parts: Vec<String> = p.q.iter().map(|x| fmt_num(*x)).collect();
         format!("[{}]", parts.join(","))
     };
     let mut s = format!(
-        "joint {i} \"{}\" type={} parent={} axis={} at={} q={q}",
-        escape_name(&j.name),
-        j.kind.name(),
-        parent,
-        fmt_vec3(j.axis),
-        fmt_vec3(j.at)
+        "pair {i} {} type={} a=\"{}\" b=\"{}\" up=\"{}\" down=\"{}\" axis={} at={} q={q}",
+        name,
+        p.kind.name(),
+        escape_name(&p.a),
+        escape_name(&p.b),
+        escape_name(&p.tree_up),
+        escape_name(&p.tree_down),
+        fmt_vec3(p.axis),
+        fmt_vec3(p.at)
     );
-    if j.rpy != [0.0, 0.0, 0.0] {
-        s.push_str(&format!(" rpy={}", fmt_vec3(j.rpy)));
+    if p.rpy != [0.0, 0.0, 0.0] {
+        s.push_str(&format!(" rpy={}", fmt_vec3(p.rpy)));
     }
-    if let Some(p) = j.pitch {
-        s.push_str(&format!(" pitch={}", fmt_num(p)));
+    if let Some(pit) = p.pitch {
+        s.push_str(&format!(" pitch={}", fmt_num(pit)));
     }
-    if let Some([lo, hi]) = j.limit {
+    if let Some([lo, hi]) = p.limit {
         s.push_str(&format!(" limit=[{},{}]", fmt_num(lo), fmt_num(hi)));
     }
     s
@@ -331,24 +345,31 @@ pub fn scene_report(
             out.push('\n');
         }
     }
-    for (i, j) in kin.joints.iter().enumerate() {
-        out.push_str(&fmt_joint(i, j));
+    for (i, l) in kin.links.iter().enumerate() {
+        out.push_str(&fmt_link(i, l));
+        out.push('\n');
+    }
+    if let Some(a) = &kin.anchor {
+        out.push_str(&format!("anchor \"{}\"\n", escape_name(a)));
+    }
+    for (i, p) in kin.pairs.iter().enumerate() {
+        out.push_str(&fmt_pair(i, p));
         out.push('\n');
     }
     for (i, g) in kin.gears.iter().enumerate() {
         out.push_str(&format!(
-            "gear {i} driver=\"{}\" driven=\"{}\" ratio={} offset={}\n",
-            escape_name(&g.driver),
-            escape_name(&g.driven),
+            "gear {i} a=\"{}\" b=\"{}\" ratio={} offset={}\n",
+            escape_name(&g.a),
+            escape_name(&g.b),
             fmt_num(g.ratio),
             fmt_num(g.offset)
         ));
     }
     for (i, c) in kin.cams.iter().enumerate() {
         out.push_str(&format!(
-            "cam {i} driver=\"{}\" driven=\"{}\" q={}\n",
-            escape_name(&c.driver),
-            escape_name(&c.driven),
+            "cam {i} a=\"{}\" b=\"{}\" q={}\n",
+            escape_name(&c.a),
+            escape_name(&c.b),
             fmt_num(c.q)
         ));
     }
@@ -375,10 +396,15 @@ pub fn scene_report(
         scene.lights.len(),
         no_bounds
     );
-    if !kin.joints.is_empty() || !kin.gears.is_empty() || !kin.cams.is_empty() {
+    if !kin.links.is_empty()
+        || !kin.pairs.is_empty()
+        || !kin.gears.is_empty()
+        || !kin.cams.is_empty()
+    {
         summary.push_str(&format!(
-            " joints={} gears={} cams={}",
-            kin.joints.len(),
+            " links={} pairs={} gears={} cams={}",
+            kin.links.len(),
+            kin.pairs.len(),
             kin.gears.len(),
             kin.cams.len()
         ));

@@ -18,9 +18,10 @@ fn main() {
     std::fs::write(format!("{out}/pairs.png"), &img.png).unwrap();
 
     println!(
-        "saved {out}/pairs.jsx + pairs.png + pairs.txt ({} lines, {} joints, {} gears, {} cams)",
+        "saved {out}/pairs.jsx + pairs.png + pairs.txt ({} lines, {} links, {} pairs, {} gears, {} cams)",
         text.lines().count(),
-        run.kinematics.joints.len(),
+        run.kinematics.links.len(),
+        run.kinematics.pairs.len(),
         run.kinematics.gears.len(),
         run.kinematics.cams.len()
     );
