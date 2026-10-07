@@ -417,44 +417,469 @@ const MATERIAL_KEYS: [&str; 9] = [
 ];
 
 // ---- CSS ----
+//
+// 解析交给 lightningcss（语法与值的归一化都是真 CSS）；这里只做三件事：
+// 选择器编译、级联、值转换。差距清单与阶段见 docs/css-conformance.md。
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+struct Specificity(u16, u16, u16, u16);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Combinator {
+    Descendant,
+    Child,
+    NextSibling,
+    LaterSibling,
+}
+
+/// 一个复合选择器：type / `.class` / `#id` / `[attr]` / `:root` / `*` 的组合。
 #[derive(Clone, Debug, Default)]
-struct SimpleSel {
+struct Compound {
+    /// `:root` 或裸 `scene`：只匹配深度为 0 的根元素。
+    root: bool,
     tag: Option<String>,
-    class: Option<String>,
+    classes: Vec<String>,
     id: Option<String>,
-    scene: bool,
+    attrs: Vec<(String, Option<String>)>,
+}
+
+/// 复杂选择器。`parts` 最右是匹配目标；`parts[i].0` 描述它与左侧
+/// （祖先或前兄弟）之间的连接。
+#[derive(Clone, Debug)]
+struct ComplexSelector {
+    parts: Vec<(Combinator, Compound)>,
+    specificity: Specificity,
+    /// 目标复合选择器带根标记 → 根作用域规则（背景等由 `build_scene_run` 消费）。
+    scene_scope: bool,
+    text: String,
+}
+
+#[derive(Clone, Debug)]
+struct StyleDecl {
+    name: String,
+    value: String,
+    important: bool,
 }
 
 #[derive(Clone, Debug)]
 struct StyleRule {
-    sel: SimpleSel,
-    props: Vec<(String, String)>,
+    sel: ComplexSelector,
+    decls: Vec<StyleDecl>,
 }
 
-fn parse_selector_part(part: &str) -> SimpleSel {
-    let mut sel = SimpleSel::default();
-    let mut rest = part.trim();
-    if rest == ":root" || rest == "scene" {
-        sel.scene = true;
-        return sel;
+fn css_err(what: &str, msg: &str) -> String {
+    format!("CSS: {what}: {msg}")
+}
+
+/// lightningcss 会把 `::before` 归一成 `:before`，所以伪元素按名字识别。
+const PSEUDO_ELEMENT_NAMES: &[&str] = &["before", "after", "first-line", "first-letter"];
+
+fn skip_ws(b: &[u8], i: &mut usize) -> bool {
+    let start = *i;
+    while *i < b.len() && b[*i].is_ascii_whitespace() {
+        *i += 1;
     }
-    while !rest.is_empty() {
-        if let Some(r) = rest.strip_prefix('.') {
-            let end = r.find(['.', '#']).unwrap_or(r.len());
-            sel.class = Some(r[..end].to_string());
-            rest = &r[end..];
-        } else if let Some(r) = rest.strip_prefix('#') {
-            let end = r.find(['.', '#']).unwrap_or(r.len());
-            sel.id = Some(r[..end].to_string());
-            rest = &r[end..];
+    *i > start
+}
+
+fn scan_ident(b: &[u8], i: &mut usize) -> Option<String> {
+    let start = *i;
+    while *i < b.len() {
+        let c = b[*i];
+        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c >= 0x80 {
+            *i += 1;
         } else {
-            let end = rest.find(['.', '#']).unwrap_or(rest.len());
-            sel.tag = Some(rest[..end].to_ascii_lowercase());
-            rest = &rest[end..];
+            break;
         }
     }
-    sel
+    if *i == start {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&b[start..*i]).into_owned())
+    }
+}
+
+fn parse_attr(b: &[u8], i: &mut usize, sel: &str, c: &mut Compound) -> Result<(), String> {
+    *i += 1; // '['
+    skip_ws(b, i);
+    let name =
+        scan_ident(b, i).ok_or_else(|| css_err(sel, "expected an attribute name after '['"))?;
+    skip_ws(b, i);
+    if *i < b.len() && b[*i] == b'=' {
+        *i += 1;
+        skip_ws(b, i);
+        if *i >= b.len() {
+            return Err(css_err(sel, "unterminated attribute selector"));
+        }
+        let value = if b[*i] == b'"' || b[*i] == b'\'' {
+            let quote = b[*i];
+            *i += 1;
+            let start = *i;
+            while *i < b.len() && b[*i] != quote {
+                *i += 1;
+            }
+            if *i >= b.len() {
+                return Err(css_err(sel, "unterminated attribute value"));
+            }
+            let v = String::from_utf8_lossy(&b[start..*i]).into_owned();
+            *i += 1;
+            v
+        } else {
+            let start = *i;
+            while *i < b.len() && b[*i] != b']' {
+                *i += 1;
+            }
+            String::from_utf8_lossy(&b[start..*i]).trim().to_string()
+        };
+        skip_ws(b, i);
+        if *i >= b.len() || b[*i] != b']' {
+            return Err(css_err(
+                sel,
+                "unsupported attribute operator: only [attr] and [attr=value] are supported",
+            ));
+        }
+        *i += 1;
+        c.attrs.push((name, Some(value)));
+    } else if *i < b.len() && b[*i] == b']' {
+        *i += 1;
+        c.attrs.push((name, None));
+    } else {
+        return Err(css_err(
+            sel,
+            "unsupported attribute selector or operator: only [attr] and [attr=value] are supported",
+        ));
+    }
+    Ok(())
+}
+
+/// 把 lightningcss 归一化过的（逗号分隔的）单条选择器编译成结构化的
+/// `ComplexSelector`。无法识别的构造一律报错，不做静默降级。
+fn parse_selector(text: &str) -> Result<ComplexSelector, String> {
+    let s = text.trim();
+    if s == ":root" || s == "scene" {
+        let specificity = if s == ":root" {
+            Specificity(0, 1, 0, 0)
+        } else {
+            Specificity(0, 0, 1, 0)
+        };
+        return Ok(ComplexSelector {
+            parts: vec![(
+                Combinator::Descendant,
+                Compound {
+                    root: true,
+                    ..Compound::default()
+                },
+            )],
+            specificity,
+            scene_scope: true,
+            text: s.to_string(),
+        });
+    }
+
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    let mut parts: Vec<(Combinator, Compound)> = Vec::new();
+    let mut specificity = Specificity::default();
+    let mut pending = Combinator::Descendant;
+    skip_ws(b, &mut i);
+    if i >= b.len() {
+        return Err(css_err(s, "empty selector"));
+    }
+
+    loop {
+        // 一个复合选择器
+        let mut c = Compound::default();
+        let mut any = false;
+        loop {
+            if i >= b.len() {
+                break;
+            }
+            match b[i] {
+                b'.' => {
+                    i += 1;
+                    let n = scan_ident(b, &mut i)
+                        .ok_or_else(|| css_err(s, "expected a class name after '.'"))?;
+                    c.classes.push(n);
+                    specificity.1 += 1;
+                    any = true;
+                }
+                b'#' => {
+                    i += 1;
+                    let n = scan_ident(b, &mut i)
+                        .ok_or_else(|| css_err(s, "expected an id after '#'"))?;
+                    c.id = Some(n);
+                    specificity.0 += 1;
+                    any = true;
+                }
+                b'*' => {
+                    i += 1;
+                    any = true;
+                }
+                b'[' => {
+                    parse_attr(b, &mut i, s, &mut c)?;
+                    specificity.1 += 1;
+                    any = true;
+                }
+                b':' => {
+                    if i + 1 < b.len() && b[i + 1] == b':' {
+                        return Err(css_err(s, "pseudo-elements (::) are not supported"));
+                    }
+                    i += 1;
+                    let n = scan_ident(b, &mut i)
+                        .ok_or_else(|| css_err(s, "expected a pseudo-class name after ':'"))?;
+                    if n.eq_ignore_ascii_case("root") {
+                        c.root = true;
+                        specificity.1 += 1;
+                    } else if PSEUDO_ELEMENT_NAMES
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case(&n))
+                    {
+                        // lightningcss 会把 `::before` 归一成 `:before`，这里按名字识别。
+                        return Err(css_err(s, &format!("pseudo-element :{n} is not supported")));
+                    } else {
+                        return Err(css_err(
+                            s,
+                            &format!("unsupported pseudo-class :{n}: only :root is supported"),
+                        ));
+                    }
+                    any = true;
+                }
+                b'>' | b'+' | b'~' => break,
+                ch if ch.is_ascii_whitespace() => break,
+                _ => {
+                    if c.root
+                        || c.tag.is_some()
+                        || !c.classes.is_empty()
+                        || c.id.is_some()
+                        || !c.attrs.is_empty()
+                    {
+                        return Err(css_err(
+                            s,
+                            "a type selector must come first in a compound selector",
+                        ));
+                    }
+                    let n =
+                        scan_ident(b, &mut i).ok_or_else(|| css_err(s, "expected a type name"))?;
+                    c.tag = Some(n.to_ascii_lowercase());
+                    specificity.2 += 1;
+                    any = true;
+                }
+            }
+        }
+        if !any {
+            return Err(css_err(s, "expected a selector"));
+        }
+        parts.push((pending, c));
+
+        let saw_ws = skip_ws(b, &mut i);
+        if i >= b.len() {
+            break;
+        }
+        match b[i] {
+            b'>' => {
+                i += 1;
+                pending = Combinator::Child;
+            }
+            b'+' => {
+                i += 1;
+                pending = Combinator::NextSibling;
+            }
+            b'~' => {
+                i += 1;
+                pending = Combinator::LaterSibling;
+            }
+            _ => {
+                if !saw_ws {
+                    return Err(css_err(s, "expected a combinator between selectors"));
+                }
+                pending = Combinator::Descendant;
+            }
+        }
+        skip_ws(b, &mut i);
+        if i >= b.len() {
+            return Err(css_err(s, "dangling combinator at the end of the selector"));
+        }
+    }
+
+    let scene_scope = parts.last().map(|(_, c)| c.root).unwrap_or(false);
+    Ok(ComplexSelector {
+        parts,
+        specificity,
+        scene_scope,
+        text: s.to_string(),
+    })
+}
+
+/// 遍历时为选择器匹配维护的位置。`stack` 从根元素到当前元素，
+/// `stack[d].el` 是深度 `d` 的元素，`stack[d].index` 是它在其父节点中的下标。
+#[derive(Clone, Copy)]
+struct Frame<'a> {
+    el: &'a El,
+    index: usize,
+}
+
+impl<'a> Frame<'a> {
+    fn new(el: &'a El, index: usize) -> Self {
+        Frame { el, index }
+    }
+}
+
+/// 匹配过程中的任意节点：可能不在 `stack` 上（兄弟节点），所以自带 `el`。
+#[derive(Clone, Copy)]
+struct Node<'a> {
+    el: &'a El,
+    depth: usize,
+    index: usize,
+}
+
+fn sel_matches<'a>(sel: &ComplexSelector, stack: &[Frame<'a>]) -> bool {
+    let Some(last) = stack.last() else {
+        return false;
+    };
+    let cur = Node {
+        el: last.el,
+        depth: stack.len() - 1,
+        index: last.index,
+    };
+    match_from(sel, stack, sel.parts.len() - 1, &cur)
+}
+
+/// 从右向左匹配：`parts[i]` 已经落在 `n` 上，再向左找 `parts[i-1]`。
+fn match_from<'a>(sel: &ComplexSelector, stack: &[Frame<'a>], i: usize, n: &Node<'a>) -> bool {
+    if !compound_matches(&sel.parts[i].1, n.el, n.depth) {
+        return false;
+    }
+    if i == 0 {
+        return true;
+    }
+    let target = i - 1;
+    match sel.parts[i].0 {
+        Combinator::Child => {
+            parent_node(n, stack).is_some_and(|p| match_from(sel, stack, target, &p))
+        }
+        Combinator::Descendant => (0..n.depth).rev().any(|d| {
+            let a = Node {
+                el: stack[d].el,
+                depth: d,
+                index: stack[d].index,
+            };
+            match_from(sel, stack, target, &a)
+        }),
+        Combinator::NextSibling => {
+            prev_sibling(n, stack).is_some_and(|p| match_from(sel, stack, target, &p))
+        }
+        Combinator::LaterSibling => prev_siblings(n, stack)
+            .into_iter()
+            .any(|p| match_from(sel, stack, target, &p)),
+    }
+}
+
+fn parent_node<'a>(n: &Node<'a>, stack: &[Frame<'a>]) -> Option<Node<'a>> {
+    if n.depth == 0 {
+        return None;
+    }
+    Some(Node {
+        el: stack[n.depth - 1].el,
+        depth: n.depth - 1,
+        index: stack[n.depth - 1].index,
+    })
+}
+
+fn prev_sibling<'a>(n: &Node<'a>, stack: &[Frame<'a>]) -> Option<Node<'a>> {
+    if n.depth == 0 || n.index == 0 {
+        return None;
+    }
+    let parent = stack[n.depth - 1].el;
+    Some(Node {
+        el: &parent.children[n.index - 1],
+        depth: n.depth,
+        index: n.index - 1,
+    })
+}
+
+fn prev_siblings<'a>(n: &Node<'a>, stack: &[Frame<'a>]) -> Vec<Node<'a>> {
+    if n.depth == 0 {
+        return Vec::new();
+    }
+    let parent = stack[n.depth - 1].el;
+    (0..n.index)
+        .rev()
+        .map(|k| Node {
+            el: &parent.children[k],
+            depth: n.depth,
+            index: k,
+        })
+        .collect()
+}
+
+fn compound_matches(c: &Compound, el: &El, depth: usize) -> bool {
+    if c.root && depth != 0 {
+        return false;
+    }
+    if let Some(tag) = &c.tag {
+        if !el.tag.eq_ignore_ascii_case(tag) {
+            return false;
+        }
+    }
+    if let Some(id) = &c.id {
+        match el.props.get("id").and_then(prop_scalar) {
+            Some(got) if got == *id => {}
+            _ => return false,
+        }
+    }
+    if !c.classes.is_empty() {
+        let mine = el_classes(el);
+        for cl in &c.classes {
+            if !mine.iter().any(|m| m == cl) {
+                return false;
+            }
+        }
+    }
+    for (key, want) in &c.attrs {
+        match el.props.get(key) {
+            None | Some(Value::Null) => return false,
+            Some(v) => {
+                if let Some(want) = want {
+                    match prop_scalar(v) {
+                        Some(got) if got == *want => {}
+                        _ => return false,
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+fn el_classes(el: &El) -> Vec<String> {
+    let raw = el.props.get("class").or_else(|| el.props.get("className"));
+    match raw {
+        Some(Value::String(s)) => s.split_whitespace().map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 属性选择器里把标量属性变成可比较的字符串。
+fn prop_scalar(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(if *b { "true" } else { "false" }.to_string()),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else {
+                let f = n.as_f64()?;
+                if f.fract() == 0.0 && f.abs() < 1e15 {
+                    Some(format!("{}", f as i64))
+                } else {
+                    Some(format!("{f}"))
+                }
+            }
+        }
+        _ => None,
+    }
 }
 
 fn parse_css(src: &str) -> Result<Vec<StyleRule>, String> {
@@ -462,75 +887,270 @@ fn parse_css(src: &str) -> Result<Vec<StyleRule>, String> {
         src,
         lightningcss::stylesheet::ParserOptions::default(),
     )
-    .map_err(|e| format!("CSS: {e}"))?;
+    .map_err(|e| css_err("", &format!("syntax error: {e}")))?;
     let mut rules = Vec::new();
     for rule in &ss.rules.0 {
         let lightningcss::rules::CssRule::Style(style) = rule else {
-            continue;
+            let kind = match rule {
+                lightningcss::rules::CssRule::Media(_) => "@media",
+                lightningcss::rules::CssRule::Import(_) => "@import",
+                lightningcss::rules::CssRule::Keyframes(_) => "@keyframes",
+                lightningcss::rules::CssRule::Supports(_) => "@supports",
+                lightningcss::rules::CssRule::Nesting(_) => "a nested rule",
+                lightningcss::rules::CssRule::FontFace(_) => "@font-face",
+                _ => "an at-rule",
+            };
+            return Err(css_err(
+                kind,
+                "not supported: only plain style rules are supported here",
+            ));
         };
         let sel_text = style.selectors.to_string();
-        let mut props = Vec::new();
-        for d in style
-            .declarations
-            .declarations
-            .iter()
-            .chain(style.declarations.important_declarations.iter())
-        {
-            if let Ok(v) = d.value_to_css_string(lightningcss::printer::PrinterOptions::default()) {
-                props.push((d.property_id().name().to_string(), v));
+        if !style.rules.0.is_empty() {
+            return Err(css_err(
+                &sel_text,
+                "CSS nesting is not supported: only flat style rules are supported",
+            ));
+        }
+        let mut decls = Vec::new();
+        for (list, important) in [
+            (&style.declarations.declarations, false),
+            (&style.declarations.important_declarations, true),
+        ] {
+            for d in list {
+                let name = d.property_id().name().to_string();
+                // 序列化失败不能静默丢（docs/css-conformance.md §7）。
+                let value = d
+                    .value_to_css_string(lightningcss::printer::PrinterOptions::default())
+                    .map_err(|e| css_err(&sel_text, &format!("cannot serialize `{name}`: {e}")))?;
+                decls.push(StyleDecl {
+                    name,
+                    value,
+                    important,
+                });
             }
         }
-        for part in sel_text.split(',') {
+        for part in split_selector_list(&sel_text) {
+            let sel = parse_selector(&part)?;
             rules.push(StyleRule {
-                sel: parse_selector_part(part),
-                props: props.clone(),
+                sel,
+                decls: decls.clone(),
             });
         }
     }
     Ok(rules)
 }
 
-/// Matched material props for one element (cascade = source order).
-fn css_match(rules: &[StyleRule], el: &El) -> Vec<(String, String)> {
-    let class = p_str(el, "class").ok().flatten();
-    let class2 = p_str(el, "className").ok().flatten();
-    let id = p_str(el, "id").ok().flatten();
+/// 按顶层逗号切分选择器列表：属性/函数里的逗号（`[class="a,b"]`、`rgb(1,2,3)`）不算。
+fn split_selector_list(s: &str) -> Vec<String> {
+    let b = s.as_bytes();
     let mut out = Vec::new();
-    for r in rules {
-        let s = &r.sel;
-        let ok = (s.tag.is_none() || s.tag.as_deref() == Some(el.tag.as_str()))
-            && (s.class.is_none() || s.class == class || s.class == class2)
-            && (s.id.is_none() || s.id == id);
-        if ok {
-            out.extend(r.props.iter().cloned());
+    let mut start = 0usize;
+    let mut quote = 0u8;
+    let mut depth = 0usize;
+    for (i, &c) in b.iter().enumerate() {
+        if quote != 0 {
+            if c == quote && b.get(i.wrapping_sub(1)) != Some(&b'\\') {
+                quote = 0;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = c,
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
         }
     }
+    out.push(s[start..].trim().to_string());
     out
 }
 
-fn css_value_to_arg(name: &str, raw: &str) -> Option<ArgValue> {
-    let raw = raw.trim().trim_matches('"').trim_matches('\'');
+// -- 级联 --
+//
+// 层级由低到高：继承 < 样式表 < 内联 prop < 样式表 !important < 内联 !important。
+// 同一层内按特异性、再按源码顺序。
+fn cascade_rank(important: bool, inline: bool) -> u8 {
+    match (important, inline) {
+        (false, false) => 1,
+        (false, true) => 2,
+        (true, false) => 3,
+        (true, true) => 4,
+    }
+}
+
+enum PendingValue {
+    Css(String),
+    Json(Value),
+}
+
+struct PendingDecl {
+    rank: u8,
+    specificity: Specificity,
+    order: usize,
+    key: String,
+    /// 选择器原文，只用于错误信息。
+    source: String,
+    value: PendingValue,
+}
+
+// -- 值 --
+
+const CSS_UNITS: &[&str] = &[
+    "px", "em", "rem", "ex", "ch", "vh", "vw", "vmin", "vmax", "pt", "pc", "in", "cm", "mm", "q",
+    "deg", "rad", "grad", "turn", "s", "ms", "hz", "khz", "dpi", "dpcm", "dppx", "fr",
+];
+
+fn css_number(raw: &str) -> Result<f64, String> {
+    let v = raw.trim();
+    for f in ["calc(", "min(", "max(", "clamp("] {
+        if v.starts_with(f) {
+            return Err(format!(
+                "`{v}` is not supported: material values must be plain numbers"
+            ));
+        }
+    }
+    if let Some(p) = v.strip_suffix('%') {
+        let n = p
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| format!("`{v}` is not a percentage"))?;
+        return Ok(n / 100.0);
+    }
+    for u in CSS_UNITS {
+        if let Some(p) = v.strip_suffix(u) {
+            if p.chars()
+                .last()
+                .map(|c| c.is_ascii_digit() || c == '.')
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "`{v}` has a unit: material values are unitless (write a plain number)"
+                ));
+            }
+        }
+    }
+    v.parse::<f64>()
+        .map_err(|_| format!("`{v}` is not a number"))
+}
+
+fn css_bool(raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        v => Err(format!("`{v}` is not a boolean")),
+    }
+}
+
+/// 颜色 → `(0xRRGGBB, alpha ∈ [0,1])`。named / hex / rgb / hsl / hwb 全都由
+/// lightningcss 解析，所以判据是 CSS 本身而不是我们自己的正则。
+fn css_color(raw: &str) -> Result<(f64, f64), String> {
+    use lightningcss::traits::Parse;
+    let text = raw.trim();
+    let color = lightningcss::values::color::CssColor::parse_string(text)
+        .map_err(|_| format!("`{text}` is not a valid color"))?;
+    match color {
+        lightningcss::values::color::CssColor::RGBA(rgba) => {
+            let hex =
+                (u32::from(rgba.red) << 16) | (u32::from(rgba.green) << 8) | u32::from(rgba.blue);
+            Ok((f64::from(hex), f64::from(rgba.alpha) / 255.0))
+        }
+        lightningcss::values::color::CssColor::CurrentColor => {
+            Err("`currentcolor` is not supported here".to_string())
+        }
+        _ => Err(format!("unsupported color space in `{text}`")),
+    }
+}
+
+fn css_value(name: &str, raw: &str) -> Result<ArgValue, String> {
     match name {
-        "color" | "emissive" | "background" | "background-color" => {
-            let h = raw.strip_prefix('#')?;
-            let expanded = match h.len() {
-                3 => h.chars().flat_map(|c| [c, c]).collect::<String>(),
-                _ => h.to_string(),
-            };
-            let v = i32::from_str_radix(&expanded, 16).ok()?;
-            Some(ArgValue::Num(v as f64))
+        "color" | "emissive" => {
+            let (hex, _) = css_color(raw)?;
+            Ok(ArgValue::Num(hex))
         }
         "map" => {
-            let p = raw
+            let v = raw.trim();
+            let p = v
                 .strip_prefix("url(")
                 .and_then(|s| s.strip_suffix(')'))
-                .unwrap_or(raw)
-                .trim_matches('"')
-                .trim_matches('\'');
-            Some(ArgValue::Str(p.to_string()))
+                .unwrap_or(v);
+            Ok(ArgValue::Str(
+                p.trim().trim_matches('"').trim_matches('\'').to_string(),
+            ))
         }
-        _ => raw.parse::<f64>().ok().map(ArgValue::Num),
+        "unlit" => Ok(ArgValue::Bool(css_bool(raw)?)),
+        _ => css_number(raw).map(ArgValue::Num),
     }
+}
+
+/// `var(--x)` / `var(--x, fallback)` 文本替换。未定义且没有 fallback → 报错。
+fn var_substitute(raw: &str, customs: &HashMap<String, String>) -> Result<String, String> {
+    if !raw.contains("var(") {
+        return Ok(raw.to_string());
+    }
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(p) = rest.find("var(") {
+        out.push_str(&rest[..p]);
+        let after = &rest[p + 4..];
+        let bytes = after.as_bytes();
+        let mut depth = 1usize;
+        let mut j = 0usize;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return Err("unterminated var()".to_string());
+        }
+        let inner = &after[..j];
+        // fallback = 顶层第一个逗号之后的内容
+        let mut k = 0usize;
+        let mut d2 = 0usize;
+        let ib = inner.as_bytes();
+        while k < ib.len() {
+            match ib[k] {
+                b'(' => d2 += 1,
+                b')' => d2 = d2.saturating_sub(1),
+                b',' if d2 == 0 => break,
+                _ => {}
+            }
+            k += 1;
+        }
+        let (name, fallback) = if k < ib.len() {
+            (&inner[..k], Some(&inner[k + 1..]))
+        } else {
+            (inner, None)
+        };
+        let name = name.trim();
+        if !name.starts_with("--") {
+            return Err(format!("var({name}) must be a custom property (--name)"));
+        }
+        let value = match customs.get(name) {
+            Some(v) => v.clone(),
+            None => match fallback {
+                Some(f) => var_substitute(f.trim(), customs)?,
+                None => return Err(format!("var({name}) is not defined")),
+            },
+        };
+        out.push_str(&value);
+        rest = &after[j + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 // ---- scene builder ----
@@ -557,25 +1177,139 @@ fn translate4(t: [f64; 3]) -> [f64; 16] {
 }
 
 impl Builder {
-    fn material_for(
+    /// 元素的计算样式：先继承，再按级联叠加本元素命中的样式表声明与内联 prop。
+    /// 只继承材质键与自定义属性（`--*`），见 docs/css-conformance.md P2。
+    fn style_for(
         &self,
         el: &El,
-        mat: &HashMap<String, ArgValue>,
-    ) -> Result<cga_gpu::shading::Material, String> {
-        let mut merged: HashMap<String, ArgValue> = mat.clone();
-        for (k, v) in css_match(&self.rules, el) {
-            let key = k.trim_start_matches("--").to_string();
-            if let Some(val) = css_value_to_arg(&k, &v) {
-                merged.insert(key, val);
-            }
-        }
+        stack: &[Frame<'_>],
+        inherited: &HashMap<String, ArgValue>,
+    ) -> Result<HashMap<String, ArgValue>, String> {
+        let mut out: HashMap<String, ArgValue> = HashMap::new();
+        let mut customs: HashMap<String, String> = HashMap::new();
         for k in MATERIAL_KEYS {
-            if let Some(v) = el.props.get(k) {
-                merged.insert(k.to_string(), to_arg(v));
+            if let Some(v) = inherited.get(k) {
+                out.insert((*k).to_string(), v.clone());
             }
         }
+        for (k, v) in inherited {
+            if k.starts_with("--") {
+                out.insert(k.clone(), v.clone());
+                if let ArgValue::Str(s) = v {
+                    customs.insert(k.clone(), s.clone());
+                }
+            }
+        }
+
+        let mut pending: Vec<PendingDecl> = Vec::new();
+        for (order, rule) in self.rules.iter().enumerate() {
+            if !sel_matches(&rule.sel, stack) {
+                continue;
+            }
+            for d in &rule.decls {
+                // 未知属性静默忽略，与浏览器一致；已知属性取到坏值才会报错。
+                if !(d.name.starts_with("--") || MATERIAL_KEYS.contains(&d.name.as_str())) {
+                    continue;
+                }
+                let rank = cascade_rank(d.important, false);
+                let specificity = rule.sel.specificity;
+                let source = rule.sel.text.clone();
+                pending.push(PendingDecl {
+                    rank,
+                    specificity,
+                    order,
+                    key: d.name.clone(),
+                    source: source.clone(),
+                    value: PendingValue::Css(d.value.clone()),
+                });
+                // `--roughness` 这类：既是自定义属性，也作为材质键别名写入。
+                if let Some(alias) = d.name.strip_prefix("--") {
+                    if MATERIAL_KEYS.contains(&alias) {
+                        pending.push(PendingDecl {
+                            rank,
+                            specificity,
+                            order,
+                            key: alias.to_string(),
+                            source,
+                            value: PendingValue::Css(d.value.clone()),
+                        });
+                    }
+                }
+            }
+        }
+        for (order, k) in MATERIAL_KEYS.iter().enumerate() {
+            if let Some(v) = el.props.get(*k) {
+                pending.push(PendingDecl {
+                    rank: cascade_rank(false, true),
+                    specificity: Specificity::default(),
+                    order,
+                    key: (*k).to_string(),
+                    source: "<inline>".to_string(),
+                    value: PendingValue::Json(v.clone()),
+                });
+            }
+        }
+        pending.sort_by(|a, b| {
+            a.rank
+                .cmp(&b.rank)
+                .then(a.specificity.cmp(&b.specificity))
+                .then(a.order.cmp(&b.order))
+        });
+
+        // 1) 自定义属性先落地，供 var() 替换使用。
+        for d in &pending {
+            if !d.key.starts_with("--") {
+                continue;
+            }
+            let raw = match &d.value {
+                PendingValue::Css(s) => s.clone(),
+                PendingValue::Json(v) => prop_scalar(v).unwrap_or_default(),
+            };
+            let val = var_substitute(&raw, &customs)
+                .map_err(|e| css_err(&format!("{} {}", d.source, d.key), &e))?;
+            customs.insert(d.key.clone(), val);
+        }
+        for (k, v) in &customs {
+            out.insert(k.clone(), ArgValue::Str(v.clone()));
+        }
+
+        // 2) 常规声明。
+        let mut color_alpha: Option<f64> = None;
+        for d in &pending {
+            if d.key.starts_with("--") {
+                continue;
+            }
+            let value = match &d.value {
+                PendingValue::Json(v) => to_arg(v),
+                PendingValue::Css(raw) => {
+                    let raw = var_substitute(raw, &customs)
+                        .map_err(|e| css_err(&format!("{} {}", d.source, d.key), &e))?;
+                    if d.key == "color" {
+                        if let Ok((_, alpha)) = css_color(&raw) {
+                            color_alpha = Some(alpha);
+                        }
+                    }
+                    css_value(&d.key, &raw)
+                        .map_err(|e| css_err(&format!("{} {}", d.source, d.key), &e))?
+                }
+            };
+            out.insert(d.key.clone(), value);
+        }
+        // 颜色的 alpha 位（`#rrggbbaa` / `rgba()`）只有在元素没拿到 opacity 时才生效。
+        if let Some(alpha) = color_alpha {
+            if !out.contains_key("opacity") {
+                out.insert("opacity".to_string(), ArgValue::Num(alpha));
+            }
+        }
+        Ok(out)
+    }
+
+    fn build_material(
+        &self,
+        style: &HashMap<String, ArgValue>,
+    ) -> Result<cga_gpu::shading::Material, String> {
         self.loader
-            .build_material(&merged)
+            .build_material(style)
             .map_err(|e| e.replacen("build: ", "JSX: ", 1))
     }
 
@@ -620,9 +1354,39 @@ impl Builder {
         self.register_tags(&geo, world, world);
     }
 
-    fn walk(
+    /// 入口：压入位置帧、算出本元素的计算样式，再分派。
+    fn walk<'a>(
         &mut self,
-        el: &El,
+        cur: Frame<'a>,
+        stack: &mut Vec<Frame<'a>>,
+        ctx: [f64; 16],
+        mat: &HashMap<String, ArgValue>,
+        scene: &mut Scene,
+        cam: &mut Option<PerspectiveCamera>,
+    ) -> Result<(), String> {
+        stack.push(cur);
+        let r = self.walk_pushed(cur.el, stack, ctx, mat, scene, cam);
+        stack.pop();
+        r
+    }
+
+    fn walk_pushed<'a>(
+        &mut self,
+        el: &'a El,
+        stack: &mut Vec<Frame<'a>>,
+        ctx: [f64; 16],
+        mat: &HashMap<String, ArgValue>,
+        scene: &mut Scene,
+        cam: &mut Option<PerspectiveCamera>,
+    ) -> Result<(), String> {
+        let style = self.style_for(el, stack, mat)?;
+        self.walk_inner(el, stack, ctx, &style, scene, cam)
+    }
+
+    fn walk_inner<'a>(
+        &mut self,
+        el: &'a El,
+        stack: &mut Vec<Frame<'a>>,
         ctx: [f64; 16],
         mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
@@ -637,27 +1401,22 @@ impl Builder {
                         scene.background = parse_hex(&c)?;
                     }
                 }
-                for c in &el.children {
-                    self.walk(c, ctx, mat, scene, cam)?;
+                for (i, c) in el.children.iter().enumerate() {
+                    self.walk(Frame::new(c, i), stack, ctx, mat, scene, cam)?;
                 }
                 Ok(())
             }
             "translate" | "rotate" | "scale" | "mirror" => {
                 let m2 = mat4_mul(ctx, self.modifier_matrix(el)?);
-                for c in &el.children {
-                    self.walk(c, m2, mat, scene, cam)?;
+                for (i, c) in el.children.iter().enumerate() {
+                    self.walk(Frame::new(c, i), stack, m2, mat, scene, cam)?;
                 }
                 Ok(())
             }
             "material" => {
-                let mut merged = mat.clone();
-                for (k, v) in &el.props {
-                    if MATERIAL_KEYS.contains(&k.as_str()) {
-                        merged.insert(k.clone(), to_arg(v));
-                    }
-                }
-                for c in &el.children {
-                    self.walk(c, ctx, &merged, scene, cam)?;
+                // 自身的内联 prop 已经在 style 里（Inline 级），直接下传。
+                for (i, c) in el.children.iter().enumerate() {
+                    self.walk(Frame::new(c, i), stack, ctx, mat, scene, cam)?;
                 }
                 Ok(())
             }
@@ -674,7 +1433,7 @@ impl Builder {
                     "difference" => cga_core::CsgOp::Difference,
                     _ => cga_core::CsgOp::Intersection,
                 };
-                let material = self.material_for(el, mat)?;
+                let material = self.build_material(mat)?;
                 let geo = cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids));
                 self.emit(scene, geo, cga_core::mat4_identity(), material);
                 Ok(())
@@ -729,25 +1488,25 @@ impl Builder {
             "tag" => {
                 let name = p_str(el, "name")?.ok_or_else(|| "JSX: tag needs a name".to_string())?;
                 self.pending_tags.push((name, ctx));
-                for c in &el.children {
-                    self.walk(c, ctx, mat, scene, cam)?;
+                for (i, c) in el.children.iter().enumerate() {
+                    self.walk(Frame::new(c, i), stack, ctx, mat, scene, cam)?;
                 }
                 self.pending_tags.pop();
                 Ok(())
             }
-            "joint" => self.joint_el(el, ctx, mat, scene, cam),
+            "joint" => self.joint_el(el, stack, ctx, mat, scene, cam),
             "gear" => self.gear_el(el),
             "cam" => self.cam_el(el),
             "drill" => {
                 let (geo, w) = self.drill_cutter(el, ctx)?;
-                let material = self.material_for(el, mat)?;
+                let material = self.build_material(mat)?;
                 self.emit(scene, geo, w, material);
                 Ok(())
             }
             "instances" => {
                 let name = p_str(el, "of")?.ok_or_else(|| "JSX: instances needs of".to_string())?;
                 for inst in self.instances_of(&name)? {
-                    let material = self.material_for(el, mat)?;
+                    let material = self.build_material(mat)?;
                     self.emit(scene, inst.geo.clone(), inst.world, material);
                 }
                 Ok(())
@@ -758,8 +1517,8 @@ impl Builder {
                     p_num(el, "count")?.ok_or_else(|| "JSX: when needs count".to_string())?;
                 let n = self.tags.get(&of).map(|v| v.len()).unwrap_or(0);
                 if (n as f64 - count).abs() < 1e-9 {
-                    for c in &el.children {
-                        self.walk(c, ctx, mat, scene, cam)?;
+                    for (i, c) in el.children.iter().enumerate() {
+                        self.walk(Frame::new(c, i), stack, ctx, mat, scene, cam)?;
                     }
                 }
                 Ok(())
@@ -915,14 +1674,15 @@ impl Builder {
         scene: &mut Scene,
     ) -> Result<(), String> {
         let geo = self.build_geo(el)?;
-        let material = self.material_for(el, mat)?;
+        let material = self.build_material(mat)?;
         self.emit(scene, geo, ctx, material);
         Ok(())
     }
 
-    fn joint_el(
+    fn joint_el<'a>(
         &mut self,
-        el: &El,
+        el: &'a El,
+        stack: &mut Vec<Frame<'a>>,
         ctx: [f64; 16],
         mat: &HashMap<String, ArgValue>,
         scene: &mut Scene,
@@ -1086,8 +1846,8 @@ impl Builder {
             world,
         });
         self.joint_stack.push(name);
-        for c in &el.children {
-            self.walk(c, world, mat, scene, cam)?;
+        for (i, c) in el.children.iter().enumerate() {
+            self.walk(Frame::new(c, i), stack, world, mat, scene, cam)?;
         }
         self.joint_stack.pop();
         Ok(())
@@ -1659,16 +2419,24 @@ fn build_scene_run(
         Some(c) => parse_css(c)?,
         None => Vec::new(),
     };
-    // :root / scene 规则的 background
+    // 根作用域（`:root` / `scene`）规则的 background
     let mut scene = Scene::new(None);
-    for r in &rules {
-        if r.sel.scene {
-            for (k, v) in &r.props {
-                if k == "background" || k == "background-color" {
-                    if let Some(ArgValue::Num(c)) = css_value_to_arg(k, v) {
-                        scene.background = Color::from_hex(c as i32);
-                    }
-                }
+    let mut customs: HashMap<String, String> = HashMap::new();
+    for r in rules.iter().filter(|r| r.sel.scene_scope) {
+        for d in r.decls.iter().filter(|d| d.name.starts_with("--")) {
+            let v = var_substitute(&d.value, &customs)
+                .map_err(|e| css_err(&format!("{} {}", r.sel.text, d.name), &e))?;
+            customs.insert(d.name.clone(), v);
+        }
+    }
+    for r in rules.iter().filter(|r| r.sel.scene_scope) {
+        for d in &r.decls {
+            if d.name == "background" || d.name == "background-color" {
+                let raw = var_substitute(&d.value, &customs)
+                    .map_err(|e| css_err(&format!("{} {}", r.sel.text, d.name), &e))?;
+                let (hex, _) = css_color(&raw)
+                    .map_err(|e| css_err(&format!("{} {}", r.sel.text, d.name), &e))?;
+                scene.background = Color::from_hex(hex as i32);
             }
         }
     }
@@ -1683,8 +2451,10 @@ fn build_scene_run(
         rules,
         pose: pose.iter().cloned().collect(),
     };
+    let mut stack = Vec::new();
     b.walk(
-        &root,
+        Frame::new(&root, 0),
+        &mut stack,
         cga_core::mat4_identity(),
         &HashMap::new(),
         &mut scene,
@@ -2161,6 +2931,385 @@ export default (
             m.color
         );
         assert!((m.roughness - 0.25).abs() < 1e-9, "CSS roughness 未生效");
+    }
+
+    // ---- CSS 一致性测试：见 docs/css-conformance.md ----
+
+    fn hx(c: &Color) -> u32 {
+        ((c.r * 255.0).round() as u32) << 16
+            | ((c.g * 255.0).round() as u32) << 8
+            | (c.b * 255.0).round() as u32
+    }
+
+    /// objects: [0]=sphere(.a .b) [1]=box(.b) [2]=cylinder
+    const TREE: &str = r#"export default (
+  <scene>
+    <translate>
+      <sphere r={0.5} class="a b" />
+      <box s={[1, 1, 1]} class="b" />
+    </translate>
+    <cylinder r={0.2} h={1} />
+  </scene>
+);"#;
+
+    #[test]
+    fn test_css_combinators() {
+        let c = |css: &str| run_jsx(TREE, Some(css), "").expect("run");
+
+        // 后代选择器：以前 `div .c` 永远不命中。
+        let run = c("scene .a { color: #111111; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x111111);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0xFFFFFF);
+
+        // 子代选择器
+        let run = c("translate > .a { color: #222222; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x222222);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0xFFFFFF);
+
+        // 相邻兄弟
+        let run = c(".a + .b { color: #333333; }");
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x333333);
+        assert_ne!(hx(&run.scene.objects[0].material.color), 0x333333);
+
+        // 普通兄弟
+        let run = c(".a ~ * { color: #444444; }");
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x444444);
+        assert_ne!(hx(&run.scene.objects[0].material.color), 0x444444);
+
+        // 降级回最后一个 simple selector 的旧行为必须消失：`span .b` 不该命中。
+        let run = c(".b { color: #060606; }\nspan .b { color: #040404; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x060606);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x060606);
+
+        // 复合选择器：多类必须全部命中
+        let run = c(".a.b { color: #0E0E0E; }\n.b { color: #060606; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0E0E0E);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x060606);
+
+        // 通配符 + 类型选择器大小写不敏感
+        let run = c("SPHERE { color: #0F0F0F; }\n* { roughness: 0.75; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0F0F0F);
+        assert!((run.scene.objects[2].material.roughness - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_css_selector_table() {
+        // 每格只有一条规则；期望值按 TREE 的对象顺序：
+        // [0]=sphere(.a .b) [1]=box(.b) [2]=cylinder
+        let cases: &[(&str, [u32; 3])] = &[
+            (".a { color: #010101; }", [0x010101, 0xFFFFFF, 0xFFFFFF]),
+            (".b { color: #010101; }", [0x010101, 0x010101, 0xFFFFFF]),
+            (".a.b { color: #010101; }", [0x010101, 0xFFFFFF, 0xFFFFFF]),
+            (".a.c { color: #010101; }", [0xFFFFFF; 3]),
+            (".b.b { color: #010101; }", [0x010101, 0x010101, 0xFFFFFF]),
+            ("sphere { color: #010101; }", [0x010101, 0xFFFFFF, 0xFFFFFF]),
+            ("SPHERE { color: #010101; }", [0x010101, 0xFFFFFF, 0xFFFFFF]),
+            ("* { color: #010101; }", [0x010101; 3]),
+            (
+                "sphere.a { color: #010101; }",
+                [0x010101, 0xFFFFFF, 0xFFFFFF],
+            ),
+            ("box.b { color: #010101; }", [0xFFFFFF, 0x010101, 0xFFFFFF]),
+            ("scene { color: #010101; }", [0x010101; 3]),
+            (":root { color: #010101; }", [0x010101; 3]),
+            (
+                "scene .a { color: #010101; }",
+                [0x010101, 0xFFFFFF, 0xFFFFFF],
+            ),
+            ("scene > .a { color: #010101; }", [0xFFFFFF; 3]),
+            (
+                "scene > translate { color: #010101; }",
+                [0x010101, 0x010101, 0xFFFFFF],
+            ),
+            (
+                "scene > translate > .a { color: #010101; }",
+                [0x010101, 0xFFFFFF, 0xFFFFFF],
+            ),
+            (
+                "translate > .a { color: #010101; }",
+                [0x010101, 0xFFFFFF, 0xFFFFFF],
+            ),
+            (
+                "translate > .b { color: #010101; }",
+                [0x010101, 0x010101, 0xFFFFFF],
+            ),
+            (
+                "translate .b { color: #010101; }",
+                [0x010101, 0x010101, 0xFFFFFF],
+            ),
+            (
+                "translate > sphere { color: #010101; }",
+                [0x010101, 0xFFFFFF, 0xFFFFFF],
+            ),
+            ("translate > translate { color: #010101; }", [0xFFFFFF; 3]),
+            (
+                ".a + .b { color: #010101; }",
+                [0xFFFFFF, 0x010101, 0xFFFFFF],
+            ),
+            (
+                ".a ~ .b { color: #010101; }",
+                [0xFFFFFF, 0x010101, 0xFFFFFF],
+            ),
+            (".b + * { color: #010101; }", [0xFFFFFF, 0x010101, 0xFFFFFF]),
+            (".b ~ * { color: #010101; }", [0xFFFFFF, 0x010101, 0xFFFFFF]),
+            ("cylinder + * { color: #010101; }", [0xFFFFFF; 3]),
+            (".a > .b { color: #010101; }", [0xFFFFFF; 3]),
+            (".a .b { color: #010101; }", [0xFFFFFF; 3]),
+            (
+                "[class] { color: #010101; }",
+                [0x010101, 0x010101, 0xFFFFFF],
+            ),
+            (
+                "[class=\"b\"] { color: #010101; }",
+                [0xFFFFFF, 0x010101, 0xFFFFFF],
+            ),
+            ("#nope { color: #010101; }", [0xFFFFFF; 3]),
+        ];
+        for (css, want) in cases {
+            let run = run_jsx(TREE, Some(css), "").unwrap_or_else(|e| panic!("css={css}: {e}"));
+            let got = [
+                hx(&run.scene.objects[0].material.color),
+                hx(&run.scene.objects[1].material.color),
+                hx(&run.scene.objects[2].material.color),
+            ];
+            assert_eq!(got, *want, "css={css}");
+        }
+    }
+
+    #[test]
+    fn test_css_attribute_selector() {
+        let src = r#"export default <sphere r={1} id="s1" />;"#;
+        let run = run_jsx(src, Some("[id=\"s1\"] { color: #0D0D0D; }"), "").expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
+        let run = run_jsx(src, Some("[id=\"other\"] { color: #0D0D0D; }"), "").expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0xFFFFFF);
+        let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "").unwrap_err();
+        assert!(e.contains("unsupported attribute"), "{e}");
+    }
+
+    #[test]
+    fn test_css_selector_list_split() {
+        // 选择器列表按顶层逗号切：`[class="a,b"]` 里的逗号不能当分隔符。
+        let src = r#"export default <sphere r={1} class="a,b" />;"#;
+        let run = run_jsx(src, Some("[class=\"a,b\"], #zz { color: #0D0D0D; }"), "").expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
+        // 尾逗号 → 空选择器，必须报错而不是被吞掉。
+        let e = run_jsx(src, Some(".a, { color: red; }"), "").unwrap_err();
+        assert!(e.contains("CSS:"), "{e}");
+    }
+
+    #[test]
+    fn test_css_root_scope_only() {
+        // `:root` 只命中根：写在后面的 :root 规则不能覆盖子元素的 .b。
+        let run = run_jsx(
+            TREE,
+            Some(".b { color: #060606; }\n:root { background: #2B3138; color: #777777; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.background), 0x2B3138);
+        // box 命中 .b：后写的 :root 规则不能跨过特异性把它覆盖掉
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x060606);
+        // cylinder 没有自己的规则 → 从根继承 color
+        assert_eq!(hx(&run.scene.objects[2].material.color), 0x777777);
+    }
+
+    #[test]
+    fn test_css_cascade_order() {
+        let with_id = r#"export default <sphere r={1} class="b" id="s1" />;"#;
+        // 特异性：#id > .class
+        let run = run_jsx(
+            with_id,
+            Some(".b { color: #060606; }\n#s1 { color: #0A0A0A; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0A0A0A);
+
+        // !important 跨规则压过更高特异性
+        let run = run_jsx(
+            with_id,
+            Some(".b { color: #060606 !important; }\n#s1 { color: #0A0A0A; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x060606);
+
+        // 内联 prop > 样式表普通声明
+        let run = run_jsx(
+            r#"export default <sphere r={1} class="b" color={0x0B0B0B} />;"#,
+            Some(".b { color: #060606; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0B0B0B);
+
+        // 样式表 !important > 内联普通声明
+        let run = run_jsx(
+            r#"export default <sphere r={1} class="b" color={0x0B0B0B} />;"#,
+            Some(".b { color: #060606 !important; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x060606);
+
+        // 级联矩阵的其余格子
+        let src = r#"export default <sphere r={1} class="c" />;"#;
+        let one =
+            |css: &str| run_jsx(src, Some(css), "").unwrap_or_else(|e| panic!("css={css}: {e}"));
+        let color = |run: &crate::SceneRun| hx(&run.scene.objects[0].material.color);
+
+        // .class > tag
+        assert_eq!(
+            color(&one("sphere { color: #010101; }\n.c { color: #020202; }")),
+            0x020202
+        );
+        // tag > *
+        assert_eq!(
+            color(&one("* { color: #010101; }\nsphere { color: #020202; }")),
+            0x020202
+        );
+        // 同特异性 → 源码顺序（后写胜）
+        assert_eq!(
+            color(&one(".c { color: #010101; }\n.c { color: #020202; }")),
+            0x020202
+        );
+        // 同 important 同特异性 → 仍看源码顺序
+        assert_eq!(
+            color(&one(
+                ".c { color: #010101 !important; }\n.c { color: #020202 !important; }"
+            )),
+            0x020202
+        );
+        // !important 压过其后的普通规则
+        assert_eq!(
+            color(&one(
+                ".c { color: #010101 !important; }\n.c { color: #020202; }"
+            )),
+            0x010101
+        );
+        // #id !important > .class !important
+        let with_id = r#"export default <sphere r={1} class="c" id="s1" />;"#;
+        let run = run_jsx(
+            with_id,
+            Some(".c { color: #010101 !important; }\n#s1 { color: #020202 !important; }"),
+            "",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x020202);
+    }
+
+    #[test]
+    fn test_css_values() {
+        let src = |cls: &str| format!("export default <sphere r={{1}} class=\"{cls}\" />;");
+        let run_one = |cls: &str, css: &str| run_jsx(&src(cls), Some(css), "").expect("run");
+
+        let run = run_one("c", ".c { color: rgb(255, 0, 0); }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0xFF0000);
+
+        let run = run_one("c", ".c { color: hsl(120, 100%, 50%); }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x00FF00);
+
+        let run = run_one("c", ".c { color: navy; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x000080);
+
+        let run = run_one("c", ".c { color: hwb(120 0% 0%); }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x00FF00);
+
+        let run = run_one("c", ".c { color: #00f; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x0000FF);
+
+        // transparent → RGB 全 0 + alpha 0
+        let run = run_one("c", ".c { color: transparent; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x000000);
+        assert!(run.scene.objects[0].material.opacity.abs() < 1e-9);
+
+        // 八位十六进制的 alpha → opacity（该元素没有显式 opacity 时）
+        let run = run_one("c", ".c { color: #ff000080; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0xFF0000);
+        assert!(
+            (run.scene.objects[0].material.opacity - 128.0 / 255.0).abs() < 1e-6,
+            "alpha 未生效: {}",
+            run.scene.objects[0].material.opacity
+        );
+
+        // 百分比按 0–1 的键折算
+        let run = run_one("c", ".c { opacity: 50%; roughness: 25%; }");
+        assert!((run.scene.objects[0].material.opacity - 0.5).abs() < 1e-9);
+        assert!((run.scene.objects[0].material.roughness - 0.25).abs() < 1e-9);
+
+        // 关键字
+        let run = run_one("c", ".c { unlit: true; }");
+        assert_eq!(
+            run.scene.objects[0].material.kind,
+            cga_gpu::shading::MaterialKind::Basic
+        );
+
+        // var() 替换 + fallback
+        let run = run_one(
+            "c",
+            ":root { --brand: #123456; }\n.c { color: var(--brand); }",
+        );
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x123456);
+        let run = run_one("c", ".c { color: var(--nope, #654321); }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x654321);
+
+        // `--x` 作为材质键别名
+        let run = run_one("c", ".c { --roughness: 0.3; }");
+        assert!((run.scene.objects[0].material.roughness - 0.3).abs() < 1e-9);
+
+        // 未知属性静默忽略（浏览器行为）
+        let run = run_one("c", ".c { color: #135790; width: 10px; }");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x135790);
+    }
+
+    #[test]
+    fn test_css_value_errors() {
+        let src = r#"export default <sphere r={1} class="c" />;"#;
+        let e = run_jsx(src, Some(".c { roughness: blorble; }"), "").unwrap_err();
+        assert!(e.contains("CSS:") && e.contains("blorble"), "{e}");
+        let e = run_jsx(src, Some(".c { roughness: 2px; }"), "").unwrap_err();
+        assert!(e.contains("CSS:") && e.contains("unit"), "{e}");
+        let e = run_jsx(src, Some(".c { color: var(--missing); }"), "").unwrap_err();
+        assert!(e.contains("CSS:") && e.contains("--missing"), "{e}");
+        let e = run_jsx(src, Some(".c { color: currentcolor; }"), "").unwrap_err();
+        assert!(e.contains("CSS:") && e.contains("not supported"), "{e}");
+        let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "").unwrap_err();
+        assert!(e.contains("CSS:") && e.contains("calc"), "{e}");
+    }
+
+    #[test]
+    fn test_css_unsupported_constructs_error() {
+        let src = r#"export default <sphere r={1} class="c" />;"#;
+        let cases: &[(&str, &str)] = &[
+            ("a:hover { color: red; }", "pseudo-class :hover"),
+            ("a::before { content: \"x\"; }", "pseudo-element"),
+            ("@media (min-width: 100px) { .c { color: red; } }", "@media"),
+            ("@import url(\"other.css\");", "@import"),
+            ("@keyframes spin { from { opacity: 1; } }", "@keyframes"),
+        ];
+        for (css, want) in cases {
+            let e = run_jsx(src, Some(css), "").unwrap_err();
+            assert!(e.contains("CSS:") && e.contains(want), "css={css} err={e}");
+        }
+        // 嵌套规则：lightningcss 能解析，但我们不支持 → 必须报错而不是静默丢弃。
+        let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "").unwrap_err();
+        assert!(e.contains("CSS:"), "{e}");
+    }
+
+    #[test]
+    fn test_css_inherits_through_containers() {
+        let src = r#"export default (
+  <scene>
+    <material class="tint">
+      <sphere r={1} />
+      <box s={[1, 1, 1]} />
+    </material>
+  </scene>
+);"#;
+        let run = run_jsx(src, Some(".tint { color: #223344; }"), "").expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x223344);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x223344);
     }
 
     #[test]

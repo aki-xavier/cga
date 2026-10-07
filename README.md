@@ -87,7 +87,7 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
    make test
    ```
 
-   Result: all 179 tests pass.
+   Result: all 189 tests pass.
 
 2. Render the smoke scene:
 
@@ -111,11 +111,11 @@ Note: the first build compiles the MLX C++ core once. Later builds use the cache
 | **Render engine** | three.js naming: Scene / PerspectiveCamera / Object / Sphere·Plane·Cylinder·Box·Circle Geometry / Standard Material / Ambient·Directional·Point Light / Renderer.render / OrbitControls. Object = blade. Transform = motor conjugation. `Renderer::new(w, h, aa, n)` supersampling. |
 | **Complex modeling** | **CSG**: recursive true booleans (crossings/contains solid protocol). **Affine extension**: scale/mirror ray inverse transform + Newton polar decomposition. **New primitives**: cone/torus (`arc<2π` gives a tube arc-pipe)/ellipsoid/cyclide. No triangle meshes as scene representation: every solid is an analytic primitive or a CSG of them. Triangles appear only on export (STL / URDF mesh links). |
 | **MLX GPU** | Per-pixel vectorized analytic intersection. One kernel batch per full-resolution frame (mlx-rs / Metal). Camera space: X right, Y down, Z forward. |
-| **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `SceneRun`. See `docs/jsx-css-host.md`. |
+| **JSX+CSS host** | React-style authoring: `.jsx` scenes (boa executes real JS; swc compiles JSX) + `.css` material sheets (lightningcss). Lands on the same `SceneRun`. See `docs/jsx-css-host.md`; the CSS conformance plan and its outcome are in `docs/css-conformance.md`. |
 
 ## Scene authoring: JSX + CSS (React style)
 
-Scenes are `.jsx` files with a `.css` material sheet. Real JavaScript runs (function components, `map`, ternaries, `Math`); JSX elements map to scene elements; CSS rules apply materials by tag/class/id. See `docs/jsx-css-host.md` for the mapping table and boundaries.
+Scenes are `.jsx` files with a `.css` material sheet. Real JavaScript runs (function components, `map`, ternaries, `Math`); JSX elements map to scene elements; CSS applies materials with **real selector matching** (`.class`, `#id`, `[attr]`, `*`, tag, `:root`, and the `>`/`+`/`~`/descendant combinators), **explicit cascade** (specificity → source order, with `!important` above inline props), **inheritance** from ancestors for material keys and `--*` variables, and `var()` substitution. Unsupported constructs (interactive pseudo-classes, pseudo-elements, `@`-rules, CSS nesting, `calc()`, values with units) **error with the original text** instead of silently degrading; unknown property names stay silently ignored, as in a browser. See `docs/jsx-css-host.md` for the mapping table and boundaries, and `docs/css-conformance.md` for the full conformance record.
 
 Scene example (`examples/jsx/orbit.jsx`):
 
@@ -374,7 +374,7 @@ crates/
     export / urdf           STL export (bake → binary/ASCII) + URDF export (mesh links, export only)
   cga-examples/             demo CLIs (src/bin/*.rs)
 examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; lang is the generation-pipeline showcase)
-docs/                       architecture diagram, robotics diagram, cross-platform plan
+docs/                       architecture diagram, robotics diagram, cross-platform plan, CSS conformance plan
 ```
 
 Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
@@ -396,7 +396,7 @@ Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
 
 ## Quality
 
-- `make test`: **all 179 tests pass** (cga-core 44 + cga-gpu 82 + cga-host 53, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, baked-mesh watertightness/volume/topology, the JSX+CSS host (gallery smoke, components, control flow, CSS materials, joints/gear, solve, pose, frozen render goldens), the embedded React runtime (hooks/context/memo/keys, partial updates, effect ordering, unmount cleanup, determinism, author-error reporting), the two render modes (IgnoreOpacity is a bitwise no-op without transparency; refraction and transparent-occluder shadows differ), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export, STL export (binary/ASCII layout, non-solid skipping, world-space placement), scene reports.
+- `make test`: **all 189 tests pass** (cga-core 44 + cga-gpu 82 + cga-host 63, no `#[ignore]`). Coverage: algebraic identities, primitive incidence predicates, versor exp-log round trips, anti-aliasing, quantitative engine rendering, CSG, affine, new primitives, cyclide, certified f64 fallback for the f32 crossing guards (sphere/cylinder/cone/ellipsoid discriminants, torus/cyclide quartics, near-parallel planes), scale-relative CSG UV probes, the degenerate-case library + interval classification + certifiable root-finding, baked-mesh watertightness/volume/topology, the JSX+CSS host (gallery smoke, components, control flow, the CSS conformance suite — 31-case selector table, cascade matrix, value conversion, error contract — plus joints/gear, solve, pose, frozen render goldens), the embedded React runtime (hooks/context/memo/keys, partial updates, effect ordering, unmount cleanup, determinism, author-error reporting), the two render modes (IgnoreOpacity is a bitwise no-op without transparency; refraction and transparent-occluder shadows differ), the builder layer (geometry/material/validation), joints (P1 six-type poses and nesting, P2 gear coupling, P3 cam contact solving, P1.1 rpy frames, P4 pose overrides), URDF export, STL export (binary/ASCII layout, non-solid skipping, world-space placement), scene reports.
 - Render goldens are written to `artifacts/tests/` (gitignored). The sphere/cone/ellipsoid/cyclide/torus/textured_box/csg goldens have **RMSE = 0**.
 
 ## License

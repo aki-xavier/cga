@@ -27,7 +27,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - 场景 = 文件末尾的 `export default <element>`。
 - 内置元素 PascalCase 或全小写均可（`<Sphere r={1}/>` ≡ `<sphere r={1}/>`）。
 - 组件就是 React 组件（首字母大写）：hooks、`memo`、`Fragment`、`key` 都可用。模块只求值一次，组件身份跨帧稳定，因此 hook 状态得以保留。
-- CSS 只认单层选择器（tag / `.class` / `#id` / `:root` / `scene`），材质属性沿元素树继承，内联 prop 优先于 CSS 规则，CSS 按源码顺序级联。
+- CSS 是真匹配 + 真级联：选择器支持 `.class` / `#id` / `[attr]` / `*` / tag / `:root` 与后代、子代 `>`、相邻 `+`、普通 `~` 四类组合器，按「`!important`/内联层级 → 特异性 → 源码顺序」级联；材质键与 `--*` 变量沿元素树继承，`var(--x, fallback)` 在取值前文本替换。不支持的构造（交互伪类、伪元素、`@` 规则、CSS 嵌套、`calc()`、带单位的数值）报错并带原文，未知属性名静默忽略（与浏览器一致）。能力面、差距清单与阶段验收的完整记录见 `docs/css-conformance.md`。
 - `import './x.css'` 由宿主跟随装载；其他 import 报错。
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
@@ -68,7 +68,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 
 运动副也可用 **React 组件**写法：`Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed`（低副，`<joint type=…>` 的别名）与 `Gear`/`Cam`（高副）。它们定义在 `assets/kinematics-pairs.js`（随预置一起注入），只是把类型写进组件名、再展开成同样的 `{t:'joint'|'gear'|'cam'}` 节点，因此**代数核心与求解仍在 Rust**（`scene_build/kinematics.rs`），报告 / URDF / pose 覆盖不受影响。`q` 在 1-DOF 关节是数字、在多 DOF 关节是数组（cylindrical `[qr,qp]`，spherical / planar 三个数）。生成器 `jsx_gen::gen_pairs_showcase()` 一次输出全部 8 种关节 + 齿轮/凸轮高副（见 `demo_pairs`）。
 
-v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合选择器。需要时各自单独立项。
+v1 边界（显式不做）：`dist()` 查询、`echo`；CSS 侧的布局/盒模型、伪元素、交互伪类、`@` 规则（`@media` / `@import` / `@keyframes` 等）、CSS 嵌套、`calc()` 与数学函数、`style={{…}}`（用 JSX prop 承担）。需要时各自单独立项。CSS 的差距清单与已实施的收敛记录见 `docs/css-conformance.md`。
 
 **透明度与渲染模式**：材质的 `opacity`/`ior`/`absorption` 在**正常模式**下驱动 Whitted 反射/折射（`opacity<1` 的表面发射次级光线），半透明遮挡物按 `1-opacity` 削弱阴影；**忽略透明度模式**（`RenderMode::IgnoreOpacity`）把一切当不透明——不发射次级光线、透明遮挡物按实心投影，用于实体预览与提速。两种模式在不含透明度的场景上输出**逐位一致**（有测试看守）。
 
@@ -80,7 +80,7 @@ v1 边界（显式不做）：`dist()` 查询、`echo`、CSS 后代/子代组合
 - React 运行时测试：hooks 求值、局部更新计数、keyed 身份稳定、effect 依赖与清理顺序、卸载清理、同输入同输出、作者错误（语法/运行时）回传。
 - 多帧/事件测试：`SceneSession` 输入变化只让消费者平移（create=0、恰好 1 个对象移动）、`onClick` 派发使状态跨三帧累积（create=0）、同输入序列同输出。
 - 组件 + hooks（状态/记忆/上下文/副作用）+ `map` + 三元控制流出 4 个对象。
-- CSS 类命中材质（color/roughness 断言）。
+- CSS 验收（`test_css_*`，全集见 `docs/css-conformance.md` §8）：31 行选择器匹配表（复合多类 / 四类组合器 / `*` / `[attr]` / `:root` 根限定 / tag 大小写 / 组合链）、10 格级联矩阵（`#id` > `.class` > `tag` > `*`、源码顺序、`!important` 跨规则与压过内联普通声明）、值转换（`rgb`/`hsl`/具名/hex/八位 hex → opacity、百分比、`var()` 与 fallback、`--x` 别名、未知属性静默）、错误契约（`@` 规则、CSS 嵌套、伪类/伪元素、不支持的值与单位、缺失变量）、以及父规则声明向子几何的继承。
 - JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。
 - 多 DOF 关节的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种关节 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
