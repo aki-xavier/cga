@@ -5,7 +5,6 @@ edition = "2021"
 description = "Conformal Geometric Algebra (CGA) core, pure f64 CPU."
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["gif"] }
 
 [lints]
 workspace = true

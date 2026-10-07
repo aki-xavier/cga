@@ -1,4 +1,4 @@
-use crate::{
+use cga_core::{
     AffineParams, BoxParams, ConeParams, CsgOp, CyclideParams, CylinderParams, EllipsoidParams,
     GeometryParams, PlaneParams, SphereParams, TorusParams,
 };
@@ -121,8 +121,16 @@ fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
     }
 }
 
-impl GeometryParams {
-    pub fn field(&self, x: [f64; 3]) -> f64 {
+/// 几何的网格化扩展（bake/field/bounds）。孤儿规则：这些曾是 `GeometryParams`
+/// 的固有方法，拆出 cga-core 后改成扩展 trait——调用语法不变（`params.bake(step)`）。
+pub trait BakeExt {
+    fn field(&self, x: [f64; 3]) -> f64;
+    fn bounds(&self) -> Option<[[f64; 3]; 2]>;
+    fn bake(&self, step: f64) -> Result<BakedMesh, String>;
+}
+
+impl BakeExt for GeometryParams {
+    fn field(&self, x: [f64; 3]) -> f64 {
         match self {
             GeometryParams::SphereParams(p) => sphere_field(*p, x),
             GeometryParams::PlaneParams(p) => plane_field(*p, x),
@@ -136,6 +144,170 @@ impl GeometryParams {
             GeometryParams::CsgParams(p) => csg_field(p.op, &p.children, x),
             GeometryParams::CircleParams(_) => panic!("circle is not a solid (no field)"),
         }
+    }
+
+    fn bounds(&self) -> Option<[[f64; 3]; 2]> {
+        match self {
+            GeometryParams::SphereParams(p) => Some([
+                [p.c[0] - p.r, p.c[1] - p.r, p.c[2] - p.r],
+                [p.c[0] + p.r, p.c[1] + p.r, p.c[2] + p.r],
+            ]),
+            GeometryParams::PlaneParams(_) => None,
+            GeometryParams::CylinderParams(p) => {
+                if p.h < 0.0 {
+                    return None;
+                }
+                let mut lo = [0.0; 3];
+                let mut hi = [0.0; 3];
+                for i in 0..3 {
+                    let e = p.u[i].abs() * p.h + p.r;
+                    lo[i] = p.q[i] - e;
+                    hi[i] = p.q[i] + e;
+                }
+                Some([lo, hi])
+            }
+            GeometryParams::BoxParams(p) => {
+                let mut lo = [0.0; 3];
+                let mut hi = [0.0; 3];
+                for i in 0..3 {
+                    let mut e = 0.0;
+                    for j in 0..3 {
+                        e += p.axes[j][i].abs() * p.half[j];
+                    }
+                    lo[i] = p.c[i] - e;
+                    hi[i] = p.c[i] + e;
+                }
+                Some([lo, hi])
+            }
+            GeometryParams::ConeParams(p) => Some(corners_bounds(
+                [-p.r, -p.r, -p.h / 2.0],
+                [p.r, p.r, p.h / 2.0],
+                &p.a_fwd,
+            )),
+            GeometryParams::TorusParams(p) => {
+                let e = p.major + p.minor;
+                Some(corners_bounds(
+                    [-e, -e, -p.minor],
+                    [e, e, p.minor],
+                    &p.a_fwd,
+                ))
+            }
+            GeometryParams::EllipsoidParams(p) => {
+                Some(corners_bounds([-1.0; 3], [1.0; 3], &p.a_fwd))
+            }
+            GeometryParams::CyclideParams(p) => {
+                let r = p.d + p.c;
+                Some(corners_bounds(
+                    [p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r],
+                    [p.shift[0] + p.a + r, p.shift[1] + p.b + r, p.shift[2] + r],
+                    &p.a_fwd,
+                ))
+            }
+            GeometryParams::CsgParams(p) => {
+                let bs: Vec<_> = p.children.iter().map(|c| c.bounds()).collect();
+                if p.op == CsgOp::Difference {
+                    return bs.into_iter().next().unwrap_or(None);
+                }
+                if p.op == CsgOp::Union {
+                    union_bounds(&bs)
+                } else {
+                    intersect_bounds(&bs)
+                }
+            }
+            GeometryParams::AffineParams(p) => {
+                let b = p.inner.bounds()?;
+                Some(corners_bounds(b[0], b[1], &p.a_fwd))
+            }
+            GeometryParams::CircleParams(_) => None,
+        }
+    }
+
+    fn bake(&self, step: f64) -> Result<BakedMesh, String> {
+        if !(step > 0.0) || !step.is_finite() {
+            return Err(format!("bake: bad step {step}"));
+        }
+        match self {
+            GeometryParams::CircleParams(_) => return Err("bake: circle is not a solid".into()),
+            _ => {}
+        }
+        let [lo, hi] = self
+            .bounds()
+            .ok_or("bake: unbounded geometry (plane/infinite)")?;
+        // Pad by half a cell on every side: with tight bounds the surface
+        // would otherwise sit exactly on the outer grid nodes (v == 0), the
+        // systematically degenerate configuration for cell classification.
+        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+        let mut nx = (span[0] / step).ceil().max(1.0) as usize;
+        let mut ny = (span[1] / step).ceil().max(1.0) as usize;
+        let mut nz = (span[2] / step).ceil().max(1.0) as usize;
+        let lo = [
+            lo[0] - 0.5 * span[0] / nx as f64,
+            lo[1] - 0.5 * span[1] / ny as f64,
+            lo[2] - 0.5 * span[2] / nz as f64,
+        ];
+        let hi = [
+            hi[0] + 0.5 * span[0] / nx as f64,
+            hi[1] + 0.5 * span[1] / ny as f64,
+            hi[2] + 0.5 * span[2] / nz as f64,
+        ];
+        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+        nx = (span[0] / step).ceil().max(1.0) as usize;
+        ny = (span[1] / step).ceil().max(1.0) as usize;
+        nz = (span[2] / step).ceil().max(1.0) as usize;
+        let nodes = (nx + 1).saturating_mul(ny + 1).saturating_mul(nz + 1);
+        if nodes > MAX_BAKE_NODES {
+            return Err(format!(
+            "bake: grid {nx}x{ny}x{nz} ({nodes} nodes) exceeds limit {MAX_BAKE_NODES}; raise step"
+        ));
+        }
+        let dx = (hi[0] - lo[0]) / nx as f64;
+        let dy = (hi[1] - lo[1]) / ny as f64;
+        let dz = (hi[2] - lo[2]) / nz as f64;
+        let at = |i: usize, j: usize, k: usize| {
+            [
+                lo[0] + dx * i as f64,
+                lo[1] + dy * j as f64,
+                lo[2] + dz * k as f64,
+            ]
+        };
+        let mut vals = vec![0.0f64; nodes];
+        for k in 0..=nz {
+            for j in 0..=ny {
+                for i in 0..=nx {
+                    vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = self.field(at(i, j, k));
+                }
+            }
+        }
+        // Export may not abstain (§3.1 of the robustness plan): every grid
+        // node must have a decided sign before any cell is emitted.
+        if let Some(bad) = vals.iter().position(|v| !v.is_finite()) {
+            return Err(format!(
+                "bake: non-finite field value at grid node {bad} (undecidable corner)"
+            ));
+        }
+        let val = |i: usize, j: usize, k: usize| vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i];
+        let mut mesh = BakedMesh::default();
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let mut cp = [[0.0; 3]; 8];
+                    let mut cv = [0.0; 8];
+                    for (c, &[ox, oy, oz]) in CORN.iter().enumerate() {
+                        let (ii, jj, kk) = (i + ox, j + oy, k + oz);
+                        cp[c] = at(ii, jj, kk);
+                        cv[c] = val(ii, jj, kk);
+                    }
+                    for tet in &TETS {
+                        let p = [cp[tet[0]], cp[tet[1]], cp[tet[2]], cp[tet[3]]];
+                        let v = [cv[tet[0]], cv[tet[1]], cv[tet[2]], cv[tet[3]]];
+                        polygonize_tet(&mut mesh.vertices, &mut mesh.faces, p, v);
+                    }
+                }
+            }
+        }
+        mesh.weld();
+        orient_outward(&mut mesh, self);
+        Ok(mesh)
     }
 }
 
@@ -212,84 +384,6 @@ fn intersect_bounds(list: &[Option<[[f64; 3]; 2]>]) -> Option<[[f64; 3]; 2]> {
         });
     }
     out
-}
-
-impl GeometryParams {
-    pub fn bounds(&self) -> Option<[[f64; 3]; 2]> {
-        match self {
-            GeometryParams::SphereParams(p) => Some([
-                [p.c[0] - p.r, p.c[1] - p.r, p.c[2] - p.r],
-                [p.c[0] + p.r, p.c[1] + p.r, p.c[2] + p.r],
-            ]),
-            GeometryParams::PlaneParams(_) => None,
-            GeometryParams::CylinderParams(p) => {
-                if p.h < 0.0 {
-                    return None;
-                }
-                let mut lo = [0.0; 3];
-                let mut hi = [0.0; 3];
-                for i in 0..3 {
-                    let e = p.u[i].abs() * p.h + p.r;
-                    lo[i] = p.q[i] - e;
-                    hi[i] = p.q[i] + e;
-                }
-                Some([lo, hi])
-            }
-            GeometryParams::BoxParams(p) => {
-                let mut lo = [0.0; 3];
-                let mut hi = [0.0; 3];
-                for i in 0..3 {
-                    let mut e = 0.0;
-                    for j in 0..3 {
-                        e += p.axes[j][i].abs() * p.half[j];
-                    }
-                    lo[i] = p.c[i] - e;
-                    hi[i] = p.c[i] + e;
-                }
-                Some([lo, hi])
-            }
-            GeometryParams::ConeParams(p) => Some(corners_bounds(
-                [-p.r, -p.r, -p.h / 2.0],
-                [p.r, p.r, p.h / 2.0],
-                &p.a_fwd,
-            )),
-            GeometryParams::TorusParams(p) => {
-                let e = p.major + p.minor;
-                Some(corners_bounds(
-                    [-e, -e, -p.minor],
-                    [e, e, p.minor],
-                    &p.a_fwd,
-                ))
-            }
-            GeometryParams::EllipsoidParams(p) => {
-                Some(corners_bounds([-1.0; 3], [1.0; 3], &p.a_fwd))
-            }
-            GeometryParams::CyclideParams(p) => {
-                let r = p.d + p.c;
-                Some(corners_bounds(
-                    [p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r],
-                    [p.shift[0] + p.a + r, p.shift[1] + p.b + r, p.shift[2] + r],
-                    &p.a_fwd,
-                ))
-            }
-            GeometryParams::CsgParams(p) => {
-                let bs: Vec<_> = p.children.iter().map(|c| c.bounds()).collect();
-                if p.op == CsgOp::Difference {
-                    return bs.into_iter().next().unwrap_or(None);
-                }
-                if p.op == CsgOp::Union {
-                    union_bounds(&bs)
-                } else {
-                    intersect_bounds(&bs)
-                }
-            }
-            GeometryParams::AffineParams(p) => {
-                let b = p.inner.bounds()?;
-                Some(corners_bounds(b[0], b[1], &p.a_fwd))
-            }
-            GeometryParams::CircleParams(_) => None,
-        }
-    }
 }
 
 const CORN: [[usize; 3]; 8] = [
@@ -677,100 +771,10 @@ fn orient_outward(mesh: &mut BakedMesh, params: &GeometryParams) {
 
 pub const MAX_BAKE_NODES: usize = 6_000_000;
 
-impl GeometryParams {
-    pub fn bake(&self, step: f64) -> Result<BakedMesh, String> {
-        if !(step > 0.0) || !step.is_finite() {
-            return Err(format!("bake: bad step {step}"));
-        }
-        match self {
-            GeometryParams::CircleParams(_) => return Err("bake: circle is not a solid".into()),
-            _ => {}
-        }
-        let [lo, hi] = self
-            .bounds()
-            .ok_or("bake: unbounded geometry (plane/infinite)")?;
-        // Pad by half a cell on every side: with tight bounds the surface
-        // would otherwise sit exactly on the outer grid nodes (v == 0), the
-        // systematically degenerate configuration for cell classification.
-        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
-        let mut nx = (span[0] / step).ceil().max(1.0) as usize;
-        let mut ny = (span[1] / step).ceil().max(1.0) as usize;
-        let mut nz = (span[2] / step).ceil().max(1.0) as usize;
-        let lo = [
-            lo[0] - 0.5 * span[0] / nx as f64,
-            lo[1] - 0.5 * span[1] / ny as f64,
-            lo[2] - 0.5 * span[2] / nz as f64,
-        ];
-        let hi = [
-            hi[0] + 0.5 * span[0] / nx as f64,
-            hi[1] + 0.5 * span[1] / ny as f64,
-            hi[2] + 0.5 * span[2] / nz as f64,
-        ];
-        let span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
-        nx = (span[0] / step).ceil().max(1.0) as usize;
-        ny = (span[1] / step).ceil().max(1.0) as usize;
-        nz = (span[2] / step).ceil().max(1.0) as usize;
-        let nodes = (nx + 1).saturating_mul(ny + 1).saturating_mul(nz + 1);
-        if nodes > MAX_BAKE_NODES {
-            return Err(format!(
-            "bake: grid {nx}x{ny}x{nz} ({nodes} nodes) exceeds limit {MAX_BAKE_NODES}; raise step"
-        ));
-        }
-        let dx = (hi[0] - lo[0]) / nx as f64;
-        let dy = (hi[1] - lo[1]) / ny as f64;
-        let dz = (hi[2] - lo[2]) / nz as f64;
-        let at = |i: usize, j: usize, k: usize| {
-            [
-                lo[0] + dx * i as f64,
-                lo[1] + dy * j as f64,
-                lo[2] + dz * k as f64,
-            ]
-        };
-        let mut vals = vec![0.0f64; nodes];
-        for k in 0..=nz {
-            for j in 0..=ny {
-                for i in 0..=nx {
-                    vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = self.field(at(i, j, k));
-                }
-            }
-        }
-        // Export may not abstain (§3.1 of the robustness plan): every grid
-        // node must have a decided sign before any cell is emitted.
-        if let Some(bad) = vals.iter().position(|v| !v.is_finite()) {
-            return Err(format!(
-                "bake: non-finite field value at grid node {bad} (undecidable corner)"
-            ));
-        }
-        let val = |i: usize, j: usize, k: usize| vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i];
-        let mut mesh = BakedMesh::default();
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let mut cp = [[0.0; 3]; 8];
-                    let mut cv = [0.0; 8];
-                    for (c, &[ox, oy, oz]) in CORN.iter().enumerate() {
-                        let (ii, jj, kk) = (i + ox, j + oy, k + oz);
-                        cp[c] = at(ii, jj, kk);
-                        cv[c] = val(ii, jj, kk);
-                    }
-                    for tet in &TETS {
-                        let p = [cp[tet[0]], cp[tet[1]], cp[tet[2]], cp[tet[3]]];
-                        let v = [cv[tet[0]], cv[tet[1]], cv[tet[2]], cv[tet[3]]];
-                        polygonize_tet(&mut mesh.vertices, &mut mesh.faces, p, v);
-                    }
-                }
-            }
-        }
-        mesh.weld();
-        orient_outward(&mut mesh, self);
-        Ok(mesh)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use cga_core::{
         BoxGeometry, ConeGeometry, CsgGeometry, CsgOp, CylinderGeometry, EllipsoidGeometry,
         Geometry, SphereGeometry, TorusGeometry,
     };
@@ -896,7 +900,7 @@ mod tests {
     fn bake_rejects_nonfinite_field() {
         // 字段不可判定的图元（NaN 中心）：导出不得静默放弃
         let eye = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        let p = GeometryParams::SphereParams(crate::SphereParams {
+        let p = GeometryParams::SphereParams(cga_core::SphereParams {
             c: [f64::NAN, 0.0, 0.0],
             r: 1.0,
             axes: eye,
@@ -910,13 +914,15 @@ mod tests {
 
     #[test]
     fn unbounded_and_nonsolid_error() {
-        let pl = world(&Geometry::PlaneGeometry(crate::PlaneGeometry::new(
+        let pl = world(&Geometry::PlaneGeometry(cga_core::PlaneGeometry::new(
             [0.0, 1.0, 0.0],
             0.0,
         )));
         assert!(pl.bounds().is_none());
         assert!(pl.bake(0.1).is_err());
-        let ci = world(&Geometry::CircleGeometry(crate::CircleGeometry::new(1.0)));
+        let ci = world(&Geometry::CircleGeometry(cga_core::CircleGeometry::new(
+            1.0,
+        )));
         assert!(ci.bake(0.1).is_err());
     }
 }

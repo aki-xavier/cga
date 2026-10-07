@@ -9,6 +9,7 @@ cga-core = { path = "../cga-core" }
 cga-gpu = { path = "../cga-gpu" }
 cga-host = { path = "../cga-host" }
 mlx-rs = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["gif"] }
 rand = "0.9"
 clap = { version = "4", features = ["derive"] }
 

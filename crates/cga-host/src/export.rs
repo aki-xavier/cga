@@ -1,12 +1,13 @@
 //! 导出方向：JSX 场景 → 三角网 → STL（二进制 / ASCII）。
 //!
 //! 本仓库**不提供导入**：网格不作为场景表示，只在导出时由解析图元与 CSG 三角化
-//! 产生（`GeometryParams::bake`，marching tetrahedra，认证水密）。
+//! 产生（`cga_mesh::BakeExt::bake`，marching tetrahedra，认证水密）。
 //! URDF 导出见 `urdf::jsx_to_urdf`（非图元链接几何走同一条三角化路径）。
 
 use crate::run_jsx;
-use cga_core::{stl_ascii, stl_binary, transform_point, BakedMesh};
+use cga_core::transform_point;
 use cga_gpu::scene::Scene;
+use cga_mesh::{stl_ascii, stl_binary, BakeExt, BakedMesh};
 
 /// 场景的实体几何 → 世界空间三角网（各对象的 motor 应用到顶点）。
 /// 返回 `(三角网, 被跳过的对象说明)`（无界几何如平面/无限长圆柱、圆不是实体）。

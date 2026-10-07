@@ -7,6 +7,7 @@ description = "cga scene authoring host: JSX+CSS frontend, scene builders, repor
 [dependencies]
 cga-core = { path = "../cga-core" }
 cga-collision = { path = "../cga-collision" }
+cga-mesh = { path = "../cga-mesh" }
 cga-gpu = { path = "../cga-gpu" }
 boa_engine = "0.22.0"
 swc_core = { version = "81.0.2", features = ["common", "ecma_ast", "ecma_parser", "ecma_codegen", "ecma_transforms_react", "ecma_visit"] }

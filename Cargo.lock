@@ -504,9 +504,6 @@ dependencies = [
 [[package]]
 name = "cga-core"
 version = "0.1.0"
-dependencies = [
- "image",
-]
 
 [[package]]
 name = "cga-examples"
@@ -516,6 +513,7 @@ dependencies = [
  "cga-gpu",
  "cga-host",
  "clap",
+ "image",
  "mlx-rs",
  "rand 0.9.5",
 ]
@@ -538,10 +536,18 @@ dependencies = [
  "cga-collision",
  "cga-core",
  "cga-gpu",
+ "cga-mesh",
  "lightningcss",
  "serde_json",
  "swc_core",
  "urdf-rs",
+]
+
+[[package]]
+name = "cga-mesh"
+version = "0.1.0"
+dependencies = [
+ "cga-core",
 ]
 
 [[package]]

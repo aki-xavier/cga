@@ -8,3 +8,5 @@ pub fn data_f32(img: &Array) -> Vec<f32> {
 pub fn mlx_frame_gc() {
     let _ = mlx_rs::memory::clear_cache();
 }
+pub mod gif;
+pub use gif::*;

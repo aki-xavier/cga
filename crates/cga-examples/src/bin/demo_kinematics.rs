@@ -1,5 +1,5 @@
 use cga_core::*;
-use cga_examples::{data_f32, mlx_frame_gc};
+use cga_examples::{data_f32, mlx_frame_gc, save_gif};
 use cga_gpu::*;
 use std::f64::consts::PI;
 

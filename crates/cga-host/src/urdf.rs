@@ -10,6 +10,7 @@
 //! deterministic, parseable by construction).
 
 use cga_core::GeometryParams;
+use cga_mesh::BakeExt;
 
 use crate::jsx::run_jsx;
 use crate::scene_build::{JointDef, JointKind, Kinematics, SceneRun};
@@ -201,7 +202,7 @@ fn visual_of(
         .iter()
         .map(|v| xform_point(inv, *v))
         .collect();
-    let data = cga_core::stl_binary(&verts, &baked.faces);
+    let data = cga_mesh::stl_binary(&verts, &baked.faces);
     let file = format!("meshes/{link}_{slot}.stl");
     Ok(Visual {
         origin_xyz: [0.0; 3],

@@ -30,12 +30,3 @@ pub use affine_geom::*;
 
 pub mod csg_node;
 pub use csg_node::*;
-
-pub mod bake;
-pub use bake::*;
-
-pub mod stl;
-pub use stl::*;
-
-pub mod gif;
-pub use gif::*;

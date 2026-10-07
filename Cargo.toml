@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cga-core",
     "crates/cga-collision",
+    "crates/cga-mesh",
     "crates/cga-gpu",
     "crates/cga-host",
     "crates/cga-examples",
