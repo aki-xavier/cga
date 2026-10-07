@@ -157,7 +157,13 @@ impl Bundler<'_> {
     fn compile_module(&mut self, id: usize, src: &str) -> Result<Exports, String> {
         let (cm, module) = parse_jsx(src)?;
         let rw = self.rewrite(module.body, false)?;
-        let body_text = codegen(&cm, &Module { body: rw.items, ..module })?;
+        let body_text = codegen(
+            &cm,
+            &Module {
+                body: rw.items,
+                ..module
+            },
+        )?;
         let mut ret = String::new();
         if let Some(d) = &rw.default {
             ret.push_str(&format!("default: {d}, "));
@@ -179,11 +185,7 @@ impl Bundler<'_> {
 
     /// Rewrite import/export declarations of one module body. `is_entry`:
     /// the scene file itself (its default export becomes `__scene`).
-    fn rewrite(
-        &mut self,
-        body: Vec<ModuleItem>,
-        is_entry: bool,
-    ) -> Result<Rewritten, String> {
+    fn rewrite(&mut self, body: Vec<ModuleItem>, is_entry: bool) -> Result<Rewritten, String> {
         let mut items: Vec<ModuleItem> = Vec::new();
         let mut rw = Rewritten::default();
         for item in body {
@@ -194,9 +196,7 @@ impl Bundler<'_> {
                         continue; // css imports stay stripped
                     }
                     if !spec.ends_with(".jsx") {
-                        return Err(format!(
-                            "JSX: unsupported import {spec} (only .jsx/.css)"
-                        ));
+                        return Err(format!("JSX: unsupported import {spec} (only .jsx/.css)"));
                     }
                     let (id, exports) = self.bundle_import(&spec)?;
                     let mut snippet = String::new();
@@ -326,9 +326,7 @@ impl Bundler<'_> {
                                 rw.named.push((exported, local));
                             }
                             other => {
-                                return Err(format!(
-                                    "JSX: unsupported export specifier: {other:?}"
-                                ))
+                                return Err(format!("JSX: unsupported export specifier: {other:?}"))
                             }
                         }
                     }
@@ -404,7 +402,11 @@ fn collect_pat_idents(pat: &Pat, out: &mut Vec<String>) {
 }
 
 /// `const <name> = <init>;`
-fn const_stmt(span: swc_core::common::Span, name: &str, init: swc_core::ecma::ast::Expr) -> ModuleItem {
+fn const_stmt(
+    span: swc_core::common::Span,
+    name: &str,
+    init: swc_core::ecma::ast::Expr,
+) -> ModuleItem {
     ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
         span,
         ctxt: Default::default(),
@@ -439,7 +441,13 @@ pub fn compile_jsx_with(
     };
     let (cm, module) = parse_jsx(src)?;
     let rw = b.rewrite(module.body, true)?;
-    let entry = emit_js(&cm, Module { body: rw.items, ..module })?;
+    let entry = emit_js(
+        &cm,
+        Module {
+            body: rw.items,
+            ..module
+        },
+    )?;
     Ok(format!("{}{entry}", b.out))
 }
 
@@ -3575,7 +3583,10 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let s = SceneSession::open_modules(entry, None, &[("part.jsx", part)]).expect("open");
         let xs = object_xs(&s);
         assert_eq!(xs.len(), 2, "{xs:?}");
-        assert!((xs[0] - 1.0).abs() < 1e-9 && (xs[1] - 3.0).abs() < 1e-9, "{xs:?}");
+        assert!(
+            (xs[0] - 1.0).abs() < 1e-9 && (xs[1] - 3.0).abs() < 1e-9,
+            "{xs:?}"
+        );
     }
 
     #[test]
@@ -3600,7 +3611,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let b = "import a from './a.jsx';\nexport default (<sphere r={0.2} />);";
         let entry = "import a from './a.jsx';\nexport default (<scene>{a}</scene>);";
         let e = SceneSession::open_modules(entry, None, &[("a.jsx", a), ("b.jsx", b)])
-            .err().expect("should fail");
+            .err()
+            .expect("should fail");
         assert!(e.contains("circular import"), "{e}");
 
         // missing module
@@ -3609,7 +3621,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             None,
             &[],
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(e.starts_with("JSX: cannot import ./nope.jsx"), "{e}");
 
         // missing default export
@@ -3619,7 +3632,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             None,
             &[("m.jsx", m)],
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(e.contains("has no default export"), "{e}");
 
         // missing named export
@@ -3628,7 +3642,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             None,
             &[("m.jsx", m)],
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(e.contains("does not export zz"), "{e}");
     }
 
@@ -3637,7 +3652,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let m = "export default function Tag() {\n\
             \x20 return <translate t={[7, 0, 0]}><sphere r={0.3} /></translate>;\n\
             }";
-        let entry = "import Tag from './m.jsx';\nexport default (<scene><camera /><Tag /></scene>);";
+        let entry =
+            "import Tag from './m.jsx';\nexport default (<scene><camera /><Tag /></scene>);";
         let s = SceneSession::open_modules(entry, None, &[("m.jsx", m)]).expect("open");
         let xs = object_xs(&s);
         assert_eq!(xs.len(), 1);
@@ -4013,7 +4029,9 @@ export default (
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
         let run = run_jsx(src, Some("[id=\"other\"] { color: #0D0D0D; }"), "").expect("run");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0xFFFFFF);
-        let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("unsupported attribute"), "{e}");
     }
 
@@ -4024,7 +4042,9 @@ export default (
         let run = run_jsx(src, Some("[class=\"a,b\"], #zz { color: #0D0D0D; }"), "").expect("run");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
         // 尾逗号 → 空选择器，必须报错而不是被吞掉。
-        let e = run_jsx(src, Some(".a, { color: red; }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".a, { color: red; }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:"), "{e}");
     }
 
@@ -4196,15 +4216,25 @@ export default (
     #[test]
     fn test_css_value_errors() {
         let src = r#"export default <sphere r={1} class="c" />;"#;
-        let e = run_jsx(src, Some(".c { roughness: blorble; }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { roughness: blorble; }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:") && e.contains("blorble"), "{e}");
-        let e = run_jsx(src, Some(".c { roughness: 2px; }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { roughness: 2px; }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:") && e.contains("unit"), "{e}");
-        let e = run_jsx(src, Some(".c { color: var(--missing); }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { color: var(--missing); }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:") && e.contains("--missing"), "{e}");
-        let e = run_jsx(src, Some(".c { color: currentcolor; }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { color: currentcolor; }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:") && e.contains("not supported"), "{e}");
-        let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:") && e.contains("calc"), "{e}");
     }
 
@@ -4223,7 +4253,9 @@ export default (
             assert!(e.contains("CSS:") && e.contains(want), "css={css} err={e}");
         }
         // 嵌套规则：lightningcss 能解析，但我们不支持 → 必须报错而不是静默丢弃。
-        let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "").err().expect("should fail");
+        let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("CSS:"), "{e}");
     }
 
@@ -4272,14 +4304,22 @@ export default (
 
     #[test]
     fn test_jsx_errors() {
-        let e = run_jsx("export default <sphere", None, "").err().expect("should fail");
+        let e = run_jsx("export default <sphere", None, "")
+            .err()
+            .expect("should fail");
         assert!(e.starts_with("JSX line 1: "), "{e}");
-        let e = run_jsx("export default <frob />;", None, "").err().expect("should fail");
+        let e = run_jsx("export default <frob />;", None, "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("unknown primitive frob"), "{e}");
         // 带未知参数的未知元素先报参数错。
-        let e = run_jsx("export default <frob r={1} />;", None, "").err().expect("should fail");
+        let e = run_jsx("export default <frob r={1} />;", None, "")
+            .err()
+            .expect("should fail");
         assert!(e.contains("frob has no parameter r"), "{e}");
-        let e = run_jsx("const a = 1;", None, "").err().expect("should fail");
+        let e = run_jsx("const a = 1;", None, "")
+            .err()
+            .expect("should fail");
         assert_eq!(e, "JSX: scene file must end with export default <element>");
     }
 
@@ -4303,7 +4343,8 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(e.contains("did not converge"), "{e}");
 
         // pose：关节级覆盖 + 报告 pose 行。
@@ -4376,7 +4417,8 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(
             e.contains("unknown joint a"),
             "Cam 组件应进入 cam 校验: {e}"
@@ -4409,7 +4451,8 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .err().expect("should fail");
+        .err()
+        .expect("should fail");
         assert!(e.contains("q must be [qr, qp]"), "{e}");
     }
 }
