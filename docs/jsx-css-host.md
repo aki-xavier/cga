@@ -34,6 +34,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
 - **公共属性**（2026-10-07）：任何几何元素/容器都可直接带变换与注册 prop——`t=[x,y,z]`、`rotate=[ax,ay,az,angle]`、`scale=数|[x,y,z]`、`mirror=[x,y,z]`、`tag="name"`。变换的固定合成顺序为 **T·R·S·Mirror**（先镜像、再缩放、再旋转、再平移），与 prop 书写顺序无关。修饰符元素（`<translate>` 等）豁免（它们的 prop 是自己的语义）；非几何元素（camera/灯光/background/gear/cam）带变换 prop 报错（不许静默丢）。`<tag name>` 元素与 `tag` prop 同义；无 `name` 的 `<group>` 是透明容器（共享 prop 的落点）。
 - **材质就是 prop**：材质键在任何元素上都是内联 prop（级联的内联层，沿元素树继承）——`<group color=...>`、`<translate color=...>` 都成立；`<material>` 容器保持可用，但已只是一个透明兼容壳。
+- **命名通道的分工**（不合并）：`class`/`className` 是 CSS 匹配通道（样式）；`id` 是 CSS `#id` 选择器（语义上唯一）；`tag` 是几何注册表通道（一名可注册多个实例，供 `instances`/`when`/查询/碰撞引用）。`<fragment>` 是 React 结构管道（多根快照的包装，不产生宿主实例）；`<group>` 是作者容器（真实实例，可带公共属性，可带名进分组）。无名 `<group>` 与 `<fragment>` 在 walk 语义上等价（都是透明容器），但前者可带 prop、后者是 `<>` 语法和 React 协调的落点。
 - 碰撞查询（构建期惰性标量，`{__q}` 通道）：`clearance(a,b)` 分离距离、`collides(a,b)` / `inside(of,[x,y,z])` → 1/0，`qadd/qsub/qmul/qdiv` 组合（JS 算术对查询对象无效）。Unknown（不支持的几何对）报构建错误——三值不许变成数字。引用是先定义后使用的 tag 名或内联元素。场景级扫描见 `SceneSession::collisions()` 与报告的 `collide` 行。
 
 ## 2.1 .jsx 模块导入（2026-10-07）
