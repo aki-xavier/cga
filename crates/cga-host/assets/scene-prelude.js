@@ -8,7 +8,7 @@ Material='material',Union='union',Difference='difference',Intersection='intersec
 AmbientLight='ambient_light',DirectionalLight='directional_light',PointLight='point_light',
 Camera='camera',Background='background',Scene='scene',Joint='joint',
 Tag='tag';
-const Drill='drill',Instances='instances',When='when';
+const Drill='drill',Instances='instances',When='when',Group='group';
 const __isQ = (v) => v && typeof v === 'object' && !Array.isArray(v) && v.__q;
 const vadd = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vadd', a, b } : a.map((x, i) => x + b[i]);
 const vsub = (a, b) => (__isQ(a) || __isQ(b)) ? { __q: 'vsub', a, b } : a.map((x, i) => x - b[i]);

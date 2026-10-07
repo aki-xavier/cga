@@ -176,14 +176,21 @@
 
   function makeHost(counters, nextId) {
     let updatePriority = R.lanes.DefaultEventPriority;
+    // 实例版本：每次创建 / props 更新 / 结构变更（增删移动子节点）都在受影响实例上
+    // 递增。快照时自底向上取子树最大值 __v —— 子树任何变化都会沿祖先链抬高 __v，
+    // 宿主据此复用未变子树的构建产物（增量构建，见 docs/jsx-css-host.md）。
+    let vc = 0;
+    const bump = (n) => {
+      n.v = ++vc;
+    };
 
     const mkHost = (type, props) => {
       counters.create++;
-      return { kind: 'host', id: nextId(), type, props: sceneProps(props), children: [] };
+      return { kind: 'host', id: nextId(), type, props: sceneProps(props), children: [], v: ++vc };
     };
     const mkText = (text) => {
       counters.text++;
-      return { kind: 'text', id: nextId(), text: String(text), children: [] };
+      return { kind: 'text', id: nextId(), text: String(text), children: [], v: ++vc };
     };
     const detach = (p, c) => {
       const i = p.children.indexOf(c);
@@ -234,6 +241,7 @@
       createInstance: (type, props) => mkHost(type, props),
       createTextInstance: (text) => mkText(text),
       appendInitialChild: (p, c) => {
+        bump(p);
         p.children.push(c);
       },
       finalizeInitialChildren: () => false,
@@ -243,40 +251,52 @@
       commitUpdate: (inst, type, prevProps, nextProps) => {
         counters.update++;
         inst.props = sceneProps(nextProps);
+        bump(inst);
       },
       commitTextUpdate: (t, o, n) => {
         t.text = String(n);
+        bump(t);
       },
       commitMount: () => {
         counters.mount++;
       },
       resetTextContent: () => {},
       appendChild: (p, c) => {
+        bump(p);
         p.children.push(c);
       },
       appendChildToContainer: (p, c) => {
+        bump(p);
         p.children.push(c);
       },
       insertBefore: (p, c, b) => {
         counters.insert++;
+        bump(p);
         insertBefore(p, c, b);
       },
       insertInContainerBefore: (p, c, b) => {
         counters.insert++;
+        bump(p);
         insertBefore(p, c, b);
       },
       removeChild: (p, c) => {
         counters.remove++;
+        bump(p);
         detach(p, c);
       },
       removeChildFromContainer: (p, c) => {
         counters.remove++;
+        bump(p);
         detach(p, c);
       },
       clearContainer: (c) => {
+        bump(c);
         c.children.length = 0;
       },
-      clearSuspenseBoundary: (p, s) => detach(p, s),
+      clearSuspenseBoundary: (p, s) => {
+        bump(p);
+        detach(p, s);
+      },
       hideInstance: (i) => {
         i.hidden = true;
       },
@@ -378,7 +398,7 @@
     const session = {
       version: R.version,
       rootTag: tag,
-      schema: 1,
+      schema: 2,
       // 根元素由 begin() 装填。用一层稳定的 Root 组件包起来：每次 update 都渲染同一个
       // 组件类型，React 只重渲染它返回的元素树（组件身份不丢，hook 状态得以保留）。
       moduleFactory: null,
@@ -469,16 +489,27 @@
       },
 
       // 快照：与旧元素树同形 {t,p,c}；文本节点跳过（当前场景用 props 表达文字）。
+      // 每个节点带两个版本：__v = 自身提交版本（创建/props 更新/结构变更时递增），
+      // __s = 子树版本（自身与全部后代的 __v 最大值）。宿主据此做增量构建：
+      // __s 不变 ⇒ 子树内容不变；祖先链 __v 全不变 ⇒ 该节点的上下文（变换/材质/兄弟
+      // 位置）不变。两者同时成立才能整棵复用（见 docs/jsx-css-host.md）。
       // 单个根 → 直接是该元素；多个根 → 包一层 fragment（与旧路径的 fragment 语义一致）；
       // 空场景 → null（交由宿主报"不是元素"，与旧路径一致）。
       snapshot() {
         const clean = (n) => {
           if (n.kind === 'text') return null;
           const out = { t: String(n.type), p: sanitize(n.props), c: [] };
+          const own = n.v || 0;
+          let sv = own;
           for (const ch of n.children || []) {
             const c = clean(ch);
-            if (c !== null) out.c.push(c);
+            if (c !== null) {
+              out.c.push(c);
+              if (c.__s > sv) sv = c.__s;
+            }
           }
+          out.__v = own;
+          out.__s = sv;
           return out;
         };
         const out = [];
@@ -488,7 +519,9 @@
         }
         if (out.length === 0) return 'null';
         if (out.length === 1) return JSON.stringify(out[0]);
-        return JSON.stringify({ t: 'fragment', p: {}, c: out });
+        let sv = 0;
+        for (const c of out) if (c.__s > sv) sv = c.__s;
+        return JSON.stringify({ t: 'fragment', p: {}, c: out, __v: 0, __s: sv });
       },
 
       // 帧事务：一次做完"动作 + 重渲染 + drain + 快照"，只跨线程一次。
@@ -584,7 +617,7 @@
 
   globalThis.CGA_REACT_HOST = {
     version: R.version,
-    schema: 1,
+    schema: 2,
     createSession,
     // 供宿主在派发事件时临时加高优先级（P2 事件驱动用）
     lanes: R.lanes,

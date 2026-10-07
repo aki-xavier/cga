@@ -543,4 +543,177 @@ mod tests {
         );
         assert!(rb > rr, "画面右缘应仍是天空背景，得到 {rr}/../{rb}");
     }
+    // ---- 增量渲染（帧间）--------------------------------------------------
+
+    fn incr_scene(offset: f64, glass: bool) -> Scene {
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0x7F8C8D),
+                roughness: 0.9,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 1.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
+            material: std_red_material(),
+            position: [0.0, 0.6, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.5)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0x2E86C1),
+                roughness: 0.2,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: if glass { 0.35 } else { 1.0 },
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [offset, 0.5, 1.2],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::directional(
+            Color::from_hex(0xFFFFFF),
+            0.8,
+            [0.5, 1.0, 0.5],
+        ));
+        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.3));
+        sc
+    }
+
+    fn incr_cam() -> PerspectiveCamera {
+        let mut c = PerspectiveCamera::new(
+            45.0,
+            1.0,
+            0.1,
+            100.0,
+            [0.0, 2.2, 5.0],
+            [0.0, 0.5, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        c.look_at([0.0, 0.5, 0.0], None);
+        c
+    }
+
+    fn assert_same_image(a: &Array, b: &Array) {
+        assert_eq!(data_f32(a), data_f32(b), "增量与全帧渲染必须逐位一致");
+    }
+
+    #[test]
+    fn test_incremental_first_and_clean() {
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        let sc = incr_scene(2.0, false);
+        let cam = incr_cam();
+        let (img1, s1) = r.render(&sc, &cam);
+        assert!(s1.full && s1.reason == "first" && s1.dirty == s1.total);
+        // 同一场景再来一帧：无变化 → 一条光线都不重追
+        let (img2, s2) = r.render(&sc, &cam);
+        assert!(!s2.full && s2.dirty == 0 && s2.reason == "clean");
+        assert_same_image(&img1, &img2);
+    }
+
+    #[test]
+    fn test_incremental_move_sphere_bitexact() {
+        // 地面平面 + 平行光：运动球的新旧包围盒 + 它在地面上的阴影足迹必须置脏。
+        let cam = incr_cam();
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&incr_scene(2.0, false), &cam);
+        let sc2 = incr_scene(1.2, false);
+        let (img, s) = r.render(&sc2, &cam);
+        assert!(!s.full, "应增量渲染，得到 {s:?}");
+        assert!(
+            s.dirty * 2 < s.total,
+            "脏光线应少于一半，得到 {}/{}",
+            s.dirty,
+            s.total
+        );
+        let want = Renderer::new(96, 72, 1, 3).render(sc2, cam);
+        assert_same_image(&img, &want);
+    }
+
+    #[test]
+    fn test_incremental_material_only_bitexact() {
+        // 只改颜色（形状/透明度不变）：无阴影级联，只脏自身包围盒。
+        let cam = incr_cam();
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&incr_scene(2.0, false), &cam);
+        let mut sc2 = incr_scene(2.0, false);
+        sc2.objects[1].material.color = Color::from_hex(0x27AE60);
+        let (img, s) = r.render(&sc2, &cam);
+        assert!(!s.full, "应增量渲染，得到 {s:?}");
+        let want = Renderer::new(96, 72, 1, 3).render(sc2, cam);
+        assert_same_image(&img, &want);
+    }
+
+    #[test]
+    fn test_incremental_transparent_cascade_bitexact() {
+        // 玻璃球 + 移动的不透明球：玻璃像素经透明级联置脏（次级光线可达）。
+        let cam = incr_cam();
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&incr_scene(2.5, true), &cam);
+        let sc2 = incr_scene(1.2, true);
+        let (img, s) = r.render(&sc2, &cam);
+        assert!(!s.full, "应增量渲染，得到 {s:?}");
+        let want = Renderer::new(96, 72, 1, 3).render(sc2, cam);
+        assert_same_image(&img, &want);
+    }
+
+    #[test]
+    fn test_incremental_full_fallbacks() {
+        let cam = incr_cam();
+        // 相机变化 → 全帧
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        let sc = incr_scene(2.0, false);
+        r.render(&sc, &cam);
+        let mut cam2 = incr_cam();
+        cam2.position = [0.6, 2.4, 5.2];
+        cam2.look_at([0.0, 0.5, 0.0], None);
+        let (_, s) = r.render(&sc, &cam2);
+        assert!(s.full && s.reason == "camera", "{s:?}");
+
+        // 灯光变化 → 全帧
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&sc, &cam);
+        let mut sc2 = incr_scene(2.0, false);
+        sc2.lights[0].intensity = 0.55;
+        let (_, s) = r.render(&sc2, &cam);
+        assert!(s.full && s.reason == "lights", "{s:?}");
+
+        // 对象数量变化 → 全帧
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&sc, &cam);
+        let mut sc3 = incr_scene(2.0, false);
+        sc3.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.3)),
+            material: std_red_material(),
+            position: [-1.5, 0.3, 0.5],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let (_, s) = r.render(&sc3, &cam);
+        assert!(s.full && s.reason == "count", "{s:?}");
+
+        // invalidate → 全帧
+        let mut r = IncrementalRenderer::new(96, 72, 1, 3);
+        r.render(&sc, &cam);
+        r.invalidate();
+        let (_, s) = r.render(&sc, &cam);
+        assert!(s.full && s.reason == "first", "{s:?}");
+    }
 }

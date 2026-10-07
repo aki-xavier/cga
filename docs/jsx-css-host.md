@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # JSX + CSS 场景宿主：React 模式前端
 
-状态：已实现（2026-10-06，路线 A：真 JS；2026-10-07，P1：改用**真 React 运行时**）。适用：`crates/cga-host/src/jsx/`、`crates/cga-host/src/react/`、CLI `render_jsx` / `report_jsx`。
+状态：已实现（2026-10-06，路线 A：真 JS；2026-10-07，P1：改用**真 React 运行时**；2026-10-07，帧间增量 §6：版本化 + 子树复用 + 像素级增量渲染）。适用：`crates/cga-host/src/jsx/`、`crates/cga-host/src/react/`、CLI `render_jsx` / `report_jsx` / `render_frames`。
 R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX，且使用与宿主一致的 PascalCase 元素名（`<Scene>` / `<Rotate>` / `<Difference>` …）；互操作**仅导出**（URDF / STL），不提供导入；文本语法解析器已删除，只剩 builder/kinematics/报告支撑（`scene_build`）。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
@@ -30,6 +30,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - CSS 是真匹配 + 真级联：选择器支持 `.class` / `#id` / `[attr]` / `*` / tag / `:root` 与后代、子代 `>`、相邻 `+`、普通 `~` 四类组合器，按「`!important`/内联层级 → 特异性 → 源码顺序」级联；材质键与 `--*` 变量沿元素树继承，`var(--x, fallback)` 在取值前文本替换。不支持的构造（交互伪类、伪元素、`@` 规则、CSS 嵌套、`calc()`、带单位的数值）报错并带原文，未知属性名静默忽略（与浏览器一致）。能力面、差距清单与阶段验收的完整记录见 `docs/css-conformance.md`。
 - `import './x.css'` 由宿主跟随装载；其他 import 报错。
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
+- 分组：`<Group name="…">` 元素或任意元素的 `group="…"` prop，子树产出的对象带分组 id（`SceneRun::groups` 注册表，`Object::group`）。分组是**缓存/失效与拾取的元数据单元，不是 z-index**——对象前后关系永远由求交决定。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
 
 ## 3. React 能力边界
@@ -40,7 +41,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 
 **确定性**：调度器的时间由宿主 `drain` 推进（微任务 + 定时器，有界轮数），"挂载 → 提交 → 副作用"在没有事件循环的情况下跑到不动点；同输入同输出（有测试）。
 
-**注意"局部"的边界**：局部重渲染是**场景级**的——只重建发生变化的宿主实例，整棵树的快照与 `SceneRun` 每帧重算；渲染仍是整帧（逐像素增量重绘是渲染器的另一课题）。
+**"局部"的三段式落点**（帧间增量见 §6）：React 协调只重建变化的宿主实例；构建按子树版本整棵复用未变子树的产出对象；渲染只重追值可能变化的光线。三段都保守：拿不准就全量。
 
 **没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）、真实事件源与布局、portal 到 DOM。`onClick` 之类会被 React 正常装上，但需要宿主派发事件并长驻会话——交互运行时属于后续阶段；`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
 
@@ -65,6 +66,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 | `<Gear driver driven ratio offset>` | P2 齿轮耦合（高副）；也可写 `<gear>` |
 | `<Cam driver driven driverProfile drivenProfile>` | P3 凸轮接触求解（高副）；也可写 `<cam>`。profile 是普通对象 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}` |
 | `<Tag name>` | 标签注册表 |
+| `<Group name>` / `group="…"` prop | 分组：子树产出对象的缓存/失效/拾取单元（**不是**渲染层叠，见 §6 档 2） |
 
 运动副也可用 **React 组件**写法：`Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed`（低副，`<joint type=…>` 的别名）与 `Gear`/`Cam`（高副）。它们定义在 `assets/kinematics-pairs.js`（随预置一起注入），只是把类型写进组件名、再展开成同样的 `{t:'joint'|'gear'|'cam'}` 节点，因此**代数核心与求解仍在 Rust**（`scene_build/kinematics.rs`），报告 / URDF / pose 覆盖不受影响。`q` 在 1-DOF 关节是数字、在多 DOF 关节是数组（cylindrical `[qr,qp]`，spherical / planar 三个数）。生成器 `jsx_gen::gen_pairs_showcase()` 一次输出全部 8 种关节 + 齿轮/凸轮高副（见 `demo_pairs`）。
 
@@ -84,19 +86,32 @@ v1 边界（显式不做）：`dist()` 查询、`echo`；CSS 侧的布局/盒模
 - JSX 关节 + gear 推导 q，对象归属记录正确，报告含 joint/gear 行。
 - 多 DOF 关节的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种关节 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
-- CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常。
+- 帧间增量（§6）：实例版本随创建 / props 更新 / 结构变更正确抬升（`react::tests::instance_versions_track_changes`）；复用构建与全量构建逐字段一致（`incremental_build_reuses_unchanged_subtrees`）；兄弟组合器样式表关闭复用（`incremental_build_disabled_by_sibling_rules`）；增量渲染与全帧渲染逐位一致（cga-gpu `test_incremental_*` ×5 + `session_render_incremental_is_bitexact`）；分组流向 `Object::group`（`group_prop_and_element`）。
+- CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常；`render_frames` 逐帧动画走增量构建 + 增量渲染并打印每帧统计。
 
-## 6. 架构终态
+## 6. 帧间增量：版本化、子树复用与像素级增量渲染
+
+三段各有独立的失效依据，全部保守（拿不准就全量）：
+
+**档 2 · 分组（作者标注的失效/拾取单元）**。`<Group name>` 或 `group="…"` prop 把子树产出的对象打进同一个分组（`Object::group` → `SceneRun::groups` 的下标）。注册表 append-only，跨帧 id 稳定（复用的对象带旧 id）。分组**不是 z-index**：渲染器是光线追踪，前后关系由求交决定；分组只做缓存失效与拾取归属的元数据。
+
+**档 0 · 子树复用（构建侧）**。React 实例带两个版本：自身版本 `__v`（创建 / props 更新 / 子节点增删移动时递增）与子树版本 `__s`（后代最大值），随快照下发（schema v2）。`annotate_reuse` 把「祖先链 `__v` 全不变（上下文：变换/继承样式/兄弟位置不变）+ 自身 `__s` 不变（子树内容不变）+ 子树纯（无灯光/相机/joint/tag/when/instances 等副作用元素，props 里无 `{__q}` 惰性查询）+ 不在 tag/joint/when 动态上下文之下」的子树标上上一帧的对象区间，`walk` 整棵克隆复用。三条保守闸：样式表含兄弟组合器（`+`/`~`——兄弟的 class 变化抬不动本节点版本号）时整个会话关闭复用；含惰性查询的节点会**污染路径**——它的输出随 tag 注册表漂移但版本不变，其子树一律不得复用（有测试看守：查询跟随者必须跟到目标的新位置）；CSG 块是最小复用单元（其子树不单独复用）。`SceneSession::build_stats()` 报告复用率；正确性由「复用构建 ≡ 全量构建逐字段相等」的测试看守。
+
+**档 1 · 像素级增量（渲染侧）**。`IncrementalRenderer`（cga-gpu）缓存上一帧的光线级结果，帧间按对象指纹 diff：相机 / 灯光 / 背景 / 对象数变化 → 全帧；否则脏集 = 变化对象的新旧屏幕包围盒 ∪ 阴影级联（形状/透明度变化的对象在新旧位置上能投到的接收者；地面等无界平面解析阴影足迹，无法界定则全帧）∪ 透明级联（正常模式下场景含透明对象时，其像素全脏——反射/折射次级光线可达任意对象）；脏光线 ≥ 总数一半 → 全帧（沿用渲染器既有的 2× 回退）。子集追踪与全帧追踪同一光线取值逐位一致（光线互相独立，渲染器既有的剔除机制已依赖这一点），测试逐位断言看守；无变化帧直接返回上一帧图像（dirty=0）。`SceneSession::render_incremental(w,h,aa,mode)` 是会话侧入口；`render_frames` 示例已切到增量渲染并打印每帧统计（`animation.jsx` 320×240 aa=2：脏光线约 18–25%）。
+
+明确不做：**没有 z-index 分层合成**。层间互相遮挡/投影/折射在光线追踪里无法按层拆开；帧间复用的单位是像素值与对象产出，不是"图层"。
+
+## 7. 架构终态
 
 .jsx`+`.css` 是唯一的场景作者格式。`scene_build` 是语义底座（builder、错误文本、报告），`jsx` 宿主把 React 已提交的实例树翻译成它的调用。下游（渲染/报告/URDF、STL 导出）只认 `SceneRun`。文本语法已删除（2026-10-06，R4）；一次性求值路径已由真 React 运行时取代（2026-10-07，P1）。
 
-## 7. Rust ↔ JS 引擎桥
+## 8. Rust ↔ JS 引擎桥
 
 - **引擎隔离**：boa（纯 Rust，无 FFI）跑在专用线程（64 MB 栈）。跨线程只传 `Send` 命令闭包；`!Send` 的 `Context` 只活在引擎线程，所有对 JS 的接触都在那里。
 - **统一下发**：`HostCall`（`src/react/mod.rs`）是唯一的方法/参数编码点；JS 侧只有 `__sess.call(payloadJson)` 一个入口，方法表 `HANDLERS` 在 `react-host.js`。新增宿主方法 = 两端各加一处，不再三处手写字符串调用。
 - **结构化错误**：回传一律是信封字符串 `{"ok":true,"value":…}` / `{"ok":false,"kind","message","stack"}`，`kind` ∈ syntax/runtime/internal。Rust `parse_envelope` 解构，`ReactError` 保留 `kind`；引擎级异常对象永不跨边界。
 - **帧事务**：`ReactSession::frame(FrameAction)` 一次完成动作（mount / input / event / none）+ 重渲染 + drain + 快照 + React 错误，单次跨线程；`SceneSession` 直接用返回的快照重建。
-- **契约版本**：JS `__sess.schema()` 报告 `{t,p,c}` schema 版本，建会话时由 `SCENE_SCHEMA` 断言——两端 IR 漂移立即失败（渲染金标是第二道防线）。
+- **契约版本**：JS `__sess.schema()` 报告 `{t,p,c}` schema 版本，建会话时由 `SCENE_SCHEMA` 断言——两端 IR 漂移立即失败（渲染金标是第二道防线）。v2（2026-10-07）：每个节点带 `__v`（自身版本）/`__s`（子树版本），增量构建的复用依据（§6 档 0）。
 - **原生回调**：`register_global` 注入 boa 原生函数（`solve`）；外层 `catch_unwind` 把 panic 转成 JS 异常，不让它跨 FFI 边界 unwind。
 - **会话类型**：`ReactSession<Owned>`（长驻交互，`SceneSession`）与 `ReactSession<Pooled>`（线程本地池，`with_session`）在类型上区分，池只会存放 Pooled——长驻会话不可能被误复用。
 - **场景预置**：`assets/scene-prelude.js`，编译期 `include_str!` 嵌入。

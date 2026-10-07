@@ -52,8 +52,10 @@ const RUNTIME_PROD: &str = include_str!("../../assets/react-runtime.prod.js");
 const WORKER_STACK: usize = 64 << 20;
 
 /// 场景快照 `{t,p,c}` 的契约版本。JS 侧 `__sess.schema()` 必须报告同一版本，否则建会话失败。
+/// v1： `{t,p,c}`。v2：每个节点带 `__v`（自身提交版本）与 `__s`（子树版本）——
+/// 增量构建的复用依据。
 /// 升级 host 适配层时同步递增；渲染金标是第二道防线。
-pub const SCENE_SCHEMA: u64 = 1;
+pub const SCENE_SCHEMA: u64 = 2;
 
 /// 内置哪份 React 构建：`Prod`（默认，批量/CI）或 `Dev`（带 invalid hook call 等诊断）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -928,6 +930,41 @@ const __scene = h(App, {});
         assert_eq!(snap["c"][1]["p"]["x"], 1, "子组件 state 生效");
         assert_eq!(snap["p"]["count"], 0, "父组件未受影响");
         assert_eq!(s.ids().unwrap(), ids_before, "实例身份全部不变");
+    }
+
+    #[test]
+    fn instance_versions_track_changes() {
+        let (mut s, snap0) = start();
+        let own = |snap: &serde_json::Value| snap["__v"].as_u64().expect("__v");
+        let sub = |snap: &serde_json::Value| snap["__s"].as_u64().expect("__s");
+        let child_sub = |snap: &serde_json::Value, i: usize| snap["c"][i]["__s"].as_u64().unwrap();
+        assert!(own(&snap0) > 0, "每个节点都要有自身版本");
+        assert!(sub(&snap0) >= own(&snap0), "子树版本 ≥ 自身版本");
+
+        // 局部更新：受影响子树的 __s 抬升，未受影响的兄弟不变；根的 __s 抬升但 __v 不变。
+        // 增量构建靠"祖先链 __v 全不变 + 自身 __s 不变"判定复用。
+        let (label0, box0, item0) = (
+            child_sub(&snap0, 0),
+            child_sub(&snap0, 1),
+            child_sub(&snap0, 2),
+        );
+        s.call("globalThis.bumpChild()").unwrap();
+        s.drain().unwrap();
+        let snap1 = snap(&mut s);
+        assert_eq!(child_sub(&snap1, 0), label0, "未受影响的兄弟子树版本不变");
+        assert!(child_sub(&snap1, 1) > box0, "变化的子树版本抬升");
+        assert_eq!(child_sub(&snap1, 2), item0, "keyed 列表未受影响");
+        assert!(sub(&snap1) > sub(&snap0), "根子树版本抬升");
+        assert_eq!(own(&snap1), own(&snap0), "根自身版本不变（props 没动）");
+
+        // 结构变更（keyed 插入）抬父节点自身版本：子节点数量/顺序是上下文的一部分。
+        s.call("globalThis.addItem()").unwrap();
+        s.drain().unwrap();
+        let snap2 = snap(&mut s);
+        assert!(
+            own(&snap2) > own(&snap1),
+            "子节点增删必须抬父节点自身版本（否则复用会按旧位置配对）"
+        );
     }
 
     #[test]

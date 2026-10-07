@@ -291,6 +291,15 @@ pub struct El {
     pub tag: String,
     pub props: HashMap<String, Value>,
     pub children: Vec<El>,
+    /// 自身提交版本（快照 `__v`）：创建 / props 更新 / 子节点增删移动时递增。
+    /// 子树版本见 [`El::s`]。0 = 无版本（嵌套在 props 里的元素树），增量构建
+    /// 永不复用无版本子树。
+    pub v: u64,
+    /// 子树版本（快照 `__s`）：自身与全部后代 `v` 的最大值。
+    pub s: u64,
+    /// 增量构建缓存：本子树最近一帧产出的 `scene.objects` 区间。只在会话缓存的
+    /// 上一帧树上填充；新帧由 `annotate_reuse` 标注后，`walk` 据此整棵复用。
+    pub cache: Option<std::ops::Range<usize>>,
 }
 
 fn to_el(v: &Value) -> Result<El, String> {
@@ -320,10 +329,15 @@ fn to_el(v: &Value) -> Result<El, String> {
             children.push(to_el(c)?);
         }
     }
+    let v = obj.get("__v").and_then(Value::as_u64).unwrap_or(0);
+    let s = obj.get("__s").and_then(Value::as_u64).unwrap_or(0);
     Ok(El {
         tag: tag.to_string(),
         props,
         children,
+        v,
+        s,
+        cache: None,
     })
 }
 
@@ -1155,7 +1169,7 @@ fn var_substitute(raw: &str, customs: &HashMap<String, String>) -> Result<String
 
 // ---- scene builder ----
 
-struct Builder {
+struct Builder<'p> {
     loader: Builders,
     kin: Kinematics,
     joint_stack: Vec<String>,
@@ -1164,6 +1178,15 @@ struct Builder {
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
     pose: HashMap<String, f64>,
+    /// 分组注册表：id → 名字，0 = "" 未分组。append-only，跨帧稳定（复用的对象带旧 id）。
+    groups: Vec<String>,
+    group_stack: Vec<u32>,
+    /// 增量构建：上一帧的对象表（`annotate_reuse` 标注的复用区间从这里克隆）。
+    prev_objects: Option<&'p [Object]>,
+    /// 本帧每个节点的产出区间（构建结束后写回缓存树，供下一帧复用）。
+    ranges: HashMap<*const El, std::ops::Range<usize>>,
+    reused_subtrees: usize,
+    reused_objects: usize,
 }
 
 fn mat4_mul(a: [f64; 16], b: [f64; 16]) -> [f64; 16] {
@@ -1176,7 +1199,7 @@ fn translate4(t: [f64; 3]) -> [f64; 16] {
     ]
 }
 
-impl Builder {
+impl<'p> Builder<'p> {
     /// 元素的计算样式：先继承，再按级联叠加本元素命中的样式表声明与内联 prop。
     /// 只继承材质键与自定义属性（`--*`），见 docs/css-conformance.md P2。
     fn style_for(
@@ -1337,14 +1360,18 @@ impl Builder {
         } else {
             cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
         };
-        scene.add_object(Object::new(ObjectParams {
-            geometry: g2,
-            material: mat,
-            position: [0.0, 0.0, 0.0],
-            rotation_axis: [0.0, 0.0, 1.0],
-            rotation_angle: 0.0,
-            motor: Some(motor),
-        }));
+        let group = self.group_stack.last().copied().unwrap_or(0);
+        scene.add_object(
+            Object::new(ObjectParams {
+                geometry: g2,
+                material: mat,
+                position: [0.0, 0.0, 0.0],
+                rotation_axis: [0.0, 0.0, 1.0],
+                rotation_angle: 0.0,
+                motor: Some(motor),
+            })
+            .with_group(group),
+        );
         let idx = scene.objects.len() - 1;
         if let Some(jname) = self.joint_stack.last().cloned() {
             if let Some(j) = self.kin.joints.iter_mut().rev().find(|j| j.name == jname) {
@@ -1364,9 +1391,25 @@ impl Builder {
         scene: &mut Scene,
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
+        let start = scene.objects.len();
+        if let Some(range) = cur.el.cache.clone() {
+            // 增量构建（档 0）：annotate_reuse 已核对"子树未变、纯、路径干净"，
+            // 整棵复用上一帧的产出对象。
+            let prev = self
+                .prev_objects
+                .expect("JSX: cache range without previous objects");
+            scene.objects.extend_from_slice(&prev[range]);
+            self.reused_subtrees += 1;
+            self.reused_objects += scene.objects.len() - start;
+            self.ranges
+                .insert(cur.el as *const El, start..scene.objects.len());
+            return Ok(());
+        }
         stack.push(cur);
         let r = self.walk_pushed(cur.el, stack, ctx, mat, scene, cam);
         stack.pop();
+        self.ranges
+            .insert(cur.el as *const El, start..scene.objects.len());
         r
     }
 
@@ -1380,7 +1423,31 @@ impl Builder {
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
         let style = self.style_for(el, stack, mat)?;
-        self.walk_inner(el, stack, ctx, &style, scene, cam)
+        // 分组（档 2）：`<group name>` 元素或任意元素的 `group` prop，
+        // 子树产出的对象都打上这个分组 id。
+        let group = if el.tag == "group" {
+            Some(p_str(el, "name")?.ok_or_else(|| "JSX: group needs a name".to_string())?)
+        } else {
+            p_str(el, "group")?
+        };
+        let gid = group.map(|name| self.group_id(&name));
+        if let Some(g) = gid {
+            self.group_stack.push(g);
+        }
+        let r = self.walk_inner(el, stack, ctx, &style, scene, cam);
+        if gid.is_some() {
+            self.group_stack.pop();
+        }
+        r
+    }
+
+    /// 分组名 → id（append-only：跨帧复用的对象带旧 id，注册表只能涨不能缩）。
+    fn group_id(&mut self, name: &str) -> u32 {
+        if let Some(i) = self.groups.iter().position(|g| g == name) {
+            return i as u32;
+        }
+        self.groups.push(name.to_string());
+        (self.groups.len() - 1) as u32
     }
 
     fn walk_inner<'a>(
@@ -1523,6 +1590,12 @@ impl Builder {
                 }
                 Ok(())
             }
+            "group" => {
+                for (i, c) in el.children.iter().enumerate() {
+                    self.walk(Frame::new(c, i), stack, ctx, mat, scene, cam)?;
+                }
+                Ok(())
+            }
             _ => self.primitive_el(el, ctx, mat, scene),
         }
     }
@@ -1651,7 +1724,11 @@ impl Builder {
     fn build_geo(&mut self, el: &El) -> Result<cga_core::Geometry, String> {
         let mut args: HashMap<String, ArgValue> = HashMap::new();
         for (k, v) in &el.props {
-            if MATERIAL_KEYS.contains(&k.as_str()) || k == "class" || k == "className" || k == "id"
+            if MATERIAL_KEYS.contains(&k.as_str())
+                || k == "class"
+                || k == "className"
+                || k == "id"
+                || k == "group"
             {
                 continue;
             }
@@ -1969,7 +2046,7 @@ fn parse_hex(s: &str) -> Result<Color, String> {
 
 // ---- R2 平权块：惰性查询 / drill / instances / when / solve / pose ----
 
-impl Builder {
+impl<'p> Builder<'p> {
     /// Element → (raw geometry, transform) for queries and drill targets.
     /// Element targets are evaluated in the identity frame (they are
     /// top-level definitions by convention).
@@ -2407,18 +2484,167 @@ fn eval_js_react(
     })
 }
 
-/// 由 `{t,p,c}` 树构建场景（CSS 匹配、材质继承、惰性查询解析都在这里）。
-fn build_scene_run(
+// ---- 增量构建（档 0）-------------------------------------------------------
+
+/// 有全局副作用或依赖全局状态的元素：永不作为复用锚点，且其存在使祖先子树不纯。
+/// 不在表内的非特殊标签一律是图元（纯）。`drill` 只依赖自身 props 与 ctx，是纯的。
+const SIDE_EFFECT_TAGS: &[&str] = &[
+    "ambient_light",
+    "directional_light",
+    "point_light",
+    "camera",
+    "background",
+    "tag",
+    "joint",
+    "gear",
+    "cam",
+    "instances",
+    "when",
+];
+
+/// 动态上下文（`pending_tags` / `joint_stack` / tag 注册表查询）：处于这些元素
+/// 之下的子树即使内容未变也不能复用——它们的产出还依赖树外的状态。
+const DYNAMIC_TAGS: &[&str] = &["tag", "joint", "when"];
+
+/// props 里（递归）是否含惰性查询 `{__q: …}`：字符串引用（`center("ball")` 等）
+/// 要查 tag 注册表——那是树外状态，版本号抬不动它。含查询的元素不纯。
+fn has_lazy_query(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.contains_key("__q") || m.values().any(has_lazy_query),
+        Value::Array(a) => a.iter().any(has_lazy_query),
+        _ => false,
+    }
+}
+
+/// 子树是否"纯"：不含任何副作用元素，产出只取决于自身 props、祖先变换与继承样式。
+/// `scene` 带 `background` prop 时也算有副作用（写 `scene.background`）。
+fn pure_subtree(el: &El) -> bool {
+    if SIDE_EFFECT_TAGS.contains(&el.tag.as_str()) {
+        return false;
+    }
+    if el.tag == "scene" && prop(el, "background").is_some() {
+        return false;
+    }
+    if el.props.values().any(has_lazy_query) {
+        return false;
+    }
+    el.children.iter().all(pure_subtree)
+}
+
+/// 增量构建的旁路标注：找出"整棵未变且纯"的子树，把上一帧的对象区间标到
+/// `el.cache`，`walk` 走到时整棵复用。复用条件（全部满足）：
+/// - 结构配对成功：同位置、同 tag、同子节点数、有版本号；
+/// - 祖先链自身版本全不变（`path_clean`）——祖先的 props 与子节点顺序决定本
+///   节点的变换、继承样式与 CSS 兄弟位置；
+/// - 子树版本 `__s` 不变——子树内容不变；
+/// - 不在 tag / joint / when 之下，且子树纯；
+/// - 样式表不含兄弟组合器（`allow`，见 [`Builder::sibling_rules`]）。
+fn annotate_reuse(
+    new: &mut El,
+    prev: Option<&El>,
+    path_clean: bool,
+    under_dynamic: bool,
+    allow: bool,
+) {
+    let pair =
+        prev.filter(|p| p.tag == new.tag && p.children.len() == new.children.len() && p.v != 0);
+    let own_clean = pair.is_some_and(|p| p.v == new.v);
+    let clean_here = path_clean && own_clean;
+    let subtree_clean = pair.is_some_and(|p| p.s == new.s);
+    if allow && clean_here && subtree_clean && !under_dynamic && pure_subtree(new) {
+        if let Some(range) = pair.and_then(|p| p.cache.clone()) {
+            new.cache = Some(range);
+            return; // 整棵复用，不必下钻
+        }
+    }
+    // 惰性查询的字符串引用查 tag 注册表（树外状态）：版本号反映不了查询结果的
+    // 变化。含查询的节点自身不能当锚点（pure_subtree 已挡），它的 ctx 输出也不能
+    // 信——子节点的路径同样不再干净。
+    let clean_for_children = clean_here && !new.props.values().any(has_lazy_query);
+    let dynamic = under_dynamic || DYNAMIC_TAGS.contains(&new.tag.as_str());
+    for (i, c) in new.children.iter_mut().enumerate() {
+        annotate_reuse(
+            c,
+            pair.and_then(|p| p.children.get(i)),
+            clean_for_children,
+            dynamic,
+            allow,
+        );
+    }
+}
+
+/// 构建结束后把本帧的对象区间写回缓存树。复用锚点的子节点按平移量从上一帧
+/// 搬区间，保住更细粒度的复用能力（锚点下一帧可能不再是锚点）。
+fn apply_ranges(
+    new: &mut El,
+    prev: Option<&El>,
+    ranges: &HashMap<*const El, std::ops::Range<usize>>,
+) {
+    if let Some(r) = ranges.get(&(new as *const El)) {
+        let fresh = r.clone();
+        if let (Some(p), Some(old)) = (prev, new.cache.clone()) {
+            // 复用锚点：old 是上一帧区间，fresh 是本帧区间，差值即平移量。
+            let delta = fresh.start as i64 - old.start as i64;
+            shift_child_ranges(new, p, delta);
+        }
+        new.cache = Some(fresh);
+    }
+    for (i, c) in new.children.iter_mut().enumerate() {
+        apply_ranges(c, prev.and_then(|p| p.children.get(i)), ranges);
+    }
+}
+
+fn shift_child_ranges(new: &mut El, prev: &El, delta: i64) {
+    for (nc, pc) in new.children.iter_mut().zip(prev.children.iter()) {
+        if let Some(r) = &pc.cache {
+            let s = (r.start as i64 + delta) as usize;
+            let e = (r.end as i64 + delta) as usize;
+            nc.cache = Some(s..e);
+        }
+        shift_child_ranges(nc, pc, delta);
+    }
+}
+
+/// 增量构建的跨帧缓存（档 0）：上一帧的元素树（带每个节点的产出区间）、
+/// 对象表与分组注册表。
+pub struct BuildCache {
+    tree: El,
+    objects: Vec<Object>,
+    groups: Vec<String>,
+}
+
+/// 一次构建的增量统计。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildStats {
+    /// 整棵复用的子树数。
+    pub reused_subtrees: usize,
+    /// 复用（而非重建）的对象数。
+    pub reused_objects: usize,
+    /// 本帧对象总数。
+    pub total_objects: usize,
+}
+
+fn build_scene_run_cached(
     v: &Value,
     css_src: Option<&str>,
     asset_root: &str,
     pose: &[(String, f64)],
-) -> Result<crate::SceneRun, String> {
-    let root = to_el(v)?;
+    cache: Option<&BuildCache>,
+) -> Result<(crate::SceneRun, El, BuildStats), String> {
+    let mut root = to_el(v)?;
     let rules = match css_src {
         Some(c) => parse_css(c)?,
         None => Vec::new(),
     };
+    let sibling_rules = rules.iter().any(|r| {
+        r.sel
+            .parts
+            .iter()
+            .any(|(c, _)| matches!(c, Combinator::NextSibling | Combinator::LaterSibling))
+    });
+    if let Some(c) = cache {
+        annotate_reuse(&mut root, Some(&c.tree), true, false, !sibling_rules);
+    }
     // 根作用域（`:root` / `scene`）规则的 background
     let mut scene = Scene::new(None);
     let mut customs: HashMap<String, String> = HashMap::new();
@@ -2450,6 +2676,14 @@ fn build_scene_run(
         pending_tags: Vec::new(),
         rules,
         pose: pose.iter().cloned().collect(),
+        groups: cache
+            .map(|c| c.groups.clone())
+            .unwrap_or_else(|| vec![String::new()]),
+        group_stack: Vec::new(),
+        prev_objects: cache.map(|c| c.objects.as_slice()),
+        ranges: HashMap::new(),
+        reused_subtrees: 0,
+        reused_objects: 0,
     };
     let mut stack = Vec::new();
     b.walk(
@@ -2460,6 +2694,13 @@ fn build_scene_run(
         &mut scene,
         &mut cam,
     )?;
+    let stats = BuildStats {
+        reused_subtrees: b.reused_subtrees,
+        reused_objects: b.reused_objects,
+        total_objects: scene.objects.len(),
+    };
+    // 把本帧各节点的产出区间写回树，作为下一帧的复用缓存。
+    apply_ranges(&mut root, cache.map(|c| &c.tree), &b.ranges);
     let cam = cam.unwrap_or_else(|| {
         let mut c = PerspectiveCamera::new(
             50.0,
@@ -2477,12 +2718,27 @@ fn build_scene_run(
     let mut ps: Vec<(String, f64)> = pose.to_vec();
     ps.sort_by(|a, b| a.0.cmp(&b.0));
     kin.pose = ps;
-    Ok(crate::SceneRun {
-        scene,
-        camera: cam,
-        tags: b.tags,
-        kinematics: kin,
-    })
+    Ok((
+        crate::SceneRun {
+            scene,
+            camera: cam,
+            tags: b.tags,
+            kinematics: kin,
+            groups: b.groups,
+        },
+        root,
+        stats,
+    ))
+}
+
+/// 由 `{t,p,c}` 树构建场景（CSS 匹配、材质继承、惰性查询解析都在这里）。
+fn build_scene_run(
+    v: &Value,
+    css_src: Option<&str>,
+    asset_root: &str,
+    pose: &[(String, f64)],
+) -> Result<crate::SceneRun, String> {
+    Ok(build_scene_run_cached(v, css_src, asset_root, pose, None)?.0)
 }
 
 /// Headless render of a JSX scene.
@@ -2542,6 +2798,12 @@ pub struct SceneSession {
     asset_root: String,
     pose: HashMap<String, f64>,
     run: Option<crate::SceneRun>,
+    /// 增量构建缓存（档 0）：上一帧的元素树（带产出区间）+ 对象表 + 分组注册表。
+    cache: Option<BuildCache>,
+    /// 最近一次构建的增量统计。
+    stats: BuildStats,
+    /// 增量渲染器（档 1）：尺寸/模式匹配时跨帧复用。
+    incr: Option<cga_gpu::IncrementalRenderer>,
 }
 
 impl SceneSession {
@@ -2607,17 +2869,41 @@ impl SceneSession {
             asset_root: asset_root.to_string(),
             pose: pose_map,
             run: None,
+            cache: None,
+            stats: BuildStats::default(),
+            incr: None,
         };
         sess.build_from(&out.snapshot)?;
         Ok(sess)
     }
 
-    /// 从一份 `{t,p,c}` 快照构建 `SceneRun`（CSS 匹配、材质继承、惰性查询都会重跑）。
+    /// 从一份 `{t,p,c}` 快照构建 `SceneRun`。
+    ///
+    /// 增量构建（档 0）：带 `__v`/`__s` 版本的快照与上一帧缓存配对，未变且无副作用的
+    /// 子树整棵复用上一帧的产出对象；统计见 [`SceneSession::build_stats`]。
+    /// CSS 匹配、材质继承、运动学求解对**未复用**的部分照常重跑。
     fn build_from(&mut self, v: &Value) -> Result<(), String> {
         let pose: Vec<(String, f64)> = self.pose.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        let run = build_scene_run(v, self.css.as_deref(), &self.asset_root, &pose)?;
+        let (run, tree, stats) = build_scene_run_cached(
+            v,
+            self.css.as_deref(),
+            &self.asset_root,
+            &pose,
+            self.cache.as_ref(),
+        )?;
+        self.cache = Some(BuildCache {
+            tree,
+            objects: run.scene.objects.clone(),
+            groups: run.groups.clone(),
+        });
+        self.stats = stats;
         self.run = Some(run);
         Ok(())
+    }
+
+    /// 最近一次构建的增量统计（复用了几棵子树 / 几个对象）。
+    pub fn build_stats(&self) -> BuildStats {
+        self.stats
     }
 
     /// 从当前实例树重建 `SceneRun`（CSS 匹配、材质继承、惰性查询都会重跑）。
@@ -2708,6 +2994,41 @@ impl SceneSession {
             height: h,
             png: cga_gpu::frame_to_png_bytes(&img),
         })
+    }
+
+    /// 用持久化的增量渲染器渲染**当前**场景（档 1）：只重追值可能变化的光线。
+    /// 帧动作（`set_input` / `dispatch` / `drain`）已经重建过 `SceneRun`，
+    /// 本方法不再重建。与全帧渲染逐位一致（测试看守）；返回增量统计。
+    /// 尺寸 / 模式变化会重建内部渲染器（首帧全量）。
+    pub fn render_incremental(
+        &mut self,
+        w: i32,
+        h: i32,
+        aa: i32,
+        mode: cga_gpu::RenderMode,
+    ) -> Result<(crate::HeadlessImage, cga_gpu::IncrementalStats), String> {
+        let reuse = match &self.incr {
+            Some(r) => r.width() == w && r.height() == h && r.aa() == aa && r.mode() == mode,
+            None => false,
+        };
+        if !reuse {
+            self.incr = Some(cga_gpu::IncrementalRenderer::new(w, h, aa, 3).with_mode(mode));
+        }
+        // 直接借字段：run 与 incr 是不相交的两个字段。
+        let run = self
+            .run
+            .as_ref()
+            .expect("SceneSession: rebuild 之前没有场景");
+        let r = self.incr.as_mut().expect("incremental renderer");
+        let (img, stats) = r.render(&run.scene, &run.camera);
+        Ok((
+            crate::HeadlessImage {
+                width: w,
+                height: h,
+                png: cga_gpu::frame_to_png_bytes(&img),
+            },
+            stats,
+        ))
     }
 }
 
@@ -2882,6 +3203,165 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let ha = render_png(a.run());
         let hb = render_png(b.run());
         assert_eq!(ha, hb, "同输入序列同输出");
+    }
+
+    /// ---- 增量构建（档 0）+ 增量渲染（档 1）+ 分组（档 2） ----
+
+    #[test]
+    fn incremental_build_reuses_unchanged_subtrees() {
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        let s0 = s.build_stats();
+        assert_eq!(s0.reused_objects, 0, "首帧没有可复用的: {s0:?}");
+        assert_eq!(s0.total_objects, 4, "scene 里 4 个球: {s0:?}");
+
+        // 输入只驱动 Dial：静态的 3 个球（scene 直属 + fixed + Counter）应整棵复用。
+        s.set_input(r#"{"x": 2.0}"#).unwrap();
+        let s1 = s.build_stats();
+        assert!(
+            s1.reused_objects >= 3,
+            "未变化的子树应复用上一帧的对象: {s1:?}"
+        );
+        assert_eq!(s1.total_objects, 4);
+
+        // 正确性：增量构建的产物必须与从头构建同一份快照的产物逐字段一致。
+        let snap: Value = serde_json::from_str(&s.snapshot().unwrap()).unwrap();
+        let fresh = build_scene_run(&snap, None, ".", &[]).expect("fresh build");
+        let cached = s.run();
+        assert_eq!(
+            format!("{:?}", cached.scene.objects),
+            format!("{:?}", fresh.scene.objects),
+            "对象表必须逐字段一致"
+        );
+        assert_eq!(format!("{:?}", cached.tags), format!("{:?}", fresh.tags));
+        assert_eq!(
+            format!("{:?}", cached.kinematics),
+            format!("{:?}", fresh.kinematics)
+        );
+        assert_eq!(cached.groups, fresh.groups);
+    }
+
+    #[test]
+    fn incremental_build_disabled_by_sibling_rules() {
+        // 样式表里有兄弟组合器：兄弟的 class 变化会改变本节点计算样式但抬不动版本号，
+        // 保守起见整个会话关闭子树复用。
+        let mut s = SceneSession::open(
+            DIAL_SCENE,
+            Some("scene > scene ~ scene { color: red; }\nscene > sphere + sphere { color: red; }"),
+            ".",
+        )
+        .expect("open");
+        s.set_input(r#"{"x": 2.0}"#).unwrap();
+        let st = s.build_stats();
+        assert_eq!(st.reused_objects, 0, "兄弟组合器必须关闭复用: {st:?}");
+        assert_eq!(st.total_objects, 4);
+    }
+
+    #[test]
+    fn incremental_build_lazy_query_forces_rebuild() {
+        // 惰性查询的字符串引用要查 tag 注册表（树外状态）：含查询的子树永不复用。
+        let src = r#"
+const { useContext } = React;
+function Ball() {
+  const IN = useContext(HostInput);
+  const x = IN.x === undefined ? 0 : IN.x;
+  return <tag name="ball"><translate t={[x, 0, 0]}><sphere r={0.5} /></translate></tag>;
+}
+export default (
+  <scene>
+    <camera />
+    <Ball />
+    <translate t={vadd(center("ball"), [0, 2, 0])}><sphere r={0.3} /></translate>
+  </scene>
+);
+"#;
+        let mut s = SceneSession::open(src, None, ".").expect("open");
+        s.set_input(r#"{"x": 3.0}"#).unwrap();
+        // 正确性：跟随者必须跟到新位置——与从头构建同一份快照逐字段一致。
+        let snap: Value = serde_json::from_str(&s.snapshot().unwrap()).unwrap();
+        let fresh = build_scene_run(&snap, None, ".", &[]).expect("fresh build");
+        assert_eq!(
+            format!("{:?}", s.run().scene.objects),
+            format!("{:?}", fresh.scene.objects),
+            "带惰性查询的场景：增量构建 ≡ 全量构建"
+        );
+        let m = s.run().scene.objects[1].base.motor().to_matrix();
+        assert!(
+            (m[3] - 3.0).abs() < 1e-9 && (m[7] - 2.0).abs() < 1e-9,
+            "跟随者应到 (3, 2): {m:?}"
+        );
+        let st = s.build_stats();
+        assert_eq!(st.reused_objects, 0, "tag 之下与查询子树都不可复用: {st:?}");
+    }
+
+    #[test]
+    fn group_prop_and_element() {
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <group name="arm">
+      <sphere r={1} />
+      <translate t={[3, 0, 0]}><box s={[0.5, 0.5, 0.5]} group="hand" /></translate>
+    </group>
+    <sphere r={0.5} group="loose" />
+  </scene>
+);
+"#;
+        let run = run_jsx(src, None, ".").expect("run");
+        assert_eq!(
+            run.groups,
+            vec![
+                "".to_string(),
+                "arm".to_string(),
+                "hand".to_string(),
+                "loose".to_string()
+            ],
+            "注册表 append-only、按首次出现排序"
+        );
+        let g = |i: usize| run.scene.objects[i].group;
+        assert_eq!(g(0), 1, "arm 的 sphere");
+        assert_eq!(g(1), 2, "内层 group prop 覆盖外层 <group>");
+        assert_eq!(g(2), 3, "独立的 group prop");
+    }
+
+    #[test]
+    fn session_render_incremental_is_bitexact() {
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        let (_img0, st0) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        assert!(st0.full && st0.reason == "first", "首帧全量: {st0:?}");
+
+        s.set_input(r#"{"x": 2.0}"#).unwrap();
+        let (img1, st1) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        assert!(!st1.full, "只有 Dial 动了，应增量渲染: {st1:?}");
+        assert!(
+            st1.dirty * 2 < st1.total,
+            "脏光线应少于一半: {}/{}",
+            st1.dirty,
+            st1.total
+        );
+
+        // 与全帧渲染逐位一致（光线互相独立：子集追踪与全帧追踪同一光线同值）。
+        let run = s.run().clone();
+        let mut full = cga_gpu::Renderer::new(96, 72, 1, 3);
+        let want = full.render(run.scene.clone(), run.camera);
+        assert_eq!(
+            img1.png,
+            cga_gpu::frame_to_png_bytes(&want),
+            "增量渲染必须与全帧渲染逐位一致"
+        );
+
+        // 无变化帧：一条光线都不重追。
+        let (_img2, st2) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        assert!(
+            !st2.full && st2.dirty == 0 && st2.reason == "clean",
+            "{st2:?}"
+        );
     }
 
     #[test]

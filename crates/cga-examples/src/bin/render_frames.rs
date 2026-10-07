@@ -55,18 +55,26 @@ fn main() {
         let stats = sess
             .set_input(&format!("{{\"t\":{t:.6}}}"))
             .unwrap_or_else(|e| panic!("frame {i}: {e}"));
-        let img = sess
-            .render(args.w, args.h, args.aa, RenderMode::Normal)
+        // 增量渲染：只重追值可能变化的光线，与全帧渲染逐位一致。
+        let (img, istats) = sess
+            .render_incremental(args.w, args.h, args.aa, RenderMode::Normal)
             .unwrap_or_else(|e| panic!("frame {i}: {e}"));
         let out = format!("{}_{i:02}.png", args.prefix);
         std::fs::write(&out, &img.png).unwrap_or_else(|e| panic!("write {out}: {e}"));
         let c = sess.counters().unwrap_or_default();
+        let b = sess.build_stats();
         println!(
-            "{out}: t={t:.3} objects={} drain rounds={} create={} update={}",
+            "{out}: t={t:.3} objects={} drain rounds={} create={} update={} reused={}/{} dirty={}/{} full={}({})",
             sess.run().scene.objects.len(),
             stats.rounds,
             c.create,
-            c.update
+            c.update,
+            b.reused_objects,
+            b.total_objects,
+            istats.dirty,
+            istats.total,
+            istats.full,
+            istats.reason,
         );
         sess.reset_counters().ok();
     }
