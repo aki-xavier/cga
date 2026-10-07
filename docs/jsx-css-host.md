@@ -28,10 +28,41 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - 内置元素 PascalCase 或全小写均可（`<Sphere r={1}/>` ≡ `<sphere r={1}/>`）。
 - 组件就是 React 组件（首字母大写）：hooks、`memo`、`Fragment`、`key` 都可用。模块只求值一次，组件身份跨帧稳定，因此 hook 状态得以保留。
 - CSS 是真匹配 + 真级联：选择器支持 `.class` / `#id` / `[attr]` / `*` / tag / `:root` 与后代、子代 `>`、相邻 `+`、普通 `~` 四类组合器，按「`!important`/内联层级 → 特异性 → 源码顺序」级联；材质键与 `--*` 变量沿元素树继承，`var(--x, fallback)` 在取值前文本替换。不支持的构造（交互伪类、伪元素、`@` 规则、CSS 嵌套、`calc()`、带单位的数值）报错并带原文，未知属性名静默忽略（与浏览器一致）。能力面、差距清单与阶段验收的完整记录见 `docs/css-conformance.md`。
-- `import './x.css'` 由宿主跟随装载；其他 import 报错。
+- `import './x.css'` 由宿主跟随装载；`.jsx` 模块导入见 §2.1（编译期打包）；其他 import 报错。
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
 - 分组：`<Group name="…">` 元素或任意元素的 `group="…"` prop，子树产出的对象带分组 id（`SceneRun::groups` 注册表，`Object::group`）。分组是**缓存/失效与拾取的元数据单元，不是 z-index**——对象前后关系永远由求交决定。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
+
+## 2.1 .jsx 模块导入（2026-10-07）
+
+场景可以由多个 `.jsx` 文件组成：入口文件 `import` 其他模块，导入的模块当子模块用——
+默认导出是组件就 `<Dial />` 用，是元素值就 `{dial}` 用；命名导出 `import { a, b as c } from './m.jsx'`。
+
+```jsx
+// dial.jsx
+export default function Dial(props) {
+  return <translate t={[props.x || 0, 0, 0]}><sphere r={0.5} /></translate>;
+}
+// scene.jsx（入口）
+import Dial from './dial.jsx';
+export default (<scene><camera /><Dial x={2} /></scene>);
+```
+
+实现是**编译期打包**（`compile_jsx_with`，不走运行时模块加载）：依赖图 DFS
+递归编译，每个被导入模块包成 `globalThis.__exp_N = (() => { …; return {default, …named}; })()`
+（真 JS 函数作用域，模块间顶层名永不冲突），导入点改写为普通别名常量
+（`const Dial = globalThis.__exp_N.default;`），依赖序后序排放、查重记忆化
+（钻石依赖只求值一次）。入口照旧 `export default` → `const __scene`。
+
+- **解析来源**两种：`run_jsx*` / `SceneSession::open*` 用 `asset_root` 下的磁盘文件；
+  `SceneSession::open_modules(entry, css, &[(name, src)])` 用调用方给的内存模块表
+  （编辑器多标签页场景，specifier `"./dial.jsx"` 与 `"dial.jsx"` 等价）。
+- **bundle 期错误**（都带 `JSX:` 前缀，进同一条错误契约）：循环导入
+  （`circular import: a.jsx -> b.jsx -> a.jsx`）、模块找不到（`cannot import`）、
+  目标没有默认导出、目标没有该命名导出、`export *` / re-export（不支持）。
+- 支持的导出形式：`export default <expr>`、`export default function/class`（具名或匿名）、
+  `export const/function/class`、`export { a, b as c }`。
+- 单文件语义不变：不含 `.jsx` import 的场景编译产物与打包器引入前完全一致。
 
 ## 3. React 能力边界
 

@@ -18,7 +18,7 @@ use boa_engine::Context;
 use serde_json::Value;
 use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS};
 use swc_core::ecma::ast::{
-    BindingIdent, Decl, Ident, ModuleDecl, ModuleItem, Pat, Stmt, VarDecl, VarDeclKind,
+    BindingIdent, Decl, Ident, Module, ModuleDecl, ModuleItem, Pat, Stmt, VarDecl, VarDeclKind,
     VarDeclarator,
 };
 use swc_core::ecma::codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
@@ -45,9 +45,8 @@ const PRELUDE: &str = concat!(
     include_str!("../../assets/kinematics-pairs.js"),
 );
 
-/// swc: parse JSX, rewrite `export default` → `const __scene`, strip .css
-/// imports, transform JSX → h() calls, print JS.
-fn compile_jsx(src: &str) -> Result<String, String> {
+/// swc: parse a JSX module, reporting errors as `JSX line N: ...`.
+fn parse_jsx(src: &str) -> Result<(Lrc<SourceMap>, Module), String> {
     let cm: Lrc<SourceMap> = Default::default();
     let fm = cm.new_source_file(Lrc::new(FileName::Anon), src.to_string());
     let lexer = Lexer::new(
@@ -60,7 +59,7 @@ fn compile_jsx(src: &str) -> Result<String, String> {
         None,
     );
     let mut parser = Parser::new_from(lexer);
-    let mut module = parser.parse_module().map_err(|e| {
+    let module = parser.parse_module().map_err(|e| {
         use swc_core::common::Spanned;
         let line = cm
             .lookup_line(e.span().lo())
@@ -68,41 +67,26 @@ fn compile_jsx(src: &str) -> Result<String, String> {
             .unwrap_or(0);
         format!("JSX line {line}: {}", e.kind().msg())
     })?;
-    let mut has_scene = false;
-    let mut body: Vec<ModuleItem> = Vec::new();
-    for item in module.body {
-        match item {
-            ModuleItem::ModuleDecl(ModuleDecl::Import(imp)) => {
-                let src = imp.src.value.to_string_lossy().into_owned();
-                if !src.ends_with(".css") {
-                    return Err(format!("JSX: only .css imports are supported, got {src}"));
-                }
-            }
-            ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(e)) => {
-                has_scene = true;
-                body.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
-                    span: e.span,
-                    ctxt: Default::default(),
-                    kind: VarDeclKind::Const,
-                    declare: false,
-                    decls: vec![VarDeclarator {
-                        span: e.span,
-                        name: Pat::Ident(BindingIdent {
-                            id: Ident::new_no_ctxt("__scene".into(), e.span),
-                            type_ann: None,
-                        }),
-                        init: Some(e.expr),
-                        definite: false,
-                    }],
-                })))));
-            }
-            other => body.push(other),
-        }
-    }
-    if !has_scene {
-        return Err("JSX: scene file must end with export default <element>".to_string());
-    }
-    module.body = body;
+    Ok((cm, module))
+}
+
+/// Print a module back to JS text (no transforms).
+fn codegen(cm: &Lrc<SourceMap>, module: &Module) -> Result<String, String> {
+    let mut buf = vec![];
+    let mut emitter = Emitter {
+        cfg: CodegenConfig::default(),
+        cm: cm.clone(),
+        comments: None,
+        wr: JsWriter::new(cm.clone(), "", &mut buf, None),
+    };
+    emitter
+        .emit_module(module)
+        .map_err(|e| format!("JSX: codegen failed: {e}"))?;
+    String::from_utf8(buf).map_err(|e| format!("JSX: codegen utf8: {e}"))
+}
+
+/// resolver → JSX→h() → hygiene → print. Per module (marks are per call).
+fn emit_js(cm: &Lrc<SourceMap>, mut module: Module) -> Result<String, String> {
     GLOBALS.set(&Globals::new(), || {
         let unresolved = Mark::new();
         let top = Mark::new();
@@ -120,18 +104,352 @@ fn compile_jsx(src: &str) -> Result<String, String> {
             top,
         ));
         module.visit_mut_with(&mut hygiene::hygiene());
-        let mut buf = vec![];
-        let mut emitter = Emitter {
-            cfg: CodegenConfig::default(),
-            cm: cm.clone(),
-            comments: None,
-            wr: JsWriter::new(cm, "", &mut buf, None),
-        };
-        emitter
-            .emit_module(&module)
-            .map_err(|e| format!("JSX: codegen failed: {e}"))?;
-        String::from_utf8(buf).map_err(|e| format!("JSX: codegen utf8: {e}"))
+        codegen(cm, &module)
     })
+}
+
+/// A module's export surface (validated at import time, bundle-time errors).
+#[derive(Clone, Default)]
+struct Exports {
+    has_default: bool,
+    /// exported name -> local ident inside the module
+    named: HashMap<String, String>,
+}
+
+/// Compile-time bundler: `import ... from './x.jsx'` recursively compiles
+/// the target and wraps it as `globalThis.__exp_N = (() => { ...; return
+/// {default, ...named}; })()`; the import site becomes plain alias consts.
+/// Post-order emission (dependencies first), memoized (diamond imports
+/// evaluate once), cycles are errors. Scopes are real JS function scopes,
+/// so per-module top-level names can never collide.
+struct Bundler<'a> {
+    resolve: &'a mut dyn FnMut(&str) -> Result<String, String>,
+    done: HashMap<String, (usize, Exports)>,
+    stack: Vec<String>,
+    out: String,
+    next: usize,
+}
+
+impl Bundler<'_> {
+    fn bundle_import(&mut self, spec: &str) -> Result<(usize, Exports), String> {
+        let key = spec.strip_prefix("./").unwrap_or(spec).to_string();
+        if let Some(hit) = self.done.get(&key) {
+            return Ok(hit.clone());
+        }
+        if self.stack.contains(&key) {
+            return Err(format!(
+                "JSX: circular import: {} -> {key}",
+                self.stack.join(" -> ")
+            ));
+        }
+        let src = (self.resolve)(&key).map_err(|e| format!("JSX: cannot import {spec}: {e}"))?;
+        self.stack.push(key.clone());
+        let id = self.next;
+        self.next += 1;
+        let exports = self.compile_module(id, &src);
+        self.stack.pop();
+        let exports = exports?;
+        self.done.insert(key, (id, exports.clone()));
+        Ok((id, exports))
+    }
+
+    /// Compile one imported module to its `globalThis.__exp_N = ...` text.
+    fn compile_module(&mut self, id: usize, src: &str) -> Result<Exports, String> {
+        let (cm, module) = parse_jsx(src)?;
+        let rw = self.rewrite(module.body, false)?;
+        let body_text = codegen(&cm, &Module { body: rw.items, ..module })?;
+        let mut ret = String::new();
+        if let Some(d) = &rw.default {
+            ret.push_str(&format!("default: {d}, "));
+        }
+        for (exported, local) in &rw.named {
+            ret.push_str(&format!("{exported}: {local}, "));
+        }
+        let wrapped = format!(
+            "globalThis.__exp_{id} = (() => {{\n{body_text}\nreturn {{ {ret} }};\n}})();\n"
+        );
+        let (cm2, wrapped_mod) = parse_jsx(&wrapped)?;
+        let text = emit_js(&cm2, wrapped_mod)?;
+        self.out.push_str(&text);
+        Ok(Exports {
+            has_default: rw.default.is_some(),
+            named: rw.named.into_iter().collect(),
+        })
+    }
+
+    /// Rewrite import/export declarations of one module body. `is_entry`:
+    /// the scene file itself (its default export becomes `__scene`).
+    fn rewrite(
+        &mut self,
+        body: Vec<ModuleItem>,
+        is_entry: bool,
+    ) -> Result<Rewritten, String> {
+        let mut items: Vec<ModuleItem> = Vec::new();
+        let mut rw = Rewritten::default();
+        for item in body {
+            match item {
+                ModuleItem::ModuleDecl(ModuleDecl::Import(imp)) => {
+                    let spec = imp.src.value.to_string_lossy().into_owned();
+                    if spec.ends_with(".css") {
+                        continue; // css imports stay stripped
+                    }
+                    if !spec.ends_with(".jsx") {
+                        return Err(format!(
+                            "JSX: unsupported import {spec} (only .jsx/.css)"
+                        ));
+                    }
+                    let (id, exports) = self.bundle_import(&spec)?;
+                    let mut snippet = String::new();
+                    for s in &imp.specifiers {
+                        use swc_core::ecma::ast::ImportSpecifier as IS;
+                        match s {
+                            IS::Default(d) => {
+                                if !exports.has_default {
+                                    return Err(format!(
+                                        "JSX: module {spec} has no default export"
+                                    ));
+                                }
+                                snippet.push_str(&format!(
+                                    "const {} = globalThis.__exp_{id}.default;\n",
+                                    d.local.sym
+                                ));
+                            }
+                            IS::Named(n) => {
+                                let orig = match &n.imported {
+                                    Some(m) => export_name(m),
+                                    None => n.local.sym.to_string(),
+                                };
+                                if !exports.named.contains_key(&orig) {
+                                    return Err(format!(
+                                        "JSX: module {spec} does not export {orig}"
+                                    ));
+                                }
+                                snippet.push_str(&format!(
+                                    "const {} = globalThis.__exp_{id}.{orig};\n",
+                                    n.local.sym
+                                ));
+                            }
+                            IS::Namespace(ns) => {
+                                snippet.push_str(&format!(
+                                    "const {} = globalThis.__exp_{id};\n",
+                                    ns.local.sym
+                                ));
+                            }
+                        }
+                    }
+                    if !snippet.is_empty() {
+                        let (_, alias_mod) = parse_jsx(&snippet)?;
+                        items.extend(alias_mod.body);
+                    }
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(e)) => {
+                    rw.default = Some("__scene".into());
+                    items.push(const_stmt(e.span, "__scene", *e.expr));
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(d)) => {
+                    use swc_core::ecma::ast::DefaultDecl as DD;
+                    match d.decl {
+                        DD::Fn(f) => match f.ident {
+                            Some(id) => {
+                                rw.default = Some(id.sym.to_string());
+                                items.push(ModuleItem::Stmt(Stmt::Decl(Decl::Fn(
+                                    swc_core::ecma::ast::FnDecl {
+                                        ident: id,
+                                        declare: false,
+                                        function: f.function,
+                                    },
+                                ))));
+                            }
+                            None => {
+                                rw.default = Some("__scene".into());
+                                items.push(const_stmt(
+                                    d.span,
+                                    "__scene",
+                                    swc_core::ecma::ast::Expr::Fn(swc_core::ecma::ast::FnExpr {
+                                        ident: None,
+                                        function: f.function,
+                                    }),
+                                ));
+                            }
+                        },
+                        DD::Class(c) => match c.ident {
+                            Some(id) => {
+                                rw.default = Some(id.sym.to_string());
+                                items.push(ModuleItem::Stmt(Stmt::Decl(Decl::Class(
+                                    swc_core::ecma::ast::ClassDecl {
+                                        ident: id,
+                                        declare: false,
+                                        class: c.class,
+                                    },
+                                ))));
+                            }
+                            None => {
+                                rw.default = Some("__scene".into());
+                                items.push(const_stmt(
+                                    d.span,
+                                    "__scene",
+                                    swc_core::ecma::ast::Expr::Class(
+                                        swc_core::ecma::ast::ClassExpr {
+                                            ident: None,
+                                            class: c.class,
+                                        },
+                                    ),
+                                ));
+                            }
+                        },
+                        other => {
+                            return Err(format!(
+                                "JSX: unsupported export default declaration: {other:?}"
+                            ))
+                        }
+                    }
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(d)) => {
+                    for name in decl_names(&d.decl) {
+                        rw.named.push((name.clone(), name));
+                    }
+                    items.push(ModuleItem::Stmt(Stmt::Decl(d.decl)));
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(n)) => {
+                    if n.src.is_some() {
+                        return Err("JSX: re-export (export ... from) is not supported".into());
+                    }
+                    for s in &n.specifiers {
+                        use swc_core::ecma::ast::ExportSpecifier as ES;
+                        match s {
+                            ES::Named(ns) => {
+                                let local = export_name(&ns.orig);
+                                let exported = match &ns.exported {
+                                    Some(m) => export_name(m),
+                                    None => local.clone(),
+                                };
+                                rw.named.push((exported, local));
+                            }
+                            other => {
+                                return Err(format!(
+                                    "JSX: unsupported export specifier: {other:?}"
+                                ))
+                            }
+                        }
+                    }
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportAll(_)) => {
+                    return Err("JSX: export * is not supported".into());
+                }
+                other => items.push(other),
+            }
+        }
+        if is_entry && rw.default.is_none() {
+            return Err("JSX: scene file must end with export default <element>".into());
+        }
+        rw.items = items;
+        Ok(rw)
+    }
+}
+
+#[derive(Default)]
+struct Rewritten {
+    items: Vec<ModuleItem>,
+    default: Option<String>,
+    /// (exported name, local ident)
+    named: Vec<(String, String)>,
+}
+
+fn export_name(m: &swc_core::ecma::ast::ModuleExportName) -> String {
+    use swc_core::ecma::ast::ModuleExportName as MEN;
+    match m {
+        MEN::Ident(i) => i.sym.to_string(),
+        MEN::Str(s) => s.value.to_string_lossy().into_owned(),
+    }
+}
+
+/// Top-level binding names introduced by a declaration (idents only).
+fn decl_names(decl: &Decl) -> Vec<String> {
+    let mut out = Vec::new();
+    match decl {
+        Decl::Fn(f) => out.push(f.ident.sym.to_string()),
+        Decl::Class(c) => out.push(c.ident.sym.to_string()),
+        Decl::Var(v) => {
+            for d in &v.decls {
+                collect_pat_idents(&d.name, &mut out);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn collect_pat_idents(pat: &Pat, out: &mut Vec<String>) {
+    match pat {
+        Pat::Ident(b) => out.push(b.id.sym.to_string()),
+        Pat::Array(a) => {
+            for e in a.elems.iter().flatten() {
+                collect_pat_idents(e, out);
+            }
+        }
+        Pat::Object(o) => {
+            for p in &o.props {
+                use swc_core::ecma::ast::ObjectPatProp as OPP;
+                match p {
+                    OPP::KeyValue(kv) => collect_pat_idents(&kv.value, out),
+                    OPP::Assign(a) => out.push(a.key.sym.to_string()),
+                    OPP::Rest(r) => collect_pat_idents(&r.arg, out),
+                }
+            }
+        }
+        Pat::Assign(a) => collect_pat_idents(&a.left, out),
+        Pat::Rest(r) => collect_pat_idents(&r.arg, out),
+        _ => {}
+    }
+}
+
+/// `const <name> = <init>;`
+fn const_stmt(span: swc_core::common::Span, name: &str, init: swc_core::ecma::ast::Expr) -> ModuleItem {
+    ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        span,
+        ctxt: Default::default(),
+        kind: VarDeclKind::Const,
+        declare: false,
+        decls: vec![VarDeclarator {
+            span,
+            name: Pat::Ident(BindingIdent {
+                id: Ident::new_no_ctxt(name.into(), span),
+                type_ann: None,
+            }),
+            init: Some(Box::new(init)),
+            definite: false,
+        }],
+    }))))
+}
+
+/// Compile entry JSX + transitively imported `.jsx` modules into one JS
+/// body. `resolve` maps an import specifier (`./dial.jsx`; the `./` is
+/// stripped) to its source text. `.css` imports are ignored as before.
+/// Cycles, missing modules and missing exports are `JSX:`-prefixed errors.
+pub fn compile_jsx_with(
+    src: &str,
+    resolve: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut b = Bundler {
+        resolve,
+        done: HashMap::new(),
+        stack: Vec::new(),
+        out: String::new(),
+        next: 1,
+    };
+    let (cm, module) = parse_jsx(src)?;
+    let rw = b.rewrite(module.body, true)?;
+    let entry = emit_js(&cm, Module { body: rw.items, ..module })?;
+    Ok(format!("{}{entry}", b.out))
+}
+
+/// Disk resolver for `.jsx` imports, rooted at `asset_root`.
+fn disk_resolver(asset_root: &str) -> impl FnMut(&str) -> Result<String, String> + '_ {
+    move |spec| {
+        let key = spec.strip_prefix("./").unwrap_or(spec);
+        std::fs::read_to_string(format!("{asset_root}/{key}"))
+            .map_err(|e| format!("cannot read {key}: {e}"))
+    }
 }
 
 /// boa host: `solve([x0, ...], [v => residual, ...])` — Levenberg-damped
@@ -2444,7 +2762,7 @@ pub fn run_jsx_pose_sandbox(
     pose: &[(String, f64)],
     sandbox: crate::react::Sandbox,
 ) -> Result<crate::SceneRun, String> {
-    let js = compile_jsx(jsx_src)?;
+    let js = compile_jsx_with(jsx_src, &mut disk_resolver(asset_root))?;
     let v = eval_js_react(&js, pose, sandbox)?;
     build_scene_run(&v, css_src, asset_root, pose)
 }
@@ -2839,7 +3157,37 @@ impl SceneSession {
         pose: &[(String, f64)],
         sandbox: crate::react::Sandbox,
     ) -> Result<SceneSession, String> {
-        let js = compile_jsx(jsx_src)?;
+        let js = compile_jsx_with(jsx_src, &mut disk_resolver(asset_root))?;
+        Self::open_compiled(js, css_src, asset_root, pose, sandbox)
+    }
+
+    /// 同 [`SceneSession::open`]，但 `.jsx` 导入从 `modules`（specifier →
+    /// 源码，`"./dial.jsx"` 与 `"dial.jsx"` 等价）解析——内存模块表，
+    /// 适合编辑器多标签页，不需要文件系统。
+    pub fn open_modules(
+        jsx_src: &str,
+        css_src: Option<&str>,
+        modules: &[(&str, &str)],
+    ) -> Result<SceneSession, String> {
+        let map: HashMap<&str, &str> = modules.iter().copied().collect();
+        let mut resolve = move |spec: &str| {
+            let key = spec.strip_prefix("./").unwrap_or(spec);
+            map.get(key)
+                .map(|s| s.to_string())
+                .ok_or_else(|| format!("unknown module {spec}"))
+        };
+        let js = compile_jsx_with(jsx_src, &mut resolve)?;
+        Self::open_compiled(js, css_src, ".", &[], crate::react::Sandbox::from_env())
+    }
+
+    /// 共享的会话建立：编译产物 js（不含 PRELUDE）→ 挂载 → 首帧构建。
+    fn open_compiled(
+        js: String,
+        css_src: Option<&str>,
+        asset_root: &str,
+        pose: &[(String, f64)],
+        sandbox: crate::react::Sandbox,
+    ) -> Result<SceneSession, String> {
         let module = format!("{PRELUDE}{js}");
         let pose_map: HashMap<String, f64> = pose.iter().cloned().collect();
         let mut react = crate::react::ReactSession::new_with(
@@ -3192,6 +3540,108 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             !s.dispatch(inst.id, "onWheel", "null").unwrap().found,
             "无该处理器"
         );
+    }
+
+    /// ---- .jsx 模块导入（编译期打包：globalThis.__exp_N + 别名）----
+
+    fn object_xs(s: &SceneSession) -> Vec<f64> {
+        s.run()
+            .scene
+            .objects
+            .iter()
+            .map(|o| o.base.motor().to_matrix()[3])
+            .collect()
+    }
+
+    #[test]
+    fn import_component_default() {
+        let dial = "export default function Dial(props) {\n\
+            \x20 return <translate t={[props.x || 0, 0, 0]}><sphere r={0.5} /></translate>;\n\
+            }";
+        let entry = "import Dial from './dial.jsx';\n\
+            export default (<scene><camera /><Dial x={2} /></scene>);";
+        let s = SceneSession::open_modules(entry, None, &[("dial.jsx", dial)]).expect("open");
+        let xs = object_xs(&s);
+        assert_eq!(xs.len(), 1, "one sphere: {xs:?}");
+        assert!((xs[0] - 2.0).abs() < 1e-9, "Dial at x=2: {xs:?}");
+    }
+
+    #[test]
+    fn import_element_default_and_named() {
+        let part = "export default (<translate t={[1, 0, 0]}><box s={[1, 1, 1]} /></translate>);\n\
+            export const dot = <translate t={[3, 0, 0]}><sphere r={0.2} /></translate>;";
+        let entry = "import part, { dot } from './part.jsx';\n\
+            export default (<scene><camera />{part}{dot}</scene>);";
+        let s = SceneSession::open_modules(entry, None, &[("part.jsx", part)]).expect("open");
+        let xs = object_xs(&s);
+        assert_eq!(xs.len(), 2, "{xs:?}");
+        assert!((xs[0] - 1.0).abs() < 1e-9 && (xs[1] - 3.0).abs() < 1e-9, "{xs:?}");
+    }
+
+    #[test]
+    fn import_is_transitive_and_shared() {
+        let base = "export const unit = <sphere r={0.1} />;";
+        let mid = "import { unit } from './base.jsx';\n\
+            export default (<translate t={[5, 0, 0]}>{unit}</translate>);";
+        let entry = "import mid from './mid.jsx';\n\
+            import { unit } from './base.jsx';\n\
+            export default (<scene><camera />{mid}{unit}</scene>);";
+        let s = SceneSession::open_modules(entry, None, &[("base.jsx", base), ("mid.jsx", mid)])
+            .expect("open");
+        let xs = object_xs(&s);
+        assert_eq!(xs.len(), 2, "mid's unit + entry's unit: {xs:?}");
+        assert!((xs[0] - 5.0).abs() < 1e-9 && xs[1].abs() < 1e-9, "{xs:?}");
+    }
+
+    #[test]
+    fn import_errors_are_jsx_prefixed() {
+        // cycle
+        let a = "import b from './b.jsx';\nexport default (<sphere r={0.1} />);";
+        let b = "import a from './a.jsx';\nexport default (<sphere r={0.2} />);";
+        let entry = "import a from './a.jsx';\nexport default (<scene>{a}</scene>);";
+        let e = SceneSession::open_modules(entry, None, &[("a.jsx", a), ("b.jsx", b)])
+            .err().expect("should fail");
+        assert!(e.contains("circular import"), "{e}");
+
+        // missing module
+        let e = SceneSession::open_modules(
+            "import x from './nope.jsx';\nexport default (<scene>{x}</scene>);",
+            None,
+            &[],
+        )
+        .err().expect("should fail");
+        assert!(e.starts_with("JSX: cannot import ./nope.jsx"), "{e}");
+
+        // missing default export
+        let m = "export const a = 1;";
+        let e = SceneSession::open_modules(
+            "import x from './m.jsx';\nexport default (<scene />);",
+            None,
+            &[("m.jsx", m)],
+        )
+        .err().expect("should fail");
+        assert!(e.contains("has no default export"), "{e}");
+
+        // missing named export
+        let e = SceneSession::open_modules(
+            "import { zz } from './m.jsx';\nexport default (<scene />);",
+            None,
+            &[("m.jsx", m)],
+        )
+        .err().expect("should fail");
+        assert!(e.contains("does not export zz"), "{e}");
+    }
+
+    #[test]
+    fn import_supports_default_function_decl() {
+        let m = "export default function Tag() {\n\
+            \x20 return <translate t={[7, 0, 0]}><sphere r={0.3} /></translate>;\n\
+            }";
+        let entry = "import Tag from './m.jsx';\nexport default (<scene><camera /><Tag /></scene>);";
+        let s = SceneSession::open_modules(entry, None, &[("m.jsx", m)]).expect("open");
+        let xs = object_xs(&s);
+        assert_eq!(xs.len(), 1);
+        assert!((xs[0] - 7.0).abs() < 1e-9, "{xs:?}");
     }
 
     #[test]
@@ -3563,7 +4013,7 @@ export default (
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
         let run = run_jsx(src, Some("[id=\"other\"] { color: #0D0D0D; }"), "").expect("run");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0xFFFFFF);
-        let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "").unwrap_err();
+        let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "").err().expect("should fail");
         assert!(e.contains("unsupported attribute"), "{e}");
     }
 
@@ -3574,7 +4024,7 @@ export default (
         let run = run_jsx(src, Some("[class=\"a,b\"], #zz { color: #0D0D0D; }"), "").expect("run");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
         // 尾逗号 → 空选择器，必须报错而不是被吞掉。
-        let e = run_jsx(src, Some(".a, { color: red; }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".a, { color: red; }"), "").err().expect("should fail");
         assert!(e.contains("CSS:"), "{e}");
     }
 
@@ -3746,15 +4196,15 @@ export default (
     #[test]
     fn test_css_value_errors() {
         let src = r#"export default <sphere r={1} class="c" />;"#;
-        let e = run_jsx(src, Some(".c { roughness: blorble; }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { roughness: blorble; }"), "").err().expect("should fail");
         assert!(e.contains("CSS:") && e.contains("blorble"), "{e}");
-        let e = run_jsx(src, Some(".c { roughness: 2px; }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { roughness: 2px; }"), "").err().expect("should fail");
         assert!(e.contains("CSS:") && e.contains("unit"), "{e}");
-        let e = run_jsx(src, Some(".c { color: var(--missing); }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { color: var(--missing); }"), "").err().expect("should fail");
         assert!(e.contains("CSS:") && e.contains("--missing"), "{e}");
-        let e = run_jsx(src, Some(".c { color: currentcolor; }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { color: currentcolor; }"), "").err().expect("should fail");
         assert!(e.contains("CSS:") && e.contains("not supported"), "{e}");
-        let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "").err().expect("should fail");
         assert!(e.contains("CSS:") && e.contains("calc"), "{e}");
     }
 
@@ -3769,11 +4219,11 @@ export default (
             ("@keyframes spin { from { opacity: 1; } }", "@keyframes"),
         ];
         for (css, want) in cases {
-            let e = run_jsx(src, Some(css), "").unwrap_err();
+            let e = run_jsx(src, Some(css), "").err().expect("should fail");
             assert!(e.contains("CSS:") && e.contains(want), "css={css} err={e}");
         }
         // 嵌套规则：lightningcss 能解析，但我们不支持 → 必须报错而不是静默丢弃。
-        let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "").unwrap_err();
+        let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "").err().expect("should fail");
         assert!(e.contains("CSS:"), "{e}");
     }
 
@@ -3822,14 +4272,14 @@ export default (
 
     #[test]
     fn test_jsx_errors() {
-        let e = run_jsx("export default <sphere", None, "").unwrap_err();
+        let e = run_jsx("export default <sphere", None, "").err().expect("should fail");
         assert!(e.starts_with("JSX line 1: "), "{e}");
-        let e = run_jsx("export default <frob />;", None, "").unwrap_err();
+        let e = run_jsx("export default <frob />;", None, "").err().expect("should fail");
         assert!(e.contains("unknown primitive frob"), "{e}");
         // 带未知参数的未知元素先报参数错。
-        let e = run_jsx("export default <frob r={1} />;", None, "").unwrap_err();
+        let e = run_jsx("export default <frob r={1} />;", None, "").err().expect("should fail");
         assert!(e.contains("frob has no parameter r"), "{e}");
-        let e = run_jsx("const a = 1;", None, "").unwrap_err();
+        let e = run_jsx("const a = 1;", None, "").err().expect("should fail");
         assert_eq!(e, "JSX: scene file must end with export default <element>");
     }
 
@@ -3853,7 +4303,7 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .unwrap_err();
+        .err().expect("should fail");
         assert!(e.contains("did not converge"), "{e}");
 
         // pose：关节级覆盖 + 报告 pose 行。
@@ -3926,7 +4376,7 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .unwrap_err();
+        .err().expect("should fail");
         assert!(
             e.contains("unknown joint a"),
             "Cam 组件应进入 cam 校验: {e}"
@@ -3959,7 +4409,7 @@ export default <sphere r={0.1} />;"#,
             None,
             "",
         )
-        .unwrap_err();
+        .err().expect("should fail");
         assert!(e.contains("q must be [qr, qp]"), "{e}");
     }
 }

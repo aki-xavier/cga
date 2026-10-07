@@ -374,7 +374,7 @@ crates/
     export / urdf           STL export (bake → binary/ASCII) + URDF export (mesh links, export only)
   cga-examples/             demo CLIs (src/bin/*.rs)
 examples/                   jsx/ React-style scenes (.jsx+.css) + gallery/ PNGs + gallery/assets textures + demo output images (README figures; lang is the generation-pipeline showcase)
-docs/                       architecture diagram, robotics diagram, cross-platform plan, CSS conformance plan
+docs/                       architecture diagram, robotics diagram, cross-platform plan, CSS conformance plan, collision plan
 ```
 
 Demo CLIs (`cargo run --release -p cga-examples --bin <name>`):
