@@ -34,9 +34,6 @@ pub use csg_node::*;
 pub mod bake;
 pub use bake::*;
 
-pub mod collision;
-pub use collision::*;
-
 pub mod stl;
 pub use stl::*;
 

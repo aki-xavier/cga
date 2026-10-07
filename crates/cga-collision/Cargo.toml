@@ -1,0 +1,11 @@
+[package]
+name = "cga-collision"
+version = "0.1.0"
+edition = "2021"
+description = "Analytic collision detection for CGA solids (pure f64 CPU): containment, separation, contacts, screw-sweep CCD."
+
+[dependencies]
+cga-core = { path = "../cga-core" }
+
+[lints]
+workspace = true

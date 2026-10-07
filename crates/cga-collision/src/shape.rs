@@ -2,7 +2,7 @@
 //! 缩放会改变欧氏距离，给不出诚实的分离值（返回 None ⇒ Unknown）。
 
 use super::*;
-use crate::geometry::Geometry;
+use cga_core::geometry::Geometry;
 
 /// 世界空间形状（刚体变换后的参数）。
 #[derive(Clone, Copy, Debug)]

@@ -11,7 +11,7 @@
 //! 也不报假阳性。
 
 use super::*;
-use crate::Multivector;
+use cga_core::Multivector;
 
 /// 螺旋扫掠 TOI（`xi = [ωx, ωy, ωz, vx, vy, vz]`）。
 ///

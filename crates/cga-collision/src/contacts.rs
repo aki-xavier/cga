@@ -11,7 +11,7 @@ use super::*;
 use pairs::{box_box, box_edges, box_vertices, dist_seg, plane_separation, sdf, support_range};
 use shape::Shape;
 
-/// 两个实体的接触列表。域与 [`separation`](crate::collision::separation) 一致。
+/// 两个实体的接触列表。域与 [`separation`](crate::separation) 一致。
 pub fn contacts(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> Option<Vec<Contact>> {
     let sa = shape::to_shape(a, wa)?;
     let sb = shape::to_shape(b, wb)?;

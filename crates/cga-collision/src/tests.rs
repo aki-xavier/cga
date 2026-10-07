@@ -2,11 +2,11 @@
 //! 对称性、Unknown 构型必须报 Unknown。
 
 use super::*;
-use crate::geometry::{
+use cga_core::geometry::{
     BoxGeometry, CircleGeometry, ConeGeometry, CylinderGeometry, EllipsoidGeometry, PlaneGeometry,
     SphereGeometry, TorusGeometry,
 };
-use crate::{CsgGeometry, CsgOp, Multivector};
+use cga_core::{CsgGeometry, CsgOp, Multivector};
 
 fn sphere(r: f64) -> Geometry {
     Geometry::SphereGeometry(SphereGeometry::new(r))
@@ -34,7 +34,7 @@ fn circle(r: f64) -> Geometry {
 }
 
 fn ident() -> [f64; 16] {
-    crate::mat4_identity()
+    cga_core::mat4_identity()
 }
 fn trans(x: f64, y: f64, z: f64) -> [f64; 16] {
     [
@@ -141,9 +141,9 @@ fn contains_csg_three_valued() {
         CsgOp::Difference,
         vec![
             sphere(2.0),
-            Geometry::AffineGeometry(crate::AffineGeometry::with_motor(
+            Geometry::AffineGeometry(cga_core::AffineGeometry::with_motor(
                 sphere(1.0),
-                crate::Multivector::translator([1.0, 0.0, 0.0]),
+                cga_core::Multivector::translator([1.0, 0.0, 0.0]),
                 [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             )),
         ],
@@ -386,9 +386,9 @@ fn overlap_union_decomposition() {
         CsgOp::Union,
         vec![
             sphere(1.0),
-            Geometry::AffineGeometry(crate::AffineGeometry::with_motor(
+            Geometry::AffineGeometry(cga_core::AffineGeometry::with_motor(
                 sphere(1.0),
-                crate::Multivector::translator([5.0, 0.0, 0.0]),
+                cga_core::Multivector::translator([5.0, 0.0, 0.0]),
                 [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             )),
         ],

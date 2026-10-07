@@ -1,8 +1,8 @@
 //! 场景级碰撞扫描（计划 `docs/collision-plan.md` C1）：broad phase（包围盒 +
-//! 同组免检）+ 窄相（`cga_core::collision`）+ 指纹缓存（帧间没变的对象对不重算，
+//! 同组免检）+ 窄相（`cga_collision`）+ 指纹缓存（帧间没变的对象对不重算，
 //! 与增量渲染同一套失效哲学）。
 
-use cga_core::collision::{probe, Contact, Hit};
+use cga_collision::{probe, Contact, Hit};
 use cga_gpu::scene::{Object, ObjectParams, Scene};
 use cga_gpu::scene_graph::Color;
 use cga_gpu::shading::{Material, MaterialParams};
@@ -102,7 +102,7 @@ impl CollisionScan {
                     Hit::Yes => {
                         let wa = scene.objects[h.a].motor().to_matrix();
                         let wb = scene.objects[h.b].motor().to_matrix();
-                        cga_core::collision::contacts(
+                        cga_collision::contacts(
                             &scene.objects[h.a].geometry,
                             wa,
                             &scene.objects[h.b].geometry,
@@ -244,7 +244,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
             if gi != 0 && gi == gk {
                 continue; // 同组免检
             }
-            let (h, t) = cga_core::collision::sweep_toi(
+            let (h, t) = cga_collision::sweep_toi(
                 xi,
                 &obj.geometry,
                 wa,
@@ -302,7 +302,7 @@ pub fn sweep_scene(xi: [f64; 6], a: usize, scene: &Scene, t_max: f64) -> SweepOu
         if j == a || (obj.group != 0 && obj.group == o.group) {
             continue;
         }
-        let (h, t) = cga_core::collision::sweep_toi(
+        let (h, t) = cga_collision::sweep_toi(
             xi,
             &obj.geometry,
             wa,

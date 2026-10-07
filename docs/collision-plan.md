@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 碰撞检测：定位与开发计划
 
-状态：**C0–C2 已实施（2026-10-07）**，C3–C4 计划。适用：`cga-core/src/collision/`、`cga-host/src/collision.rs`（场景扫描）、`cga-host`（JSX 查询、报告、运动学闭环）。
+状态：**C0–C4 全部已实施（2026-10-07）**；同日窄相拆为独立 crate。适用：`crates/cga-collision/`（窄相：判定/分离/接触/螺旋 CCD，纯 f64 CPU，只依赖 `cga-core`）、`cga-host/src/collision.rs`（场景扫描/标记/关节扫描，依赖 `cga-gpu` 的 `Scene`/`Object`）、`cga-host`（JSX 查询、报告、运动学闭环）。
 
 ## 0. 结论与定位
 
@@ -34,7 +34,8 @@
 
 - **D1 只做检测**：动力学（力/冲量/约束求解/时间步进）不在本计划内。
 - **D2 三值结果**：`Hit::Yes / No / Unknown`。CSG 差/交的重叠判定不装精确：保守规则给不出确切答案时返回 `Unknown`，调用方自行降级（当作 Yes 报警 / 当作 No 放行）——显式三值，不许静默。
-- **D3 窄相在 `cga-core`**：纯 CPU f64 标量数学，不绑 MLX（碰撞查询是逐对的控制流密集代码，不是渲染那种逐光线数据流；GPU 批化以后有需求再说）。
+- **D3 窄相是纯 CPU f64 标量数学**，不绑 MLX（碰撞查询是逐对的控制流密集代码，不是渲染那种逐光线数据流；GPU 批化以后有需求再说）。
+  - C4 后修正（2026-10-07，用户拍板）：窄相拆为**独立 crate `cga-collision`**（只依赖 `cga-core`，全部走 pub API，`cga-core` 零改动）；场景扫描/标记/关节扫描留在 `cga-host`（依赖 `cga-gpu` 的 `Scene`/`Object`，进纯 crate 会把 MLX 拖进依赖图）。
 - **D4 CCD 用螺旋运动精确轨迹**：`q(t) = exp(t·ξ)·q₀`，TOI 用 cam_solve 同款「采样 bracket → 唯一性认证 → 二分」；不做线性插值近似的扫掠。
 - **D5 JSX 落点**：`collides(ofA, ofB)` / `clearance(ofA, ofB)` 宿主查询；结果进场景报告。v1 不加新元素类型。
   - C0 实施修正：`solve()` 是**模块求值期**的纯数学宿主函数，那时场景还没建成；碰撞查询需要建成后的场景，必须走 `{__q}` **惰性查询**通道（与 `face()/center()` 同款，构建期解析），不能模仿 `solve()`。JSX 面因此整体移到 C1。
@@ -43,7 +44,7 @@
 
 ## 3. API 草案
 
-Rust（`cga-core/src/collision/`，新模块）：
+Rust（`crates/cga-collision/`，独立 crate）：
 
 ```rust
 /// 三值判定（D2）：确切命中 / 确切不命中 / 认证路径也给不出确切答案。
@@ -78,7 +79,7 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C0 · 点与距离原语
 
-**已实施（2026-10-07）**：`cga-core/src/collision/`（`Hit` 三值、`contains_point`、
+**已实施（2026-10-07）**：`crates/cga-collision/`（`Hit` 三值、`contains_point`、
 `separation`、`overlap`、`world_aabb`；纯 CPU f64）。已交付：
 
 - `contains_point`：全图元（球/平面半空间/盒/柱含无限长/锥/环面/椭球）+ CSG
@@ -90,7 +91,7 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
   的 2D 点–边距离（精确）；椭球外部点走单调函数对分（内部点 v1 `Unknown`）。
 - `overlap`：分离距离优先；算不了时世界包围盒保守判定（相离 ⇒ `No`，否则
   `Unknown`）。
-- 验收：15 个测试（`cga-core::collision::tests`）——pairwise 矩阵每对 ≥ 3 构型
+- 验收：15 个测试（`cga-collision 的 tests`）——pairwise 矩阵每对 ≥ 3 构型
   （分离/相切/穿入，解析距离断言）、CSG 三值、Unknown 构型必须 Unknown、
   对称性、overlap 与 separation 一致性、包围盒保守路径。
 - 与计划的偏差：JSX `inside()` 移到 C1（见 D5 修正）。

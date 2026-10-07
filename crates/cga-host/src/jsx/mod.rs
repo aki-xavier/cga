@@ -2625,7 +2625,7 @@ impl<'p> Builder<'p> {
                 let mut best: Option<f64> = None;
                 for (ga, wa) in &a {
                     for (gb, wb) in &b {
-                        if let Some(d) = cga_core::collision::separation(ga, *wa, gb, *wb) {
+                        if let Some(d) = cga_collision::separation(ga, *wa, gb, *wb) {
                             best = Some(best.map_or(d, |x: f64| x.min(d)));
                         }
                     }
@@ -2640,10 +2640,10 @@ impl<'p> Builder<'p> {
                 let mut any_unknown = false;
                 for (ga, wa) in &a {
                     for (gb, wb) in &b {
-                        match cga_core::collision::overlap(ga, *wa, gb, *wb) {
-                            cga_core::collision::Hit::Yes => return Ok(1.0),
-                            cga_core::collision::Hit::No => {}
-                            cga_core::collision::Hit::Unknown => any_unknown = true,
+                        match cga_collision::overlap(ga, *wa, gb, *wb) {
+                            cga_collision::Hit::Yes => return Ok(1.0),
+                            cga_collision::Hit::No => {}
+                            cga_collision::Hit::Unknown => any_unknown = true,
                         }
                     }
                 }
@@ -2673,10 +2673,10 @@ impl<'p> Builder<'p> {
                 }
                 let mut any_unknown = false;
                 for (g, w) in &solids {
-                    match cga_core::collision::contains_point(g, *w, p) {
-                        cga_core::collision::Hit::Yes => return Ok(1.0),
-                        cga_core::collision::Hit::No => {}
-                        cga_core::collision::Hit::Unknown => any_unknown = true,
+                    match cga_collision::contains_point(g, *w, p) {
+                        cga_collision::Hit::Yes => return Ok(1.0),
+                        cga_collision::Hit::No => {}
+                        cga_collision::Hit::Unknown => any_unknown = true,
                     }
                 }
                 if any_unknown {
@@ -3583,11 +3583,11 @@ mod tests {
             let hits = crate::collision::CollisionScan::new().scan(&run.scene);
             let yes = hits
                 .iter()
-                .filter(|h| h.hit == cga_core::collision::Hit::Yes)
+                .filter(|h| h.hit == cga_collision::Hit::Yes)
                 .count();
             let unknown = hits
                 .iter()
-                .filter(|h| h.hit == cga_core::collision::Hit::Unknown)
+                .filter(|h| h.hit == cga_collision::Hit::Unknown)
                 .count();
             assert_eq!(
                 (yes, unknown),
@@ -3602,7 +3602,7 @@ mod tests {
         let hits = crate::collision::CollisionScan::new().scan(&run.scene);
         let h = hits
             .iter()
-            .find(|h| h.hit == cga_core::collision::Hit::Yes)
+            .find(|h| h.hit == cga_collision::Hit::Yes)
             .expect("animation has one contact");
         assert!((h.separation.unwrap() + 0.05).abs() < 1e-9, "{h:?}");
     }
@@ -4030,7 +4030,7 @@ export default (
             .iter()
             .find(|h| h.a == 0 && h.b == 1)
             .expect("pair 0-1");
-        assert_eq!(inner.hit, cga_core::collision::Hit::Yes);
+        assert_eq!(inner.hit, cga_collision::Hit::Yes);
         assert!((inner.separation.unwrap() + 1.5).abs() < 1e-9, "{inner:?}");
 
         // 输入只移动 Dial 的球（对象 2）：含它的 3 对重算，其余 3 对缓存命中

@@ -357,14 +357,11 @@ pub fn scene_report(
     }
     // 碰撞接触表（C1）：只列非 No 的对象对（Yes / Unknown），没有则整节省略。
     let hits = crate::collision::CollisionScan::new().scan(scene);
-    for h in hits
-        .iter()
-        .filter(|h| h.hit != cga_core::collision::Hit::No)
-    {
+    for h in hits.iter().filter(|h| h.hit != cga_collision::Hit::No) {
         let kind = match h.hit {
-            cga_core::collision::Hit::Yes => "yes",
-            cga_core::collision::Hit::Unknown => "unknown",
-            cga_core::collision::Hit::No => unreachable!(),
+            cga_collision::Hit::Yes => "yes",
+            cga_collision::Hit::Unknown => "unknown",
+            cga_collision::Hit::No => unreachable!(),
         };
         let sep = h
             .separation

@@ -11,9 +11,9 @@
 //! - 圆片是曲面不是实体：`contains_point` → `Unknown`；分离只对球有定义。
 //! - 窄相是纯 CPU f64 标量数学（D3），与渲染器的 MLX 批处理解耦。
 
-use crate::affine::{mat3_inv, mat3_to_mat4};
-use crate::geometry::Geometry;
-use crate::mat4::{mat4_mul, transform_point};
+use cga_core::affine::{mat3_inv, mat3_to_mat4};
+use cga_core::geometry::Geometry;
+use cga_core::mat4::{mat4_mul, transform_point};
 
 mod contacts;
 mod pairs;
@@ -103,7 +103,7 @@ pub(crate) fn xform_dir(m: [f64; 16], v: [f64; 3]) -> [f64; 3] {
 /// 仿射 4×4 的逆（decompose_rigid 的极分解 + mat3_inv；奇异线性部分会 panic，
 /// 与渲染管线的行为一致）。
 pub(crate) fn inv_affine4(m: [f64; 16]) -> [f64; 16] {
-    let (motor, lin) = crate::affine::decompose_rigid(m);
+    let (motor, lin) = cga_core::affine::decompose_rigid(m);
     mat4_mul(mat3_to_mat4(mat3_inv(lin)), motor.reverse().to_matrix())
 }
 
@@ -120,13 +120,13 @@ pub fn contains_point(g: &Geometry, world: [f64; 16], p: [f64; 3]) -> Hit {
                 .map(|k| contains_point(k, world, p))
                 .collect::<Vec<_>>();
             match c.op {
-                crate::csg_node::CsgOp::Union => {
+                cga_core::csg_node::CsgOp::Union => {
                     kids.into_iter().reduce(Hit::or).unwrap_or(Hit::No)
                 }
-                crate::csg_node::CsgOp::Intersection => {
+                cga_core::csg_node::CsgOp::Intersection => {
                     kids.into_iter().reduce(Hit::and).unwrap_or(Hit::Unknown)
                 }
-                crate::csg_node::CsgOp::Difference => kids
+                cga_core::csg_node::CsgOp::Difference => kids
                     .into_iter()
                     .reduce(|acc, h| acc.and(h.not()))
                     .unwrap_or(Hit::Unknown),
@@ -207,7 +207,7 @@ fn bool_hit(b: bool) -> Hit {
 pub fn separation(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> Option<f64> {
     // CSG union：到并集的距离 = 到各子件距离的最小值（有子件算不出则整体 Unknown）。
     if let Geometry::CsgGeometry(c) = a {
-        if c.op == crate::csg_node::CsgOp::Union {
+        if c.op == cga_core::csg_node::CsgOp::Union {
             let mut best: Option<f64> = Some(f64::INFINITY);
             for k in &c.children {
                 best = match (best, separation(k, wa, b, wb)) {
@@ -219,7 +219,7 @@ pub fn separation(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> O
         }
     }
     if let Geometry::CsgGeometry(c) = b {
-        if c.op == crate::csg_node::CsgOp::Union {
+        if c.op == cga_core::csg_node::CsgOp::Union {
             return separation(b, wb, a, wa);
         }
     }
@@ -251,12 +251,12 @@ pub fn probe(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> (Hit, 
         return (bool_hit(d <= 0.0), Some(d));
     }
     if let Geometry::CsgGeometry(c) = a {
-        if c.op == crate::csg_node::CsgOp::Union {
+        if c.op == cga_core::csg_node::CsgOp::Union {
             return probe_union(c, wa, b, wb);
         }
     }
     if let Geometry::CsgGeometry(c) = b {
-        if c.op == crate::csg_node::CsgOp::Union {
+        if c.op == cga_core::csg_node::CsgOp::Union {
             let (h, s) = probe_union(c, wb, a, wa);
             return (h, s);
         }
@@ -265,7 +265,7 @@ pub fn probe(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> (Hit, 
 }
 
 fn probe_union(
-    c: &crate::CsgGeometry,
+    c: &cga_core::CsgGeometry,
     wc: [f64; 16],
     other: &Geometry,
     wo: [f64; 16],
@@ -295,7 +295,7 @@ pub fn world_aabb(g: &Geometry, world: [f64; 16]) -> Option<[[f64; 3]; 2]> {
             world_aabb(&a.inner[0], m)
         }
         Geometry::CsgGeometry(c) => match c.op {
-            crate::csg_node::CsgOp::Union => {
+            cga_core::csg_node::CsgOp::Union => {
                 let mut out: Option<[[f64; 3]; 2]> = None;
                 for k in &c.children {
                     let b = world_aabb(k, world)?;
@@ -317,7 +317,7 @@ pub fn world_aabb(g: &Geometry, world: [f64; 16]) -> Option<[[f64; 3]; 2]> {
                 }
                 out
             }
-            crate::csg_node::CsgOp::Intersection => {
+            cga_core::csg_node::CsgOp::Intersection => {
                 let mut out: Option<[[f64; 3]; 2]> = None;
                 for k in &c.children {
                     let b = world_aabb(k, world)?;
@@ -339,7 +339,7 @@ pub fn world_aabb(g: &Geometry, world: [f64; 16]) -> Option<[[f64; 3]; 2]> {
                 }
                 out
             }
-            crate::csg_node::CsgOp::Difference => world_aabb(&c.children[0], world),
+            cga_core::csg_node::CsgOp::Difference => world_aabb(&c.children[0], world),
         },
         prim => {
             let b = local_bounds(prim)?;
