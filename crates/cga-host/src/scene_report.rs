@@ -355,6 +355,23 @@ pub fn scene_report(
     for (name, v) in &kin.pose {
         out.push_str(&format!("pose {}={}\n", escape_name(name), fmt_num(*v)));
     }
+    // 碰撞接触表（C1）：只列非 No 的对象对（Yes / Unknown），没有则整节省略。
+    let hits = crate::collision::CollisionScan::new().scan(scene);
+    for h in hits
+        .iter()
+        .filter(|h| h.hit != cga_core::collision::Hit::No)
+    {
+        let kind = match h.hit {
+            cga_core::collision::Hit::Yes => "yes",
+            cga_core::collision::Hit::Unknown => "unknown",
+            cga_core::collision::Hit::No => unreachable!(),
+        };
+        let sep = h
+            .separation
+            .map(fmt_num)
+            .unwrap_or_else(|| "unknown".to_string());
+        out.push_str(&format!("collide {} {} {} sep={}\n", h.a, h.b, kind, sep));
+    }
     let mut summary = format!(
         "summary objects={} lights={} no_bounds={}",
         scene.objects.len(),
@@ -414,6 +431,17 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
             rep.contains(line),
             "expected line {line:?} in report:\n{rep}"
         );
+    }
+
+    #[test]
+    fn test_report_contacts() {
+        // 两个重叠的球（sep = 1.5 − 2 = −0.5）→ 接触表一行；全分离则无此节。
+        let report = rep(
+            "export default <scene><sphere r={1} /><translate t={[1.5,0,0]}><sphere r={1} /></translate></scene>;",
+        );
+        assert!(report.contains("collide 0 1 yes sep=-0.5"), "{report}");
+        let quiet = rep("export default <scene><sphere r={1} /><translate t={[5,0,0]}><sphere r={1} /></translate></scene>;");
+        assert!(!quiet.contains("collide"), "{quiet}");
     }
 
     #[test]

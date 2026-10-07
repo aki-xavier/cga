@@ -323,12 +323,17 @@ fn separation_unknown_pairs() {
     .is_none());
     // 球–圆片：圆片是曲面
     assert!(separation(&sphere(1.0), id, &circle(1.0), id).is_none());
-    // CSG 参与：v1 Unknown
+    // CSG union 现在分解为子件最小值（C1）；差/交仍是 Unknown
     let u = Geometry::CsgGeometry(CsgGeometry::new(
         CsgOp::Union,
         vec![sphere(1.0), sphere(1.0)],
     ));
-    assert!(separation(&u, id, &sphere(1.0), id).is_none());
+    assert!(separation(&u, id, &sphere(1.0), id).is_some());
+    let d = Geometry::CsgGeometry(CsgGeometry::new(
+        CsgOp::Difference,
+        vec![sphere(2.0), sphere(1.0)],
+    ));
+    assert!(separation(&d, id, &sphere(1.0), id).is_none());
     // 非刚体仿射（2× 缩放）下的分离：Unknown
     assert!(separation(&sphere(1.0), scale2(), &sphere(1.0), id).is_none());
 }
@@ -369,6 +374,56 @@ fn overlap_consistency_with_separation() {
         ),
         Hit::Unknown
     );
+}
+
+// ---- CSG union 分解（C1） ----
+
+#[test]
+fn overlap_union_decomposition() {
+    let id = ident();
+    // union(球@原点, 球@(5,0,0)) vs 第三个球：
+    let u = Geometry::CsgGeometry(CsgGeometry::new(
+        CsgOp::Union,
+        vec![
+            sphere(1.0),
+            Geometry::AffineGeometry(crate::AffineGeometry::with_motor(
+                sphere(1.0),
+                crate::Multivector::translator([5.0, 0.0, 0.0]),
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            )),
+        ],
+    ));
+    // 远处 → No（分离距离可算：union 的子件最小值）
+    let (h, s) = probe(&u, id, &sphere(1.0), trans(10.0, 0.0, 0.0));
+    assert_eq!(h, Hit::No);
+    close(s.unwrap(), 3.0);
+    // 碰到第二个子件 → Yes（separation ≤ 0）
+    let (h, s) = probe(&u, id, &sphere(1.0), trans(6.5, 0.0, 0.0));
+    assert_eq!(h, Hit::Yes);
+    close(s.unwrap(), -0.5);
+    // 三值 or 传播：union(球, 部分环面) vs 近球（包围盒重叠）→ No ∪ Unknown = Unknown
+    let u2 = Geometry::CsgGeometry(CsgGeometry::new(
+        CsgOp::Union,
+        vec![
+            sphere(1.0),
+            Geometry::TorusGeometry(TorusGeometry::tube(1.0, 0.25, 1.0)),
+        ],
+    ));
+    assert_eq!(
+        overlap(&u2, id, &sphere(0.5), trans(1.75, 0.0, 0.0)),
+        Hit::Unknown
+    );
+    // 包围盒相离 → 确切 No（不到 union 分解）
+    assert_eq!(
+        overlap(&u2, id, &sphere(0.5), trans(50.0, 0.0, 0.0)),
+        Hit::No
+    );
+    // 差/交 → Unknown
+    let d = Geometry::CsgGeometry(CsgGeometry::new(
+        CsgOp::Difference,
+        vec![sphere(2.0), sphere(1.0)],
+    ));
+    assert_eq!(overlap(&d, id, &sphere(0.5), id), Hit::Unknown);
 }
 
 #[test]

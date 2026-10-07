@@ -12,6 +12,9 @@ pub use scene_build::*;
 
 pub mod scene_report;
 
+pub mod collision;
+pub use collision::*;
+
 pub mod jsx;
 pub use jsx::*;
 

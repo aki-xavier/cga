@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 碰撞检测：定位与开发计划
 
-状态：**C0 已实施（2026-10-07）**，C1–C4 计划。适用：`cga-core/src/collision/`、`cga-gpu`（包围盒/凸性/认证）、`cga-host`（JSX 查询、报告、运动学闭环）。
+状态：**C0 + C1 已实施（2026-10-07）**，C2–C4 计划。适用：`cga-core/src/collision/`、`cga-host/src/collision.rs`（场景扫描）、`cga-host`（JSX 查询、报告、运动学闭环）。
 
 ## 0. 结论与定位
 
@@ -105,10 +105,29 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 
 ### C1 · 重叠判定 + broad phase + JSX helper
 
-- `overlap()`：pairwise 表 + CSG 三值规则——union 递归分解（任一子件 Yes ⇒ Yes，全 No ⇒ No，否则 Unknown）；差/交保守（包围体重叠但无法证实时 ⇒ Unknown）。
-- broad phase：`geom_bounds` AABB 剪枝 + 按 `Object::group` 跳过同组免检对 + 指纹缓存（帧间没变的对不重算）。
-- JSX `collides()` / `clearance()` 宿主函数；报告输出接触对表。
-- 验收：已知构型矩阵；画廊 8 场景全对扫描（自身干涉应为 `No`/`Unknown`，列白名单）；`Unknown` 构型必须报 `Unknown`（不许装精确）。
+**已实施（2026-10-07）**。已交付：
+
+- `overlap()`/`probe()` 判定阶梯：包围盒相离 ⇒ `No` → 两两分离距离表 →
+  CSG union 递归分解（三值 or；`separation` 同步分解为子件最小值）→
+  差/交 ⇒ `Unknown`。
+- `cga-host/src/collision.rs`：`CollisionScan` 全对扫描——同组（`group` 非 0
+  且相等）免检跳过；指纹（几何 + 世界变换）缓存跨帧复用（`cache_hits` /
+  `computed` 统计）。`SceneSession::collisions()` 持持久扫描器。
+- JSX 惰性标量查询（构建期解析，`{__q}` 通道）：`clearance(a,b)` → 分离距离、
+  `collides(a,b)` → 1/0、`inside(of, p)` → 1/0；`qadd/qsub/qmul/qdiv` 组合
+  （JS 算术对查询对象是字符串拼接——不透明对象不能加）。**Unknown 一律构建
+  报错**（三值不许变成数字）。tag 引用先定义后使用（与 `instances`/`when` 同）。
+  落点：图元的数值参数（`build_geo`）与 `<rotate angle>`（`p_num_lazy`）。
+  注：`build_geo` 此前把 `{__q}` 对象静默成 0——现在要么给真值要么报错。
+- 报告：`collide <i> <j> yes|unknown sep=<d>` 行（只列非 No 的对，没有则整节省略，
+  既有金标不受影响）。
+- 验收：`overlap_union_decomposition`（union 分解 + 三值传播 + 包围盒提前 No）、
+  `scan_pairs_and_group_skip`、`scan_cache_reuse_across_scans`（动一个对象只重算
+  含它的对）、`test_jsx_collision_queries`（clearance/collides/inside 全解析正确）、
+  `test_jsx_collision_query_unknown_errors`（环面–环面 → Unknown 报错）、
+  `session_collisions_cache_across_frames`（跨帧缓存）、`test_report_contacts`、
+  `gallery_collision_scan_baseline`（8 场景 Yes/Unknown 计数基线 +
+  animation 太阳球陷入地面 0.05 的语义抽查——检测器抓到的真实穿入）。
 
 ### C2 · 接触信息
 

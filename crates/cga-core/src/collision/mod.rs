@@ -196,30 +196,86 @@ fn bool_hit(b: bool) -> Hit {
 // ---- 分离距离与重叠 ------------------------------------------------------
 
 /// 两个实体的分离距离：相离为正（表面最近距离），穿入为负（凸对 = 最小平移
-/// 深度），相切为 0。`None` = Unknown（未实现的对 / 非刚体仿射 / CSG / 部分
-/// 环面 / 圆片 / 环纹面 / 无限长柱与非球非平面的对）。
+/// 深度），相切为 0。CSG union 分解为子件最小值（全部可算才给）。
+/// `None` = Unknown（未实现的对 / 非刚体仿射 / CSG 差与交 / 部分环面 /
+/// 圆片 / 环纹面 / 无限长柱与非球非平面的对）。
 pub fn separation(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> Option<f64> {
+    // CSG union：到并集的距离 = 到各子件距离的最小值（有子件算不出则整体 Unknown）。
+    if let Geometry::CsgGeometry(c) = a {
+        if c.op == crate::csg_node::CsgOp::Union {
+            let mut best: Option<f64> = Some(f64::INFINITY);
+            for k in &c.children {
+                best = match (best, separation(k, wa, b, wb)) {
+                    (Some(x), Some(d)) => Some(x.min(d)),
+                    _ => None,
+                };
+            }
+            return best;
+        }
+    }
+    if let Geometry::CsgGeometry(c) = b {
+        if c.op == crate::csg_node::CsgOp::Union {
+            return separation(b, wb, a, wa);
+        }
+    }
     let sa = shape::to_shape(a, wa)?;
     let sb = shape::to_shape(b, wb)?;
     pairs::pair_separation(&sa, &sb)
 }
 
-/// 两个实体是否重叠（三值）。分离距离能算时按符号判定；算不了时用世界包围盒
-/// 保守判定（包围盒相离 ⇒ 确切 `No`，否则 `Unknown`）。
+/// 两个实体是否重叠（三值）。见 [`probe`]。
 pub fn overlap(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> Hit {
-    match separation(a, wa, b, wb) {
-        Some(d) => bool_hit(d <= 0.0),
-        None => match (world_aabb(a, wa), world_aabb(b, wb)) {
-            (Some(x), Some(y)) => {
-                if aabb_overlap(x, y) {
-                    Hit::Unknown
-                } else {
-                    Hit::No
-                }
-            }
-            _ => Hit::Unknown,
-        },
+    probe(a, wa, b, wb).0
+}
+
+/// `overlap` + `separation` 一次算（避免重复求值）。
+///
+/// 判定阶梯（保守，逐步降级）：
+/// 1. 世界包围盒相离 ⇒ 确切 `No`（分离距离照算，不受 broad phase 影响）；
+/// 2. 两两分离距离表能算 ⇒ 按符号给 `Yes`/`No`；
+/// 3. CSG union 分解：`overlap(∪ᵢ aᵢ, b) = orᵢ overlap(aᵢ, b)`（三值 or；
+///    分离距离 = 子件最小值，全可算才给）；
+/// 4. 差/交与其余 ⇒ `Unknown`。
+pub fn probe(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> (Hit, Option<f64>) {
+    if let (Some(x), Some(y)) = (world_aabb(a, wa), world_aabb(b, wb)) {
+        if !aabb_overlap(x, y) {
+            return (Hit::No, separation(a, wa, b, wb));
+        }
     }
+    if let Some(d) = separation(a, wa, b, wb) {
+        return (bool_hit(d <= 0.0), Some(d));
+    }
+    if let Geometry::CsgGeometry(c) = a {
+        if c.op == crate::csg_node::CsgOp::Union {
+            return probe_union(c, wa, b, wb);
+        }
+    }
+    if let Geometry::CsgGeometry(c) = b {
+        if c.op == crate::csg_node::CsgOp::Union {
+            let (h, s) = probe_union(c, wb, a, wa);
+            return (h, s);
+        }
+    }
+    (Hit::Unknown, None)
+}
+
+fn probe_union(
+    c: &crate::CsgGeometry,
+    wc: [f64; 16],
+    other: &Geometry,
+    wo: [f64; 16],
+) -> (Hit, Option<f64>) {
+    let mut hit = Hit::No;
+    let mut seps: Option<f64> = Some(f64::INFINITY);
+    for k in &c.children {
+        let (h, s) = probe(k, wc, other, wo);
+        hit = hit.or(h);
+        seps = match (seps, s) {
+            (Some(acc), Some(d)) => Some(acc.min(d)),
+            _ => None,
+        };
+    }
+    (hit, seps)
 }
 
 /// 世界空间 AABB（保守：部分环面按完整环面取，圆片取零厚度板）。

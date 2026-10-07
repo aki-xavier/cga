@@ -2000,7 +2000,7 @@ impl<'p> Builder<'p> {
             "translate" => translate4(self.p_vec3_lazy(el, "t")?.unwrap_or([0.0; 3])),
             "rotate" => {
                 let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
-                let ang = p_num(el, "angle")?.unwrap_or(0.0);
+                let ang = self.p_num_lazy(el, "angle")?.unwrap_or(0.0);
                 Multivector::rotor(ax, ang).to_matrix()
             }
             "scale" => {
@@ -2058,7 +2058,17 @@ impl<'p> Builder<'p> {
             {
                 continue;
             }
-            args.insert(k.clone(), to_arg(v));
+            // 标量惰性查询（clearance/collides/inside）在构建期解析成数值。
+            // 此前 {__q} 对象在几何参数里会被 to_arg 静默成 0——现在要么给真值，要么报错。
+            args.insert(
+                k.clone(),
+                match v {
+                    Value::Object(o) if o.contains_key("__q") => {
+                        ArgValue::Num(self.eval_lazy_num(o, k)?)
+                    }
+                    _ => to_arg(v),
+                },
+            );
         }
         let args = self
             .loader
@@ -2587,6 +2597,142 @@ impl<'p> Builder<'p> {
         match prop(el, key) {
             None => Ok(None),
             Some(v) => self.resolve_vec3(v, key).map(Some),
+        }
+    }
+
+    /// p_num 的惰性版：标量查询节点（`clearance`/`collides`/`inside`）在构建期解析。
+    fn p_num_lazy(&mut self, el: &El, key: &str) -> Result<Option<f64>, String> {
+        match prop(el, key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Object(o)) if o.contains_key("__q") => self.eval_lazy_num(o, key).map(Some),
+            Some(_) => p_num(el, key),
+        }
+    }
+
+    /// 标量惰性查询（C1，`docs/collision-plan.md` D5 修正：走 `{__q}` 通道而非
+    /// `solve()` 的求值期语义——求值期场景还没建成）。三值里的 Unknown 不许变成
+    /// 数字（D2）：报错并写明原因。
+    fn eval_lazy_num(
+        &mut self,
+        o: &serde_json::Map<String, Value>,
+        what: &str,
+    ) -> Result<f64, String> {
+        let q = o["__q"].as_str().unwrap_or("");
+        match q {
+            "clearance" => {
+                let a = self.query_solids(&o["a"], what)?;
+                let b = self.query_solids(&o["b"], what)?;
+                let mut best: Option<f64> = None;
+                for (ga, wa) in &a {
+                    for (gb, wb) in &b {
+                        if let Some(d) = cga_core::collision::separation(ga, *wa, gb, *wb) {
+                            best = Some(best.map_or(d, |x: f64| x.min(d)));
+                        }
+                    }
+                }
+                best.ok_or_else(|| {
+                    format!("JSX: {what}: clearance 是 Unknown（不支持的几何对，不许假装精确）")
+                })
+            }
+            "collides" => {
+                let a = self.query_solids(&o["a"], what)?;
+                let b = self.query_solids(&o["b"], what)?;
+                let mut any_unknown = false;
+                for (ga, wa) in &a {
+                    for (gb, wb) in &b {
+                        match cga_core::collision::overlap(ga, *wa, gb, *wb) {
+                            cga_core::collision::Hit::Yes => return Ok(1.0),
+                            cga_core::collision::Hit::No => {}
+                            cga_core::collision::Hit::Unknown => any_unknown = true,
+                        }
+                    }
+                }
+                if any_unknown {
+                    return Err(format!(
+                        "JSX: {what}: collides 是 Unknown（不支持的几何对，不许假装精确）"
+                    ));
+                }
+                Ok(0.0)
+            }
+            "inside" => {
+                let solids = self.query_solids(&o["of"], what)?;
+                let pv = o
+                    .get("p")
+                    .ok_or_else(|| format!("JSX: {what}: inside needs p=[x,y,z]"))?;
+                let Value::Array(a) = pv else {
+                    return Err(format!("JSX: {what}: inside p must be [x,y,z]"));
+                };
+                if a.len() != 3 {
+                    return Err(format!("JSX: {what}: inside p must be [x,y,z]"));
+                }
+                let mut p = [0.0; 3];
+                for i in 0..3 {
+                    p[i] = a[i]
+                        .as_f64()
+                        .ok_or_else(|| format!("JSX: {what}: inside p[{i}] must be a number"))?;
+                }
+                let mut any_unknown = false;
+                for (g, w) in &solids {
+                    match cga_core::collision::contains_point(g, *w, p) {
+                        cga_core::collision::Hit::Yes => return Ok(1.0),
+                        cga_core::collision::Hit::No => {}
+                        cga_core::collision::Hit::Unknown => any_unknown = true,
+                    }
+                }
+                if any_unknown {
+                    return Err(format!(
+                        "JSX: {what}: inside 是 Unknown（不支持的几何，不许假装精确）"
+                    ));
+                }
+                Ok(0.0)
+            }
+            "qadd" | "qsub" | "qmul" | "qdiv" => {
+                let a = self.eval_num_value(&o["a"], what)?;
+                let b = self.eval_num_value(&o["b"], what)?;
+                Ok(match q {
+                    "qadd" => a + b,
+                    "qsub" => a - b,
+                    "qmul" => a * b,
+                    _ => a / b,
+                })
+            }
+            _ => Err(format!("JSX: {what}: unknown scalar query {q}")),
+        }
+    }
+
+    /// 数值或标量查询节点（`qadd`/`qmul` 等的操作数）。
+    fn eval_num_value(&mut self, v: &Value, what: &str) -> Result<f64, String> {
+        match v {
+            Value::Number(n) => n.as_f64().ok_or_else(|| format!("JSX: {what}: bad number")),
+            Value::Object(o) if o.contains_key("__q") => self.eval_lazy_num(o, what),
+            _ => Err(format!(
+                "JSX: {what}: must be a number or scalar query, got {v}"
+            )),
+        }
+    }
+
+    /// 引用 → 实体列表（几何 + 世界变换）：tag 名查注册表；内联元素直接构建。
+    /// 与 `instances`/`when` 同规则：tag 必须先定义后使用。
+    fn query_solids(
+        &mut self,
+        of: &Value,
+        what: &str,
+    ) -> Result<Vec<(cga_core::Geometry, [f64; 16])>, String> {
+        match of {
+            Value::String(s) => {
+                let insts = self
+                    .tags
+                    .get(s)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| format!("JSX: {what}: unknown reference \"{s}\""))?;
+                Ok(insts.iter().map(|i| (i.geo.clone(), i.world)).collect())
+            }
+            Value::Object(_) => {
+                let el = to_el(of)?;
+                let (g, m) = self.el_geometry(&el, cga_core::mat4_identity())?;
+                Ok(vec![(g, m)])
+            }
+            _ => Err(format!("JSX: {what}: needs a reference name or element")),
         }
     }
 
@@ -3130,6 +3276,8 @@ pub struct SceneSession {
     stats: BuildStats,
     /// 增量渲染器（档 1）：尺寸/模式匹配时跨帧复用。
     incr: Option<cga_gpu::IncrementalRenderer>,
+    /// 碰撞扫描器（C1）：指纹缓存跨帧复用，没变的对象对不重算。
+    col_scan: crate::collision::CollisionScan,
 }
 
 impl SceneSession {
@@ -3228,6 +3376,7 @@ impl SceneSession {
             cache: None,
             stats: BuildStats::default(),
             incr: None,
+            col_scan: crate::collision::CollisionScan::new(),
         };
         sess.build_from(&out.snapshot)?;
         Ok(sess)
@@ -3314,6 +3463,22 @@ impl SceneSession {
         self.react.counters().map_err(String::from)
     }
 
+    /// 碰撞扫描（C1）：全对 broad+narrow，同组（非 0 且相等）免检；指纹缓存跨帧
+    /// 复用——没变的对象对不重算（命中数见返回后 `collision_scan_stats`）。
+    pub fn collisions(&mut self) -> Vec<crate::collision::PairHit> {
+        // 直接借字段：run 与 col_scan 是不相交的两个字段。
+        let run = self
+            .run
+            .as_ref()
+            .expect("SceneSession: rebuild 之前没有场景");
+        self.col_scan.scan(&run.scene)
+    }
+
+    /// 上次 `collisions()` 的缓存命中数与窄相计算数。
+    pub fn collision_scan_stats(&self) -> (usize, usize) {
+        (self.col_scan.cache_hits, self.col_scan.computed)
+    }
+
     pub fn reset_counters(&mut self) -> Result<(), String> {
         self.react.reset_counters().map_err(String::from)
     }
@@ -3391,6 +3556,56 @@ impl SceneSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gallery_collision_scan_baseline() {
+        // 画廊 8 场景全对扫描（C1 验收）：pin 住每个场景的 Yes/Unknown 计数。
+        // 说明：落在地面上的物体 = 接触（sep=0 → Yes），凸轮/齿轮啮合与装配
+        // 穿插也是真实接触；mechanical/assembly 的 Unknown 来自 CSG 差/交与
+        // 仿射包装（三值诚实，不许假装精确）。计数变化 = 场景或判定行为变化。
+        let want = [
+            ("orbit", 4, 4),
+            ("grid", 9, 0),
+            ("building", 159, 196),
+            ("mechanical", 0, 50),
+            ("primitives", 5, 12),
+            ("affine", 1, 6),
+            ("assembly", 0, 5),
+            ("animation", 1, 0),
+        ];
+        for (name, want_yes, want_unknown) in want {
+            let jsx = std::fs::read_to_string(format!("../../examples/jsx/{name}.jsx"))
+                .unwrap_or_else(|_| panic!("read {name}.jsx"));
+            let css = std::fs::read_to_string(format!("../../examples/jsx/{name}.css"))
+                .unwrap_or_else(|_| panic!("read {name}.css"));
+            let run = run_jsx(&jsx, Some(&css), "../../examples/jsx")
+                .unwrap_or_else(|e| panic!("jsx {name}: {e}"));
+            let hits = crate::collision::CollisionScan::new().scan(&run.scene);
+            let yes = hits
+                .iter()
+                .filter(|h| h.hit == cga_core::collision::Hit::Yes)
+                .count();
+            let unknown = hits
+                .iter()
+                .filter(|h| h.hit == cga_core::collision::Hit::Unknown)
+                .count();
+            assert_eq!(
+                (yes, unknown),
+                (want_yes, want_unknown),
+                "{name}: 碰撞基线变化（若是刻意改场景，更新本表）"
+            );
+        }
+        // 语义抽查：animation 的太阳球陷入地面 0.05（r=0.6, y=0.55）→ Yes 且 sep=−0.05。
+        let jsx = std::fs::read_to_string("../../examples/jsx/animation.jsx").unwrap();
+        let css = std::fs::read_to_string("../../examples/jsx/animation.css").unwrap();
+        let run = run_jsx(&jsx, Some(&css), "../../examples/jsx").unwrap();
+        let hits = crate::collision::CollisionScan::new().scan(&run.scene);
+        let h = hits
+            .iter()
+            .find(|h| h.hit == cga_core::collision::Hit::Yes)
+            .expect("animation has one contact");
+        assert!((h.separation.unwrap() + 0.05).abs() < 1e-9, "{h:?}");
+    }
 
     #[test]
     fn test_jsx_gallery_smoke() {
@@ -3757,6 +3972,73 @@ export default (
         );
         let st = s.build_stats();
         assert_eq!(st.reused_objects, 0, "tag 之下与查询子树都不可复用: {st:?}");
+    }
+
+    #[test]
+    fn test_jsx_collision_queries() {
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <tag name="a"><sphere r={1} /></tag>
+    <tag name="b"><translate t={[3, 0, 0]}><sphere r={1} /></translate></tag>
+    <tag name="c"><translate t={[1.5, 0, 0]}><sphere r={1} /></translate></tag>
+    <sphere r={clearance("a", "b")} />
+    <sphere r={qadd(0.5, collides("a", "c"))} />
+    <sphere r={qadd(0.5, collides("a", "b"))} />
+    <sphere r={qadd(0.25, inside("a", [0.5, 0, 0]))} />
+  </scene>
+);
+"#;
+        let run = run_jsx(src, None, ".").expect("run");
+        let radius = |i: usize| match &run.scene.objects[i].geometry {
+            cga_core::Geometry::SphereGeometry(s) => s.radius,
+            g => panic!("object {i} not a sphere: {g:?}"),
+        };
+        // 对象 0/1/2 是 tag a/b/c 的球
+        assert!((radius(3) - 1.0).abs() < 1e-9, "clearance(a,b) = 3 − 2 = 1");
+        assert!((radius(4) - 1.5).abs() < 1e-9, "collides(a,c) = 1（重叠）");
+        assert!((radius(5) - 0.5).abs() < 1e-9, "collides(a,b) = 0（分离）");
+        assert!((radius(6) - 1.25).abs() < 1e-9, "inside(a, [0.5,0,0]) = 1");
+    }
+
+    #[test]
+    fn test_jsx_collision_query_unknown_errors() {
+        // 环面–环面没有确切分离距离 → Unknown → 构建报错（不许静默给一个数）。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <tag name="t1"><torus R={1} r={0.25} /></tag>
+    <tag name="t2"><translate t={[3, 0, 0]}><torus R={1} r={0.25} /></translate></tag>
+    <sphere r={clearance("t1", "t2")} />
+  </scene>
+);
+"#;
+        let e = run_jsx(src, None, ".").unwrap_err();
+        assert!(e.contains("Unknown"), "{e}");
+    }
+
+    #[test]
+    fn session_collisions_cache_across_frames() {
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        let hits = s.collisions();
+        let (_, computed0) = s.collision_scan_stats();
+        assert_eq!(computed0, 6, "4 个对象 → 6 对全算: {computed0}");
+        // 原点的 r=0.5 球在 r=1 球内部 → Yes（sep = 0 − 1.5 = −1.5）
+        let inner = hits
+            .iter()
+            .find(|h| h.a == 0 && h.b == 1)
+            .expect("pair 0-1");
+        assert_eq!(inner.hit, cga_core::collision::Hit::Yes);
+        assert!((inner.separation.unwrap() + 1.5).abs() < 1e-9, "{inner:?}");
+
+        // 输入只移动 Dial 的球（对象 2）：含它的 3 对重算，其余 3 对缓存命中
+        s.set_input(r#"{"x": 2.0}"#).unwrap();
+        s.collisions();
+        let (hits2, computed2) = s.collision_scan_stats();
+        assert_eq!(computed2, 3, "只有含运动对象的对重算: {computed2}");
+        assert_eq!(hits2, 3);
     }
 
     #[test]

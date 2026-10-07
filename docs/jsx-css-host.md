@@ -32,6 +32,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
 - 分组：`<Group name="…">` 元素或任意元素的 `group="…"` prop，子树产出的对象带分组 id（`SceneRun::groups` 注册表，`Object::group`）。分组是**缓存/失效与拾取的元数据单元，不是 z-index**——对象前后关系永远由求交决定。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
+- 碰撞查询（构建期惰性标量，`{__q}` 通道）：`clearance(a,b)` 分离距离、`collides(a,b)` / `inside(of,[x,y,z])` → 1/0，`qadd/qsub/qmul/qdiv` 组合（JS 算术对查询对象无效）。Unknown（不支持的几何对）报构建错误——三值不许变成数字。引用是先定义后使用的 tag 名或内联元素。场景级扫描见 `SceneSession::collisions()` 与报告的 `collide` 行。
 
 ## 2.1 .jsx 模块导入（2026-10-07）
 
@@ -101,7 +102,7 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 
 运动副也可用 **React 组件**写法：`Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed`（低副，`<joint type=…>` 的别名）与 `Gear`/`Cam`（高副）。它们定义在 `assets/kinematics-pairs.js`（随预置一起注入），只是把类型写进组件名、再展开成同样的 `{t:'joint'|'gear'|'cam'}` 节点，因此**代数核心与求解仍在 Rust**（`scene_build/kinematics.rs`），报告 / URDF / pose 覆盖不受影响。`q` 在 1-DOF 关节是数字、在多 DOF 关节是数组（cylindrical `[qr,qp]`，spherical / planar 三个数）。生成器 `jsx_gen::gen_pairs_showcase()` 一次输出全部 8 种关节 + 齿轮/凸轮高副（见 `demo_pairs`）。
 
-v1 边界（显式不做）：`dist()` 查询、`echo`；CSS 侧的布局/盒模型、伪元素、交互伪类、`@` 规则（`@media` / `@import` / `@keyframes` 等）、CSS 嵌套、`calc()` 与数学函数、`style={{…}}`（用 JSX prop 承担）。需要时各自单独立项。CSS 的差距清单与已实施的收敛记录见 `docs/css-conformance.md`。
+v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、交互伪类、`@` 规则（`@media` / `@import` / `@keyframes` 等）、CSS 嵌套、`calc()` 与数学函数、`style={{…}}`（用 JSX prop 承担）。需要时各自单独立项。CSS 的差距清单与已实施的收敛记录见 `docs/css-conformance.md`。（原 `dist()` 边界已由碰撞检测落地：`clearance()`/`collides()`/`inside()`，见 `docs/collision-plan.md`。）
 
 **透明度与渲染模式**：材质的 `opacity`/`ior`/`absorption` 在**正常模式**下驱动 Whitted 反射/折射（`opacity<1` 的表面发射次级光线），半透明遮挡物按 `1-opacity` 削弱阴影；**忽略透明度模式**（`RenderMode::IgnoreOpacity`）把一切当不透明——不发射次级光线、透明遮挡物按实心投影，用于实体预览与提速。两种模式在不含透明度的场景上输出**逐位一致**（有测试看守）。
 
@@ -118,6 +119,7 @@ v1 边界（显式不做）：`dist()` 查询、`echo`；CSS 侧的布局/盒模
 - 多 DOF 关节的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种关节 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - 帧间增量（§6）：实例版本随创建 / props 更新 / 结构变更正确抬升（`react::tests::instance_versions_track_changes`）；复用构建与全量构建逐字段一致（`incremental_build_reuses_unchanged_subtrees`）；兄弟组合器样式表关闭复用（`incremental_build_disabled_by_sibling_rules`）；增量渲染与全帧渲染逐位一致（cga-gpu `test_incremental_*` ×5 + `session_render_incremental_is_bitexact`）；分组流向 `Object::group`（`group_prop_and_element`）。
+- 碰撞（`docs/collision-plan.md` C0–C1）：`clearance`/`collides`/`inside` 惰性查询解析正确（含 `qadd` 组合），Unknown 报构建错误；`CollisionScan` 同组免检 + 跨帧指纹缓存（动一个对象只重算含它的对）；报告 `collide` 行；画廊 8 场景 Yes/Unknown 计数基线 + animation 太阳球陷入地面 0.05 的语义抽查。
 - CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常；`render_frames` 逐帧动画走增量构建 + 增量渲染并打印每帧统计。
 
 ## 6. 帧间增量：版本化、子树复用与像素级增量渲染
