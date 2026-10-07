@@ -101,6 +101,7 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 | `<Anchor link>` | 世界锚定：哪个连杆固连世界（至多一个） |
 | `<Gear a b ratio offset>` | 齿轮耦合（q 图上的方程，无方向）：`q_b = ratio·q_a + offset` |
 | `<Cam a b aProfile bProfile>` | 凸轮接触（对称约束；求解方向由求解器定）：profile 是 `{kind:"circle",c,n,r}` / `{kind:"plane",n,d}` |
+| `<Closure a b at bAt axis>` | 环路闭包约束（cut-joint，G5）：位置级方程，LM 求解环路上未固定的 1-DOF q；pair 的 `guess` prop 给求解初值 |
 | `<Revolute/Continuous/Prismatic/Helical/Cylindrical/Spherical/Planar/Fixed …>` | 副类型的**组件写法**（kind 进组件名），等价于 `<pair kind=…>`；不再接收 children（约束没有子内容） |
 | `<Tag name>` | 标签注册表（**等价 prop 形式**：`tag="name"`） |
 | `<Group name>` / `group="…"` prop | 分组：子树产出对象的缓存/失效/拾取单元（**不是**渲染层叠，见 §6 档 2）；无 `name` 时是透明容器 |
@@ -121,7 +122,7 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 - 组件 + hooks（状态/记忆/上下文/副作用）+ `map` + 三元控制流出 4 个对象。
 - CSS 验收（`test_css_*`，全集见 `docs/css-conformance.md` §8）：31 行选择器匹配表（复合多类 / 四类组合器 / `*` / `[attr]` / `:root` 根限定 / tag 大小写 / 组合链）、10 格级联矩阵（`#id` > `.class` > `tag` > `*`、源码顺序、`!important` 跨规则与压过内联普通声明）、值转换（`rgb`/`hsl`/具名/hex/八位 hex → opacity、百分比、`var()` 与 fallback、`--x` 别名、未知属性静默）、错误契约（`@` 规则、CSS 嵌套、伪类/伪元素、不支持的值与单位、缺失变量）、以及父规则声明向子几何的继承。
 - 图模型（`docs/kinematics-graph.md`）：`<Link>/<Pair>/<Anchor>` 全部元素可用；gear 推导 q（`0.5·0.6=0.3`）与对象归属正确；`<pair kind>` 与组件写法等价；反向声明的副（a/b 写反）生成树反向传播成立；报告含 pair/link/gear/cam/anchor 行。
-- 多 DOF 副的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种副 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行；再生的 `pairs.png` 与图模型迁移前**逐位一致**。
+- 多 DOF 副的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种副 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行；再生的 `pairs.png` 与图模型迁移前**逐位一致**；闭链 `<closure>`（G5）：矩形四连杆闭式解（q1=q2=−π/2）1e-6 吻合 + 端点落点 + 同输入同解 + 错误路径。
 - 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
 - 帧间增量（§6）：实例版本随创建 / props 更新 / 结构变更正确抬升（`react::tests::instance_versions_track_changes`）；复用构建与全量构建逐字段一致（`incremental_build_reuses_unchanged_subtrees`）；兄弟组合器样式表关闭复用（`incremental_build_disabled_by_sibling_rules`）；增量渲染与全帧渲染逐位一致（cga-gpu `test_incremental_*` ×5 + `session_render_incremental_is_bitexact`）；分组流向 `Object::group`（`group_prop_and_element`）。
 - 碰撞（`docs/collision-plan.md` C0–C4）：`clearance`/`collides`/`inside` 惰性查询解析正确（含 `qadd` 组合），Unknown 报构建错误；`CollisionScan` 同组免检 + 跨帧指纹缓存（动一个对象只重算含它的对）；报告 `collide` 行；画廊 8 场景 Yes/Unknown 计数基线 + animation 太阳球陷入地面 0.05 的语义抽查；接触点解析断言与标记渲染金标（C2）；螺旋 CCD 闭式验证与关节行程扫描（C3/C4）。

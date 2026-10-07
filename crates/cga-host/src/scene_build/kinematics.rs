@@ -133,6 +133,7 @@ pub struct Kinematics {
     pub anchor: Option<String>,
     pub gears: Vec<GearRel>,
     pub cams: Vec<CamSolved>,
+    pub closures: Vec<ClosureSolved>,
     /// Pose overrides that took effect (sorted by name), for the report.
     pub pose: Vec<(String, f64)>,
 }
@@ -438,6 +439,22 @@ pub struct GraphDecl {
     pub anchor: Option<String>,
     pub gears: Vec<GearDecl>,
     pub cams: Vec<CamDecl>,
+    pub closures: Vec<ClosureDecl>,
+}
+
+/// 环路闭包约束（G5，Modelica cut-joint 同构）：link a 上 `at` 点必须与 link b 上
+/// `b_at` 点重合，且 closure 轴对齐。它不是树边（生成树只用 `<pair>`），
+/// 是位置级约束方程；它自己的 q 不是未知量，是闭合物。
+#[derive(Clone, Debug)]
+pub struct ClosureDecl {
+    pub a: String,
+    pub b: String,
+    /// a 侧 frame 里的闭合点（F_a 原点）。
+    pub at: [f64; 3],
+    /// b 侧 frame 里的闭合点（默认 b 的 frame 原点）。
+    pub b_at: [f64; 3],
+    /// 闭合轴（a 侧 frame；q=0 闭合同一轴）。revolute 闭环必给。
+    pub axis: [f64; 3],
 }
 
 #[derive(Clone, Debug)]
@@ -451,6 +468,9 @@ pub struct PairDecl {
     pub rpy: [f64; 3],
     /// q 初值（未给 = 空 vec）。
     pub q_init: Vec<f64>,
+    /// 求解器初值（`guess` prop）：只是 LM/闭链求解的种子，不是值——不参与构建，
+    /// 不被求解器触碰的 pair 上 guess 无效（报错）。
+    pub q_guess: Vec<f64>,
     /// q 是否显式给出（gear/cam 的"已固定"判定与 pose 冲突检查用）。
     pub q_given: bool,
     pub pitch: Option<f64>,
@@ -479,6 +499,20 @@ pub struct GraphSolution {
     pub link_world: Vec<[f64; 16]>,
     pub pairs: Vec<PairDef>,
     pub cams: Vec<CamSolved>,
+    pub closures: Vec<ClosureSolved>,
+}
+
+/// 求解后的闭环记录（报告用）。
+#[derive(Clone, Debug)]
+pub struct ClosureSolved {
+    pub a: String,
+    pub b: String,
+    pub at: [f64; 3],
+    pub b_at: [f64; 3],
+    /// 求解到的 pair（名 + q）。
+    pub solved: Vec<(String, f64)>,
+    /// 收敛后的残差范数。
+    pub residual: f64,
 }
 
 /// 校验（D8）→ q 赋值 → gear 不动点 → BFS 定向生成树 → 前向传播 → cam 逐个解。
@@ -545,6 +579,20 @@ pub(crate) fn solve_graph(
             if !link_idx.contains_key(r.as_str()) {
                 return Err(format!("JSX: cam 引用未知 link {r}"));
             }
+        }
+    }
+    for c in &decl.closures {
+        if c.a == c.b {
+            return Err(format!("JSX: closure 的 a 与 b 是同一 link {}", c.a));
+        }
+        for r in [&c.a, &c.b] {
+            if !link_idx.contains_key(r.as_str()) {
+                return Err(format!("JSX: closure 引用未知 link {r}"));
+            }
+        }
+        let n = c.axis[0] * c.axis[0] + c.axis[1] * c.axis[1] + c.axis[2] * c.axis[2];
+        if n < 1e-12 {
+            return Err("JSX: closure.axis must be nonzero".to_string());
         }
     }
 
@@ -767,10 +815,118 @@ pub(crate) fn solve_graph(
         });
     }
 
+    // ---- 6b. closure 逐个解（G5：闭链，位置级约束 + LM） ----
+    let mut closures = Vec::new();
+    let mut guess_used = vec![false; decl.pairs.len()];
+    for cd in &decl.closures {
+        // 树路径 a → b（两端已在同一棵生成树里——全图连通性在孤岛检查时成立）。
+        let ia = link_idx[cd.a.as_str()];
+        let ib = link_idx[cd.b.as_str()];
+        let path = tree_path(&parent, ia, ib);
+        if path.is_empty() {
+            return Err(format!("JSX: closure {}-{} 两端不在同一棵树", cd.a, cd.b));
+        }
+        // 自由 q：路径上未固定（未给 q / 无 pose / 未被 gear/cam/前序 closure 解出）的
+        // 1-DOF pair。
+        let free: Vec<usize> = path.iter().copied().filter(|&pi| !pinned[pi]).collect();
+        if free.is_empty() {
+            return Err(format!(
+                "JSX: closure {}-{} 路径上没有可解的自由 q",
+                cd.a, cd.b
+            ));
+        }
+        for &pi in &free {
+            if !decl.pairs[pi].kind.is_1dof() {
+                return Err(format!(
+                    "JSX: closure {}-{} 路径上的 pair {} 不是 1-DOF（多自由度闭环求解另行立项）",
+                    cd.a,
+                    cd.b,
+                    pname(&decl.pairs[pi])
+                ));
+            }
+        }
+        // 残差：闭合点重合（3）+ 闭合轴对齐（3，叉积分量）。
+        let resid = |qs: &[Vec<f64>], world: &mut Vec<[f64; 16]>| -> Vec<f64> {
+            propagate(qs, world, &parent, &order);
+            let pa = cga_core::transform_point(world[ia], cd.at);
+            let pb = cga_core::transform_point(world[ib], cd.b_at);
+            let (wa, wb) = (&world[ia], &world[ib]);
+            let aa = [
+                wa[0] * cd.axis[0] + wa[1] * cd.axis[1] + wa[2] * cd.axis[2],
+                wa[4] * cd.axis[0] + wa[5] * cd.axis[1] + wa[6] * cd.axis[2],
+                wa[8] * cd.axis[0] + wa[9] * cd.axis[1] + wa[10] * cd.axis[2],
+            ];
+            let ab = [
+                wb[0] * cd.axis[0] + wb[1] * cd.axis[1] + wb[2] * cd.axis[2],
+                wb[4] * cd.axis[0] + wb[5] * cd.axis[1] + wb[6] * cd.axis[2],
+                wb[8] * cd.axis[0] + wb[9] * cd.axis[1] + wb[10] * cd.axis[2],
+            ];
+            let cr = v3_cross(v3_unit(aa), v3_unit(ab));
+            vec![
+                pa[0] - pb[0],
+                pa[1] - pb[1],
+                pa[2] - pb[2],
+                cr[0],
+                cr[1],
+                cr[2],
+            ]
+        };
+        // 初值：guess prop > 当前 q（默认 0）。
+        let mut x: Vec<f64> = free
+            .iter()
+            .map(|&pi| {
+                if let Some(&g) = decl.pairs[pi].q_guess.first() {
+                    guess_used[pi] = true;
+                    g
+                } else {
+                    qs[pi][0]
+                }
+            })
+            .collect();
+        let mut wtmp = vec![mat4_identity(); n_links.max(1)];
+        lm_solve(&mut x, &mut |x| {
+            for (k, &pi) in free.iter().enumerate() {
+                qs[pi][0] = x[k];
+            }
+            resid(&qs, &mut wtmp)
+        })
+        .map_err(|e| format!("JSX: closure {}-{} 未收敛: {e}", cd.a, cd.b))?;
+        let r = resid(&qs, &mut wtmp);
+        let rnorm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if rnorm > 1e-6 {
+            return Err(format!(
+                "JSX: closure {}-{} 收敛后残差 {rnorm:e} 仍超界（机构可能装不上）",
+                cd.a, cd.b
+            ));
+        }
+        let mut solved = Vec::new();
+        for (k, &pi) in free.iter().enumerate() {
+            qs[pi][0] = x[k];
+            pinned[pi] = true;
+            check_limit(&pname(&decl.pairs[pi]), decl.pairs[pi].limit, x[k])?;
+            solved.push((pname(&decl.pairs[pi]), x[k]));
+        }
+        propagate(&qs, &mut world, &parent, &order);
+        closures.push(ClosureSolved {
+            a: cd.a.clone(),
+            b: cd.b.clone(),
+            at: cd.at,
+            b_at: cd.b_at,
+            solved,
+            residual: rnorm,
+        });
+    }
+
     // ---- 7. 输出（限位终检：默认 0 值在 gear/cam 都没管到的 pair 上越限也要报） ----
     for (pi, p) in decl.pairs.iter().enumerate() {
         if p.kind.is_1dof() {
             check_limit(&pname(p), p.limit, qs[pi][0])?;
+        }
+        if !p.q_guess.is_empty() && !guess_used[pi] {
+            return Err(format!(
+                "JSX: pair {} 的 guess 没有被任何求解器使用（它不在闭链上）",
+                pname(p)
+            ));
         }
     }
     let mut out_pairs = Vec::with_capacity(decl.pairs.len());
@@ -801,5 +957,146 @@ pub(crate) fn solve_graph(
         link_world: world,
         pairs: out_pairs,
         cams,
+        closures,
     })
+}
+
+/// 生成树上 a → b 的 pair 路径（parent 数组由 BFS 填充）。
+fn tree_path(parent: &[Option<(usize, usize, bool)>], mut a: usize, mut b: usize) -> Vec<usize> {
+    // 先爬到同一深度，再同步上爬到 LCA。
+    let mut depth = |mut v: usize| {
+        let mut d = 0;
+        while let Some((_, u, _)) = parent[v] {
+            d += 1;
+            v = u;
+        }
+        d
+    };
+    let (mut da, mut db) = (depth(a), depth(b));
+    let mut out: Vec<usize> = Vec::new();
+    while da > db {
+        let (pi, u, _) = parent[a].unwrap();
+        out.push(pi);
+        a = u;
+        da -= 1;
+    }
+    while db > da {
+        let (pi, u, _) = parent[b].unwrap();
+        out.push(pi);
+        b = u;
+        db -= 1;
+    }
+    while a != b {
+        let (pi, u, _) = parent[a].unwrap();
+        out.push(pi);
+        a = u;
+        let (pj, v, _) = parent[b].unwrap();
+        out.push(pj);
+        b = v;
+    }
+    out
+}
+
+/// 小规模 Levenberg–Marquardt：min |r(x)|，有限差分雅可比。
+/// 不收敛（100 轮）→ Err。用于闭链的位置级约束求解。
+fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<(), String> {
+    let n = x.len();
+    let mut lambda = 1e-3;
+    let mut cur = r(x);
+    let mut cur_norm = cur.iter().map(|v| v * v).sum::<f64>().sqrt();
+    for _ in 0..100 {
+        if cur_norm < 1e-9 {
+            return Ok(());
+        }
+        let m = cur.len();
+        // 有限差分雅可比
+        let mut j = vec![vec![0.0; n]; m];
+        for (k, xk) in x.iter().enumerate() {
+            let h = 1e-7 * (1.0 + xk.abs());
+            let mut xp = x.to_vec();
+            xp[k] += h;
+            let rp = r(&xp);
+            for i in 0..m {
+                j[i][k] = (rp[i] - cur[i]) / h;
+            }
+        }
+        // 解 (JᵀJ + λI)δ = −Jᵀr（小规模高斯消元）
+        let mut a = vec![vec![0.0; n]; n];
+        let mut b = vec![0.0; n];
+        for i in 0..m {
+            for u in 0..n {
+                b[u] -= j[i][u] * cur[i];
+                for v in 0..n {
+                    a[u][v] += j[i][u] * j[i][v];
+                }
+            }
+        }
+        let mut solved = false;
+        for _ in 0..50 {
+            let mut aa = a.clone();
+            for u in 0..n {
+                aa[u][u] += lambda * (a[u][u].abs() + 1e-12);
+            }
+            if let Some(delta) = gauss_solve(&aa, &b) {
+                let xn: Vec<f64> = x.iter().zip(delta.iter()).map(|(x, d)| x + d).collect();
+                let rn = r(&xn);
+                let rn_norm = rn.iter().map(|v| v * v).sum::<f64>().sqrt();
+                if rn_norm < cur_norm {
+                    x.copy_from_slice(&xn);
+                    cur = rn;
+                    cur_norm = rn_norm;
+                    lambda = (lambda / 3.0).max(1e-12);
+                    solved = true;
+                    break;
+                }
+            }
+            lambda *= 10.0;
+            if lambda > 1e12 {
+                break;
+            }
+        }
+        if !solved {
+            return Err(format!("LM 停滞（残差 {cur_norm:e}）"));
+        }
+    }
+    if cur_norm < 1e-7 {
+        return Ok(());
+    }
+    Err(format!("LM 100 轮未收敛（残差 {cur_norm:e}）"))
+}
+
+/// 小规模高斯消元（部分主元），奇异 → None。
+fn gauss_solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let n = a.len();
+    let mut m: Vec<Vec<f64>> = a.to_vec();
+    let mut x = b.to_vec();
+    for c in 0..n {
+        let mut piv = c;
+        for r in c + 1..n {
+            if m[r][c].abs() > m[piv][c].abs() {
+                piv = r;
+            }
+        }
+        if m[piv][c].abs() < 1e-14 {
+            return None;
+        }
+        m.swap(c, piv);
+        x.swap(c, piv);
+        for r in c + 1..n {
+            let f = m[r][c] / m[c][c];
+            for k in c..n {
+                m[r][k] -= f * m[c][k];
+            }
+            x[r] -= f * x[c];
+        }
+    }
+    let mut out = vec![0.0; n];
+    for c in (0..n).rev() {
+        let mut s = x[c];
+        for k in c + 1..n {
+            s -= m[c][k] * out[k];
+        }
+        out[c] = s / m[c][c];
+    }
+    Some(out)
 }

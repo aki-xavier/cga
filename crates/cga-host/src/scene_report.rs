@@ -373,6 +373,20 @@ pub fn scene_report(
             fmt_num(c.q)
         ));
     }
+    for (i, c) in kin.closures.iter().enumerate() {
+        let solved: Vec<String> = c
+            .solved
+            .iter()
+            .map(|(n, q)| format!("{}={}", escape_name(n), fmt_num(*q)))
+            .collect();
+        out.push_str(&format!(
+            "closure {i} a=\"{}\" b=\"{}\" residual={} solved=[{}]\n",
+            escape_name(&c.a),
+            escape_name(&c.b),
+            fmt_num(c.residual),
+            solved.join(",")
+        ));
+    }
     for (name, v) in &kin.pose {
         out.push_str(&format!("pose {}={}\n", escape_name(name), fmt_num(*v)));
     }
@@ -400,13 +414,15 @@ pub fn scene_report(
         || !kin.pairs.is_empty()
         || !kin.gears.is_empty()
         || !kin.cams.is_empty()
+        || !kin.closures.is_empty()
     {
         summary.push_str(&format!(
-            " links={} pairs={} gears={} cams={}",
+            " links={} pairs={} gears={} cams={} closures={}",
             kin.links.len(),
             kin.pairs.len(),
             kin.gears.len(),
-            kin.cams.len()
+            kin.cams.len(),
+            kin.closures.len()
         ));
     }
     if any_bounds {

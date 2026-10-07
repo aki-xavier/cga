@@ -312,6 +312,7 @@ enum HostCall {
     Counters,
     ResetCounters,
     Errors,
+    ClearErrors,
     Logs,
     Instances,
     Unmount,
@@ -351,6 +352,7 @@ impl HostCall {
             HostCall::Counters => json!({ "m": "counters" }),
             HostCall::ResetCounters => json!({ "m": "resetCounters" }),
             HostCall::Errors => json!({ "m": "errors" }),
+            HostCall::ClearErrors => json!({ "m": "clearErrors" }),
             HostCall::Logs => json!({ "m": "logs" }),
             HostCall::Instances => json!({ "m": "instances" }),
             HostCall::Unmount => json!({ "m": "unmount" }),
@@ -755,6 +757,13 @@ impl<M> ReactSession<M> {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// 清空 React 错误缓冲。池化会话复用时必须清——否则上一个场景的
+    /// uncaught 错误会污染下一个场景（测试抓到过）。
+    pub fn clear_errors(&mut self) -> Result<(), ReactError> {
+        self.exec(|w| w.rpc(&HostCall::ClearErrors))?;
+        Ok(())
     }
 
     /// 作者 `console.*` 与调度器异常日志。

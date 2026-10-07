@@ -30,8 +30,9 @@ use swc_core::ecma::visit::VisitMutWith;
 use cga_core::Multivector;
 
 use crate::scene_build::{
-    solve_graph, ArgValue, Builders, CamDecl, CamProfile, CamSolved, GearDecl, GearRel, GraphDecl,
-    JointKind, Kinematics, LinkDef, PairDecl, PairDef, TagInstance, TagRegistry,
+    solve_graph, ArgValue, Builders, CamDecl, CamProfile, CamSolved, ClosureDecl, ClosureSolved,
+    GearDecl, GearRel, GraphDecl, JointKind, Kinematics, LinkDef, PairDecl, PairDef, TagInstance,
+    TagRegistry,
 };
 use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 use cga_gpu::scene_graph::Color;
@@ -1502,14 +1503,15 @@ struct Builder<'p> {
     link_worlds: HashMap<String, [f64; 16]>,
     pair_records: Vec<PairDef>,
     cam_records: Vec<CamSolved>,
+    closure_records: Vec<ClosureSolved>,
     pair_out: usize,
     cam_out: usize,
+    closure_out: usize,
     /// 当前正在发射的 link（`kin.links` 下标；发射与复用都登记 meshes）。
     cur_link: Option<usize>,
     tags: TagRegistry,
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
-    pose: HashMap<String, f64>,
     /// 分组注册表：id → 名字，0 = "" 未分组。append-only，跨帧稳定（复用的对象带旧 id）。
     groups: Vec<String>,
     group_stack: Vec<u32>,
@@ -2018,6 +2020,7 @@ impl<'p> Builder<'p> {
             ),
             "gear" => self.gear_el(el),
             "cam" => self.cam_el(el),
+            "closure" => self.closure_el(el),
             "drill" => {
                 let (geo, w) = self.drill_cutter(el, ctx)?;
                 let material = self.build_material(mat)?;
@@ -2293,6 +2296,17 @@ impl<'p> Builder<'p> {
         };
         self.cam_out += 1;
         self.kin.cams.push(c);
+        Ok(())
+    }
+
+    /// <closure a b at bAt axis>：环路闭包约束（G5；求解在图求解里完成）。
+    fn closure_el(&mut self, el: &El) -> Result<(), String> {
+        let _ = el;
+        let Some(c) = self.closure_records.get(self.closure_out).cloned() else {
+            return Err("JSX: closure 记录与声明数量不符（内部错误）".to_string());
+        };
+        self.closure_out += 1;
+        self.kin.closures.push(c);
         Ok(())
     }
 }
@@ -2872,6 +2886,7 @@ fn eval_js_react(
     react::with_session(react::Runtime::from_env(), |sess| {
         sess.register_global("solve", 2, solve_host)?;
         sess.unmount()?; // 清掉上一个场景（顺带跑其副作用清理）
+        sess.clear_errors()?; // 清掉上一个场景的 React 错误缓冲（池化复用）
         let out = sess.frame(react::FrameAction::Mount {
             src: &module,
             pose: &pose_map,
@@ -2977,6 +2992,19 @@ fn collect_decl(el: &El, decl: &mut GraphDecl) -> Result<(), String> {
                     ))
                 }
             };
+            let q_guess = match prop(el, "guess") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Number(_)) => vec![p_num(el, "guess")?.unwrap_or(0.0)],
+                Some(Value::Array(_)) => p_num_list(el, "guess")?.unwrap_or_default(),
+                Some(v) => {
+                    return Err(format!(
+                        "JSX: pair guess must be a number or number list, got {v}"
+                    ))
+                }
+            };
+            if !q_guess.is_empty() && q_guess.len() != 1 {
+                return Err("JSX: pair guess 目前只支持单标量（1-DOF 闭环求解）".to_string());
+            }
             decl.pairs.push(PairDecl {
                 name: p_str(el, "name")?,
                 kind,
@@ -2986,6 +3014,7 @@ fn collect_decl(el: &El, decl: &mut GraphDecl) -> Result<(), String> {
                 axis: p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]),
                 rpy: p_vec3(el, "rpy")?.unwrap_or([0.0; 3]),
                 q_init,
+                q_guess,
                 q_given,
                 pitch: p_num(el, "pitch")?,
                 limit,
@@ -3011,6 +3040,15 @@ fn collect_decl(el: &El, decl: &mut GraphDecl) -> Result<(), String> {
                 b: p_str(el, "b")?.ok_or_else(|| "JSX: cam needs b".to_string())?,
                 a_profile: parse_cam_profile(el, "aProfile")?,
                 b_profile: parse_cam_profile(el, "bProfile")?,
+            });
+        }
+        "closure" => {
+            decl.closures.push(ClosureDecl {
+                a: p_str(el, "a")?.ok_or_else(|| "JSX: closure needs a".to_string())?,
+                b: p_str(el, "b")?.ok_or_else(|| "JSX: closure needs b".to_string())?,
+                at: p_vec3(el, "at")?.unwrap_or([0.0; 3]),
+                b_at: p_vec3(el, "bAt")?.unwrap_or([0.0; 3]),
+                axis: p_vec3(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]),
             });
         }
         "joint" => {
@@ -3041,6 +3079,7 @@ const SIDE_EFFECT_TAGS: &[&str] = &[
     "link",
     "pair",
     "anchor",
+    "closure",
     "gear",
     "cam",
     "instances",
@@ -3233,13 +3272,14 @@ fn build_scene_run_cached(
         link_worlds,
         pair_records: solution.pairs,
         cam_records: solution.cams,
+        closure_records: solution.closures,
         pair_out: 0,
         cam_out: 0,
+        closure_out: 0,
         cur_link: None,
         tags: TagRegistry::new(),
         pending_tags: Vec::new(),
         rules,
-        pose: pose.iter().cloned().collect(),
         groups: cache
             .map(|c| c.groups.clone())
             .unwrap_or_else(|| vec![String::new()]),
@@ -4817,6 +4857,120 @@ export default (
         let run = run_jsx(src, Some(".tint { color: #223344; }"), "").expect("run");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x223344);
         assert_eq!(hx(&run.scene.objects[1].material.color), 0x223344);
+    }
+
+    /// ---- G5：闭链（closure 约束，LM 求解） ----
+
+    #[test]
+    fn test_closure_four_bar_closed_form() {
+        // 矩形四连杆：基座 A=(0,0) D=(2,0)，曲柄 1（朝上 q0=π/2），耦合杆 2，
+        // 摇杆 1。闭式解：B=(0,1) C=(2,1)，q1* = −π/2（耦合杆放平），
+        // q2* = −π/2（摇杆朝下）。自由 q：p1、p2（guess 从附近收敛到该支）。
+        let src = r#"
+export default (
+  <scene>
+    <link name="base">
+      <translate t={[0, 0.1, 0]}><box s={[0.15, 0.2, 0.15]} /></translate>
+      <translate t={[2, 0.1, 0]}><box s={[0.15, 0.2, 0.15]} /></translate>
+    </link>
+    <link name="crank"><translate t={[0.5, 0, 0]}><box s={[1, 0.06, 0.06]} /></translate></link>
+    <link name="coupler"><translate t={[1, 0, 0]}><box s={[2, 0.06, 0.06]} /></translate></link>
+    <link name="rocker"><translate t={[0.5, 0, 0]}><box s={[1, 0.06, 0.06]} /></translate></link>
+    <pair kind="revolute" name="p0" a="base" b="crank" at={[0,0,0]} axis={[0,0,1]} q={1.5707963267948966} />
+    <pair kind="revolute" name="p1" a="crank" b="coupler" at={[1,0,0]} axis={[0,0,1]} guess={-1.5} />
+    <pair kind="revolute" name="p2" a="coupler" b="rocker" at={[2,0,0]} axis={[0,0,1]} guess={-1.5} />
+    <closure a="rocker" b="base" at={[1,0,0]} bAt={[2,0,0]} axis={[0,0,1]} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_jsx(src, None, "").expect("run");
+        let k = &run.kinematics;
+        assert_eq!(k.closures.len(), 1);
+        let cl = &k.closures[0];
+        assert!(cl.residual < 1e-8, "残差: {}", cl.residual);
+        let get = |name: &str| {
+            cl.solved
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, q)| *q)
+                .unwrap_or(f64::NAN)
+        };
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        assert!(
+            (get("p1") + half_pi).abs() < 1e-6,
+            "q1: got {} want {}",
+            get("p1"),
+            -half_pi
+        );
+        assert!(
+            (get("p2") + half_pi).abs() < 1e-6,
+            "q2: got {} want {}",
+            get("p2"),
+            -half_pi
+        );
+        // 摇杆的 D 端点确实落在 (2,0,0)
+        let rocker = k.links.iter().find(|l| l.name == "rocker").unwrap();
+        let tip = cga_core::transform_point(rocker.world, [1.0, 0.0, 0.0]);
+        assert!(
+            (tip[0] - 2.0).abs() < 1e-6 && tip[1].abs() < 1e-6,
+            "{tip:?}"
+        );
+        // 报告含 closure 行
+        let rep =
+            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+        assert!(rep.contains("closure 0 a=\"rocker\" b=\"base\""), "{rep}");
+        // 确定性：同场景两次构建同解
+        let run2 = run_jsx(src, None, "").expect("run2");
+        let cl2 = &run2.kinematics.closures[0];
+        assert_eq!(
+            format!("{:?}", cl.solved),
+            format!("{:?}", cl2.solved),
+            "同输入同解"
+        );
+    }
+
+    #[test]
+    fn test_closure_error_paths() {
+        // 引用未知 link
+        let e = run_jsx(
+            r#"export default <scene><link name="a" /><closure a="a" b="nope" axis={[0,0,1]} /><anchor link="a" /></scene>;"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.contains("closure 引用未知 link nope"), "{e}");
+        // 路径上没有自由 q（两端 pair 都给了 q）
+        let e = run_jsx(
+            r#"export default (
+  <scene>
+    <link name="a" /><link name="b" />
+    <pair kind="revolute" name="p" a="a" b="b" axis={[0,0,1]} q={0.1} />
+    <closure a="a" b="b" at={[1,0,0]} axis={[0,0,1]} />
+    <anchor link="a" />
+  </scene>
+);"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.contains("没有可解的自由 q"), "{e}");
+        // 装不上：闭合点距离永远大于杆长（LM 收敛但残差超界 → 显式错误）
+        let e = run_jsx(
+            r#"export default (
+  <scene>
+    <link name="a" />
+    <link name="b"><translate t={[0.5, 0, 0]}><box s={[1, 0.1, 0.1]} /></translate></link>
+    <pair kind="revolute" name="p" a="a" b="b" axis={[0,0,1]} />
+    <closure a="b" b="a" at={[50,0,0]} bAt={[0,0,0]} axis={[0,0,1]} />
+    <anchor link="a" />
+  </scene>
+);"#,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.contains("未收敛") || e.contains("残差"), "{e}");
     }
 
     #[test]

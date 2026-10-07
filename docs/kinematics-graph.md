@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 运动学图模型：无因果（acausal）建模的设计建议
 
-状态：**G0–G3 已实施（2026-10-08）**，G4 完成于同批（URDF 适配），G5（closure）为后续立项。用户拍板：**不保留包含式**（`<joint>` 嵌套写法已删除，显式报错指向本文档）。本文档是调研记录 + 建模语言设计 + 阶段计划。适用：`cga-host/src/scene_build/kinematics.rs`（`solve_graph`）、`cga-host/src/jsx/`、`jsx_gen`、URDF 导出。
+状态：**G0–G5 全部已实施（2026-10-08）**。用户拍板：**不保留包含式**（`<joint>` 嵌套写法已删除，显式报错指向本文档）。本文档是调研记录 + 建模语言设计 + 阶段计划。适用：`cga-host/src/scene_build/kinematics.rs`（`solve_graph` + `lm_solve`）、`cga-host/src/jsx/`、`jsx_gen`、URDF 导出。
 
 ## 0. 调研：Modelica 的无因果建模（1998–2008）
 
@@ -84,6 +84,15 @@
   报告输出 link/pair/anchor/gear/cam 行；`sweep_joint` 适配 pair +
   tree_down 子树；`kinematics-pairs.js` 组件改 pair 形式（不再有 children）。
 - **G5（立项）**：`<closure>` 闭链约束求解（计划见 §3 与 docs/collision-plan.md）。
+
+- **G5 ✓（2026-10-08）**：`<closure a b at bAt axis>` 环路闭包。语义：a 侧 `at`
+  点与 b 侧 `bAt` 点重合 + 闭合轴对齐（revolute 闭环）。求解：闭链的未知量是
+  环路上未固定的 1-DOF pair（closure 副自己的 q 是闭合物不是未知量）；
+  残差 = 点重合（3）+ 轴对齐（叉积 3）；Levenberg–Marquardt + 有限差分雅可比 +
+  部分主元高斯消元（小规模手写，不引依赖）；不收敛 / 收敛残差超界 → 显式报错。
+  pair 新增 `guess` prop（求解器初值选支；不被求解器触碰则报错）。
+  验收：矩形四连杆闭式解（q1=q2=−π/2）1e-6 吻合 + 摇杆端点落点断言 +
+  同输入同解 + 错误路径（未知引用/无自由 q/装不上）+ 报告 closure 行。
 
 <details><summary>原计划阶段表（留档）</summary>
 

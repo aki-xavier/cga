@@ -596,6 +596,7 @@
       counters: () => JSON.parse(session.counters()),
       resetCounters: () => session.resetCounters(),
       errors: () => JSON.parse(session.errors()),
+      clearErrors: () => session.clearErrors(),
       logs: () => JSON.parse(session.logs()),
       instances: () => JSON.parse(session.instances()),
       unmount: () => session.unmount(),
