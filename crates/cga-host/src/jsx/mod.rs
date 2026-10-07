@@ -1525,6 +1525,40 @@ fn translate4(t: [f64; 3]) -> [f64; 16] {
     ]
 }
 
+fn scale_matrix(v: [f64; 3]) -> [f64; 16] {
+    let mut m = cga_core::mat4_identity();
+    m[0] = v[0];
+    m[5] = v[1];
+    m[10] = v[2];
+    m
+}
+
+fn mirror_matrix(axis: [f64; 3]) -> Result<[f64; 16], String> {
+    let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if n < 1e-12 {
+        return Err("JSX: mirror axis must be nonzero".to_string());
+    }
+    let (x, y, z) = (axis[0] / n, axis[1] / n, axis[2] / n);
+    Ok([
+        1.0 - 2.0 * x * x,
+        -2.0 * x * y,
+        -2.0 * x * z,
+        0.0,
+        -2.0 * x * y,
+        1.0 - 2.0 * y * y,
+        -2.0 * y * z,
+        0.0,
+        -2.0 * x * z,
+        -2.0 * y * z,
+        1.0 - 2.0 * z * z,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ])
+}
+
 impl<'p> Builder<'p> {
     /// 元素的计算样式：先继承，再按级联叠加本元素命中的样式表声明与内联 prop。
     /// 只继承材质键与自定义属性（`--*`），见 docs/css-conformance.md P2。
@@ -1749,10 +1783,19 @@ impl<'p> Builder<'p> {
         cam: &mut Option<PerspectiveCamera>,
     ) -> Result<(), String> {
         let style = self.style_for(el, stack, mat)?;
+        // 公共属性（2026-10-07 RFC）：变换 prop（t/rotate/scale/mirror，
+        // 固定顺序 T·R·S·Mirror）+ tag prop（注册表命名）。修饰符元素
+        // （translate/rotate/scale/mirror）豁免——它们的 prop 是自己的语义。
+        let local = self.local_matrix(el)?;
+        let ctx = match local {
+            Some(m) => mat4_mul(ctx, m),
+            None => ctx,
+        };
         // 分组（档 2）：`<group name>` 元素或任意元素的 `group` prop，
-        // 子树产出的对象都打上这个分组 id。
+        // 子树产出的对象都打上这个分组 id。无名的 <group> 是透明容器
+        // （共享变换/tag/材质 prop 的落点）。
         let group = if el.tag == "group" {
-            Some(p_str(el, "name")?.ok_or_else(|| "JSX: group needs a name".to_string())?)
+            p_str(el, "name")?
         } else {
             p_str(el, "group")?
         };
@@ -1760,11 +1803,71 @@ impl<'p> Builder<'p> {
         if let Some(g) = gid {
             self.group_stack.push(g);
         }
+        // tag prop：与 <tag name> 元素同语义，注册框架取本元素的 frame
+        // （自身变换 prop 之后）。
+        let tag = p_str(el, "tag")?;
+        let has_tag = tag.is_some();
+        if let Some(name) = tag {
+            self.pending_tags.push((name, ctx));
+        }
         let r = self.walk_inner(el, stack, ctx, &style, scene, cam);
+        if has_tag {
+            self.pending_tags.pop();
+        }
         if gid.is_some() {
             self.group_stack.pop();
         }
         r
+    }
+
+    /// 公共变换 prop → 局部矩阵。固定合成顺序 **T·R·S·Mirror**（镜像最先、
+    /// 平移最后）。`rotate` = `[ax, ay, az, angle]` 四元列表。非几何元素
+    /// （camera/灯光/background/gear/cam）带这些 prop 报错——不许静默丢。
+    /// 修饰符元素豁免（它们的 prop 是自己的语义，由 walk_inner 消费）。
+    fn local_matrix(&mut self, el: &El) -> Result<Option<[f64; 16]>, String> {
+        let has = |k: &str| matches!(prop(el, k), Some(v) if !v.is_null());
+        if !(has("t") || has("rotate") || has("scale") || has("mirror")) {
+            return Ok(None);
+        }
+        match el.tag.as_str() {
+            "translate" | "rotate" | "scale" | "mirror" => return Ok(None),
+            "camera" | "ambient_light" | "directional_light" | "point_light" | "background"
+            | "gear" | "cam" => {
+                return Err(format!(
+                    "JSX: transform props (t/rotate/scale/mirror) not supported on <{}>",
+                    el.tag
+                ))
+            }
+            _ => {}
+        }
+        let mut m = cga_core::mat4_identity();
+        if let Some(ax) = self.p_vec3_lazy(el, "mirror")? {
+            m = mirror_matrix(ax)?;
+        }
+        if has("scale") {
+            let v = match prop(el, "scale") {
+                Some(Value::Number(_)) => {
+                    let x = p_num(el, "scale")?.unwrap_or(1.0);
+                    [x, x, x]
+                }
+                _ => self.p_vec3_lazy(el, "scale")?.unwrap_or([1.0; 3]),
+            };
+            m = mat4_mul(scale_matrix(v), m);
+        }
+        if has("rotate") {
+            let l = p_num_list(el, "rotate")?
+                .ok_or_else(|| "JSX: rotate must be [ax, ay, az, angle]".to_string())?;
+            if l.len() != 4 {
+                return Err(format!(
+                    "JSX: rotate must be [ax, ay, az, angle], got {l:?}"
+                ));
+            }
+            m = mat4_mul(Multivector::rotor([l[0], l[1], l[2]], l[3]).to_matrix(), m);
+        }
+        if let Some(t) = self.p_vec3_lazy(el, "t")? {
+            m = mat4_mul(translate4(t), m);
+        }
+        Ok(Some(m))
     }
 
     /// 分组名 → id（append-only：跨帧复用的对象带旧 id，注册表只能涨不能缩）。
@@ -1932,6 +2035,11 @@ impl<'p> Builder<'p> {
         ctx: [f64; 16],
         kids: &mut Vec<cga_core::Geometry>,
     ) -> Result<(), String> {
+        // 公共变换 prop 在 CSG 子树里同样生效（与 walk 路径一致）。
+        let ctx = match self.local_matrix(el)? {
+            Some(m) => mat4_mul(ctx, m),
+            None => ctx,
+        };
         match el.tag.as_str() {
             "translate" | "rotate" | "scale" | "mirror" => {
                 let m = self.modifier_matrix(el)?;
@@ -2012,37 +2120,11 @@ impl<'p> Builder<'p> {
                     }
                     Some(_) => self.p_vec3_lazy(el, "s")?.unwrap_or([1.0, 1.0, 1.0]),
                 };
-                let mut m = cga_core::mat4_identity();
-                m[0] = v[0];
-                m[5] = v[1];
-                m[10] = v[2];
-                m
+                scale_matrix(v)
             }
             _ => {
                 let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
-                let n = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt();
-                if n < 1e-12 {
-                    return Err("JSX: mirror axis must be nonzero".to_string());
-                }
-                let (x, y, z) = (ax[0] / n, ax[1] / n, ax[2] / n);
-                [
-                    1.0 - 2.0 * x * x,
-                    -2.0 * x * y,
-                    -2.0 * x * z,
-                    0.0,
-                    -2.0 * x * y,
-                    1.0 - 2.0 * y * y,
-                    -2.0 * y * z,
-                    0.0,
-                    -2.0 * x * z,
-                    -2.0 * y * z,
-                    1.0 - 2.0 * z * z,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                ]
+                mirror_matrix(ax)?
             }
         })
     }
@@ -2055,6 +2137,11 @@ impl<'p> Builder<'p> {
                 || k == "className"
                 || k == "id"
                 || k == "group"
+                || k == "t"
+                || k == "rotate"
+                || k == "scale"
+                || k == "mirror"
+                || k == "tag"
             {
                 continue;
             }
@@ -2990,11 +3077,15 @@ fn has_lazy_query(v: &Value) -> bool {
 
 /// 子树是否"纯"：不含任何副作用元素，产出只取决于自身 props、祖先变换与继承样式。
 /// `scene` 带 `background` prop 时也算有副作用（写 `scene.background`）。
+/// 带 `tag` prop 的元素有注册表副作用（公共属性 RFC 后与 <tag> 元素同义）。
 fn pure_subtree(el: &El) -> bool {
     if SIDE_EFFECT_TAGS.contains(&el.tag.as_str()) {
         return false;
     }
     if el.tag == "scene" && prop(el, "background").is_some() {
+        return false;
+    }
+    if prop(el, "tag").is_some() {
         return false;
     }
     if el.props.values().any(has_lazy_query) {
@@ -3884,6 +3975,177 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let ha = render_png(a.run());
         let hb = render_png(b.run());
         assert_eq!(ha, hb, "同输入序列同输出");
+    }
+
+    /// ---- 公共属性（变换/tag prop 与 material 容器等价性） ----
+
+    #[test]
+    fn transform_props_equivalent_to_modifier_elements() {
+        let dbg = |src: &str| {
+            let run = run_jsx(src, None, ".").expect(src);
+            format!("{:?}", run.scene.objects)
+        };
+        // 平移 prop ≡ translate 元素
+        assert_eq!(
+            dbg(r#"export default <sphere r={0.5} t={[2, 1, 0]} />;"#),
+            dbg(r#"export default <translate t={[2, 1, 0]}><sphere r={0.5} /></translate>;"#)
+        );
+        // 固定顺序 T·R·S·Mirror：prop ≡ 同序元素嵌套
+        assert_eq!(
+            dbg(
+                r#"export default <box s={[1, 0.2, 0.2]} t={[1, 0, 0]} rotate={[0, 0, 1, 1.5707963267948966]} />;"#
+            ),
+            dbg(
+                r#"export default <translate t={[1, 0, 0]}><rotate axis={[0, 0, 1]} angle={1.5707963267948966}><box s={[1, 0.2, 0.2]} /></rotate></translate>;"#
+            )
+        );
+        // scale / mirror prop ≡ 元素
+        assert_eq!(
+            dbg(r#"export default <sphere r={0.5} scale={2} />;"#),
+            dbg(r#"export default <scale s={2}><sphere r={0.5} /></scale>;"#)
+        );
+        assert_eq!(
+            dbg(r#"export default <cone r={0.5} h={1} mirror={[1, 0, 0]} />;"#),
+            dbg(r#"export default <mirror axis={[1, 0, 0]}><cone r={0.5} h={1} /></mirror>;"#)
+        );
+        // prop 与元素可叠加（prop 在元素之内层）
+        assert_eq!(
+            dbg(
+                r#"export default <translate t={[0, 5, 0]}><sphere r={0.5} t={[1, 0, 0]} /></translate>;"#
+            ),
+            dbg(
+                r#"export default <translate t={[0, 5, 0]}><translate t={[1, 0, 0]}><sphere r={0.5} /></translate></translate>;"#
+            )
+        );
+        // CSG 子树里同样生效
+        assert_eq!(
+            dbg(
+                r#"export default <union><sphere r={0.5} t={[2, 0, 0]} /><box s={[1, 1, 1]} /></union>;"#
+            ),
+            dbg(
+                r#"export default <union><translate t={[2, 0, 0]}><sphere r={0.5} /></translate><box s={[1, 1, 1]} /></union>;"#
+            )
+        );
+    }
+
+    #[test]
+    fn transform_props_rejected_on_non_geometry() {
+        let e = run_jsx(
+            r#"export default <scene><camera t={[1, 0, 0]} /></scene>;"#,
+            None,
+            ".",
+        )
+        .unwrap_err();
+        assert!(e.contains("transform props"), "{e}");
+        let e = run_jsx(
+            r#"export default <scene><ambient_light scale={2} /></scene>;"#,
+            None,
+            ".",
+        )
+        .unwrap_err();
+        assert!(e.contains("transform props"), "{e}");
+    }
+
+    #[test]
+    fn tag_prop_registers_like_tag_element() {
+        let run = run_jsx(
+            r#"
+export default (
+  <scene>
+    <sphere r={0.5} tag="ball" />
+    <group tag="arm"><box s={[1, 0.2, 0.2]} /></group>
+    <instances of="ball" />
+    <instances of="arm" />
+  </scene>
+);
+"#,
+            None,
+            ".",
+        )
+        .expect("run");
+        // ball 1 + arm 1 + 各自 1 个实例 = 4
+        assert_eq!(run.scene.objects.len(), 4);
+        assert!(run.tags.contains_key("ball") && run.tags.contains_key("arm"));
+        // tag prop 的注册框架包含元素自身变换：球平移后实例化要落在平移后的位置
+        let run2 = run_jsx(
+            r#"export default <scene><sphere r={0.5} tag="b" t={[3, 0, 0]} /><instances of="b" /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("run");
+        let xs: Vec<f64> = run2
+            .scene
+            .objects
+            .iter()
+            .map(|o| o.base.motor().to_matrix()[3])
+            .collect();
+        assert!(xs.iter().all(|x| (x - 3.0).abs() < 1e-9), "{xs:?}");
+        // <tag name> 元素保持可用（兼容）
+        let run3 = run_jsx(
+            r#"export default <scene><tag name="x"><sphere r={0.5} /></tag><instances of="x" /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("run");
+        assert_eq!(run3.scene.objects.len(), 2);
+    }
+
+    #[test]
+    fn material_props_work_on_any_container() {
+        // 材质键在任何元素上都是内联 prop（沿元素树继承）；<material> 容器保持
+        // 可用（透明兼容壳）。
+        let run = run_jsx(
+            r#"
+export default (
+  <scene>
+    <group color={0x112233}><sphere r={0.5} /></group>
+    <translate t={[2, 0, 0]} color={0x445566}><sphere r={0.5} /></translate>
+    <material color={0x778899}><sphere r={0.5} /></material>
+  </scene>
+);
+"#,
+            None,
+            ".",
+        )
+        .expect("run");
+        assert_eq!(hx(&run.scene.objects[0].material.color), 0x112233);
+        assert_eq!(hx(&run.scene.objects[1].material.color), 0x445566);
+        assert_eq!(hx(&run.scene.objects[2].material.color), 0x778899);
+    }
+
+    #[test]
+    fn tag_prop_marks_subtree_impure_for_incremental_reuse() {
+        // tag prop 有注册表副作用：带它的子树永不复用（复用了实例化就丢注册）。
+        let src = r#"
+const { useContext } = React;
+function Dial() {
+  const IN = useContext(HostInput);
+  const x = IN.x === undefined ? 0 : IN.x;
+  return <translate t={[x, 0, 0]}><sphere r={0.25} /></translate>;
+}
+export default (
+  <scene>
+    <camera />
+    <sphere r={0.5} tag="ball" />
+    <instances of="ball" />
+    <Dial />
+  </scene>
+);
+"#;
+        let mut s = SceneSession::open(src, None, ".").expect("open");
+        s.set_input(r#"{"x": 2.0}"#).unwrap();
+        // 与从头构建同一份快照逐字段一致（tag 注册表也在其列）
+        let snap: Value = serde_json::from_str(&s.snapshot().unwrap()).unwrap();
+        let fresh = build_scene_run(&snap, None, ".", &[]).expect("fresh build");
+        assert_eq!(
+            format!("{:?}", s.run().tags),
+            format!("{:?}", fresh.tags),
+            "tag 注册表必须一致"
+        );
+        assert_eq!(
+            format!("{:?}", s.run().scene.objects),
+            format!("{:?}", fresh.scene.objects)
+        );
     }
 
     /// ---- 增量构建（档 0）+ 增量渲染（档 1）+ 分组（档 2） ----
