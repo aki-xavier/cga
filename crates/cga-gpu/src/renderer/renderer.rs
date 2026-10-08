@@ -310,6 +310,84 @@ fn shadow_on_plane(
     }
 }
 
+/// 拾取命中（交互闭环，docs/roadmap.md §3.A）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PickHit {
+    /// `scene.objects` 下标。
+    pub object: usize,
+    /// 世界坐标命中点。
+    pub point: [f64; 3],
+    /// 世界坐标外向法线。
+    pub normal: [f64; 3],
+    /// 光线参数（相机空间深度）。
+    pub t: f64,
+}
+
+/// 拾取：从像素 `(x, y)`（像素坐标，左上角原点，与 `build_rays` 的排布一致）
+/// 发一条光线，返回最近的命中。解析求交（不走 MLX 渲染管线）。
+pub fn pick(
+    scene: &Scene,
+    camera: &PerspectiveCamera,
+    x: f64,
+    y: f64,
+    width: i32,
+    height: i32,
+) -> Option<PickHit> {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let fy = h / (2.0 * (camera.fov.to_radians() / 2.0).tan());
+    let fx = fy * camera.aspect;
+    let cx = (w - 1.0) / 2.0;
+    let cy = (h - 1.0) / 2.0;
+    let d = [(x - cx) / fx, (y - cy) / fy, 1.0];
+    let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let d = [d[0] / dl, d[1] / dl, d[2] / dl];
+    let o = ck(ops::zeros::<f32>(&[1, 3]));
+    let d_a = ck(ops::broadcast_to(arr3v([d[0], d[1], d[2]]), &[1, 3]));
+    let mut best: Option<PickHit> = None;
+    for (i, obj) in scene.objects.iter().enumerate() {
+        let params = geom_to_camera(&obj.geometry, &camera.motor.compose(&obj.motor()));
+        let (t, n, mask) = geom_intersect(&params, &o, &d_a);
+        t.eval().unwrap();
+        n.eval().unwrap();
+        mask.eval().unwrap();
+        if !mask.as_slice::<bool>()[0] {
+            continue;
+        }
+        let ti = f64::from(t.as_slice::<f32>()[0]);
+        if let Some(b) = best {
+            if ti >= b.t {
+                continue;
+            }
+        }
+        // 命中点与法线回世界系
+        let pc = [ti * d[0], ti * d[1], ti * d[2]];
+        let pw = camera
+            .motor
+            .reverse()
+            .apply(&Multivector::point(pc[0], pc[1], pc[2]))
+            .coords();
+        let nc = n.as_slice::<f32>();
+        let nw = camera
+            .motor
+            .reverse()
+            .apply(&Multivector::vector(
+                f64::from(nc[0]),
+                f64::from(nc[1]),
+                f64::from(nc[2]),
+                0.0,
+                0.0,
+            ))
+            .dir3();
+        best = Some(PickHit {
+            object: i,
+            point: pw,
+            normal: nw,
+            t: ti,
+        });
+    }
+    best
+}
+
 /// 增量渲染统计。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IncrementalStats {

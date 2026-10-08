@@ -53,9 +53,9 @@ const WORKER_STACK: usize = 64 << 20;
 
 /// 场景快照 `{t,p,c}` 的契约版本。JS 侧 `__sess.schema()` 必须报告同一版本，否则建会话失败。
 /// v1： `{t,p,c}`。v2：每个节点带 `__v`（自身提交版本）与 `__s`（子树版本）——
-/// 增量构建的复用依据。
+/// 增量构建的复用依据。v3：宿主实例节点带 `__id`（拾取 → 事件派发的映射）。
 /// 升级 host 适配层时同步递增；渲染金标是第二道防线。
-pub const SCENE_SCHEMA: u64 = 2;
+pub const SCENE_SCHEMA: u64 = 3;
 
 /// 内置哪份 React 构建：`Prod`（默认，批量/CI）或 `Dev`（带 invalid hook call 等诊断）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

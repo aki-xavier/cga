@@ -28,10 +28,30 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
 
 ### A. 交互闭环（推荐先做）
 
+**已实施（2026-10-08）**：
+
+- **拾取**：`cga_gpu::pick(scene, camera, x, y, w, h) -> Option<PickHit>`——像素一条
+  光线的解析求交（最近 t 胜出，含遮挡），命中点/法线回世界系。渲染器每像素
+  已有 `best_idx`，独立拾取不依赖整帧渲染。
+- **接线**：快照节点带 `__id`（schema v3）；`SceneRun.object_instances` 与
+  `scene.objects` 平行（复用的克隆继承来源 id——实例 id 跨帧稳定）；
+  `SceneSession::pick`（命中 + 实例 id）/ `click`（→ `dispatch(id, "onClick",
+  payload)`，payload 带命中点/法线/对象下标）。
+- **验收链**（`session_click_drives_state_and_incremental_render`）：像素坐标
+  投影断言命中对象下标 → click → onClick → setState 跨帧累积（r: 0.2→0.3→0.4）
+  → 增量渲染与全帧**逐位一致** → 未命中点击 → None。GPU 侧三测试：最近命中与
+  遮挡、未命中、平面拾取。
+- 边界（记录在案）：处理器必须在**宿主元素**上（组件不产生宿主实例——冒泡走
+  实例树祖先链，组件上的 onClick 不会落到任何实例；组件要显式转发给宿主子元素）。
+
+<details><summary>原始计划（留档）</summary>
+
 - 拾取：渲染器每像素已算 `best_idx`（命中对象下标）——拾取 = 一条光线的解析求交，几乎免费。API：`pick(scene, camera, x, y) -> Option<(object_index, point, normal, instance_id?)>`。
 - 接线：对象下标 → React 实例（发射时记下实例 id；需要对象→实例的反向映射）→ `dispatch(id, "onClick", payload)`。
 - 验收链：点选坐标 → 对象下标的解析断言；onClick → setState → 局部重建（create=0）→ 增量渲染与全帧逐位一致。
 - 形态：无头可交互查看器（宿主驱动，不是窗口程序）；事件源抽象（先支持 pick，指针移动/拖拽后续）。
+
+</details>
 
 ### B. 速度级运动学
 

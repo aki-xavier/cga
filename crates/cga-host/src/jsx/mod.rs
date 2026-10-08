@@ -624,6 +624,9 @@ pub struct El {
     pub v: u64,
     /// 子树版本（快照 `__s`）：自身与全部后代 `v` 的最大值。
     pub s: u64,
+    /// React 宿主实例 id（快照 `__id`；拾取 → 事件派发的映射）。合成节点
+    /// （fragment 包装等）没有实例 id。
+    pub instance_id: Option<i64>,
     /// 增量构建缓存：本子树最近一帧产出的 `scene.objects` 区间。只在会话缓存的
     /// 上一帧树上填充；新帧由 `annotate_reuse` 标注后，`walk` 据此整棵复用。
     pub cache: Option<std::ops::Range<usize>>,
@@ -658,12 +661,14 @@ fn to_el(v: &Value) -> Result<El, String> {
     }
     let v = obj.get("__v").and_then(Value::as_u64).unwrap_or(0);
     let s = obj.get("__s").and_then(Value::as_u64).unwrap_or(0);
+    let instance_id = obj.get("__id").and_then(Value::as_i64);
     Ok(El {
         tag: tag.to_string(),
         props,
         children,
         v,
         s,
+        instance_id,
         cache: None,
     })
 }
@@ -1509,6 +1514,8 @@ struct Builder<'p> {
     closure_out: usize,
     /// 当前正在发射的 link（`kin.links` 下标；发射与复用都登记 meshes）。
     cur_link: Option<usize>,
+    /// 与 scene.objects 平行：每个对象来自的 React 宿主实例 id（拾取 → 事件派发）。
+    object_instances: Vec<Option<i64>>,
     tags: TagRegistry,
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
@@ -1517,6 +1524,8 @@ struct Builder<'p> {
     group_stack: Vec<u32>,
     /// 增量构建：上一帧的对象表（`annotate_reuse` 标注的复用区间从这里克隆）。
     prev_objects: Option<&'p [Object]>,
+    /// 上一帧的对象→实例映射（复用区间随同克隆）。
+    prev_object_instances: Option<&'p [Option<i64>]>,
     /// 本帧每个节点的产出区间（构建结束后写回缓存树，供下一帧复用）。
     ranges: HashMap<*const El, std::ops::Range<usize>>,
     reused_subtrees: usize,
@@ -1721,6 +1730,7 @@ impl<'p> Builder<'p> {
         geo: cga_core::Geometry,
         world: [f64; 16],
         mat: cga_gpu::shading::Material,
+        src: Option<i64>,
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
         let g2 = if cga_gpu::scene_graph::is_identity3(lin) {
@@ -1740,6 +1750,7 @@ impl<'p> Builder<'p> {
             })
             .with_group(group),
         );
+        self.object_instances.push(src);
         let idx = scene.objects.len() - 1;
         if let Some(li) = self.cur_link {
             self.kin.links[li].meshes.push(idx);
@@ -1764,7 +1775,11 @@ impl<'p> Builder<'p> {
             let prev = self
                 .prev_objects
                 .expect("JSX: cache range without previous objects");
-            scene.objects.extend_from_slice(&prev[range]);
+            scene.objects.extend_from_slice(&prev[range.clone()]);
+            // 对象→实例映射随同复用（__id 跨帧稳定——实例只在创建时分配 id）。
+            if let Some(ids) = self.prev_object_instances {
+                self.object_instances.extend_from_slice(&ids[range.clone()]);
+            }
             self.reused_subtrees += 1;
             self.reused_objects += scene.objects.len() - start;
             // 复用路径也要登记当前 link 的 meshes（对象换了下标区间）。
@@ -1952,7 +1967,7 @@ impl<'p> Builder<'p> {
                 };
                 let material = self.build_material(mat)?;
                 let geo = cga_core::Geometry::CsgGeometry(cga_core::CsgGeometry::new(op, kids));
-                self.emit(scene, geo, cga_core::mat4_identity(), material);
+                self.emit(scene, geo, cga_core::mat4_identity(), material, el.instance_id);
                 Ok(())
             }
             "ambient_light" | "directional_light" | "point_light" => {
@@ -2024,14 +2039,14 @@ impl<'p> Builder<'p> {
             "drill" => {
                 let (geo, w) = self.drill_cutter(el, ctx)?;
                 let material = self.build_material(mat)?;
-                self.emit(scene, geo, w, material);
+                self.emit(scene, geo, w, material, el.instance_id);
                 Ok(())
             }
             "instances" => {
                 let name = p_str(el, "of")?.ok_or_else(|| "JSX: instances needs of".to_string())?;
                 for inst in self.instances_of(&name)? {
                     let material = self.build_material(mat)?;
-                    self.emit(scene, inst.geo.clone(), inst.world, material);
+                    self.emit(scene, inst.geo.clone(), inst.world, material, el.instance_id);
                 }
                 Ok(())
             }
@@ -2203,7 +2218,7 @@ impl<'p> Builder<'p> {
     ) -> Result<(), String> {
         let geo = self.build_geo(el)?;
         let material = self.build_material(mat)?;
-        self.emit(scene, geo, ctx, material);
+        self.emit(scene, geo, ctx, material, el.instance_id);
         Ok(())
     }
 
@@ -3198,6 +3213,7 @@ fn shift_child_ranges(new: &mut El, prev: &El, delta: i64) {
 pub struct BuildCache {
     tree: El,
     objects: Vec<Object>,
+    object_instances: Vec<Option<i64>>,
     groups: Vec<String>,
 }
 
@@ -3285,6 +3301,8 @@ fn build_scene_run_cached(
             .unwrap_or_else(|| vec![String::new()]),
         group_stack: Vec::new(),
         prev_objects: cache.map(|c| c.objects.as_slice()),
+        prev_object_instances: cache.map(|c| c.object_instances.as_slice()),
+        object_instances: Vec::new(),
         ranges: HashMap::new(),
         reused_subtrees: 0,
         reused_objects: 0,
@@ -3329,6 +3347,7 @@ fn build_scene_run_cached(
             tags: b.tags,
             kinematics: kin,
             groups: b.groups,
+            object_instances: b.object_instances,
         },
         root,
         stats,
@@ -3531,6 +3550,7 @@ impl SceneSession {
         self.cache = Some(BuildCache {
             tree,
             objects: run.scene.objects.clone(),
+            object_instances: run.object_instances.clone(),
             groups: run.groups.clone(),
         });
         self.stats = stats;
@@ -3593,6 +3613,37 @@ impl SceneSession {
 
     pub fn counters(&mut self) -> Result<crate::react::Counters, String> {
         self.react.counters().map_err(String::from)
+    }
+
+    /// 拾取（交互闭环，docs/roadmap.md §3.A）：像素 (x, y) 的最近命中 +
+    /// 对象来自的 React 宿主实例 id。
+    pub fn pick(&self, x: f64, y: f64, w: i32, h: i32) -> Option<(cga_gpu::PickHit, Option<i64>)> {
+        let run = self.run();
+        let hit = cga_gpu::pick(&run.scene, &run.camera, x, y, w, h)?;
+        let inst = run.object_instances.get(hit.object).copied().flatten();
+        Some((hit, inst))
+    }
+
+    /// 点击：拾取 → 派发 `onClick`（payload 带命中点/法线/对象下标）→ 重建
+    /// （一帧事务）。未命中或命中链上没有处理器 → `Ok(None)`。
+    pub fn click(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: i32,
+        h: i32,
+    ) -> Result<Option<crate::react::DispatchOutcome>, String> {
+        let Some((hit, inst)) = self.pick(x, y, w, h) else {
+            return Ok(None);
+        };
+        let Some(id) = inst else { return Ok(None) };
+        let payload = serde_json::json!({
+            "point": hit.point,
+            "normal": hit.normal,
+            "t": hit.t,
+            "object": hit.object,
+        });
+        Ok(Some(self.dispatch(id, "onClick", &payload.to_string())?))
     }
 
     /// 碰撞扫描（C1）：全对 broad+narrow，同组（非 0 且相等）免检；指纹缓存跨帧
@@ -3864,6 +3915,48 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             (after[moved[0]] - 2.0).abs() < 1e-9,
             "Dial 应平移到 x=2: {after:?}"
         );
+    }
+
+    #[test]
+    fn session_click_drives_state_and_incremental_render() {
+        // 交互闭环（roadmap A）：拾取坐标 → 实例 id → onClick → setState →
+        // 局部重建 → 增量渲染与全帧逐位一致。
+        let mut s = SceneSession::open(DIAL_SCENE, None, ".").expect("open");
+        // Counter 的球在 (0, 2, 0)。默认相机 fov=50、(0,0,5) 看原点：
+        // 投影到像素 (47.5, 35.5 − (2/5)·fy)，fy = 72/(2·tan25°)。
+        let fy = 72.0 / (2.0 * (25.0f64.to_radians()).tan());
+        let (px, py) = (47.5, 35.5 - 2.0 / 5.0 * fy);
+        let (hit, inst) = s.pick(px, py, 96, 72).expect("hit counter sphere");
+        assert!(inst.is_some(), "命中对象应有宿主实例 id");
+        assert_eq!(hit.object, 3, "Counter 的球是第 4 个对象: {hit:?}");
+
+        let (_img0, st0) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        assert!(st0.full && st0.reason == "first");
+
+        // 点击 → onClick → setN → n=1（r: 0.2 → 0.3），状态跨帧累积
+        let out = s.click(px, py, 96, 72).expect("click").expect("dispatched");
+        assert!(out.found, "{out:?}");
+        assert!(s.snapshot().unwrap().contains(r#""r":0.3"#), "onClick 生效");
+        s.click(px, py, 96, 72).expect("click2");
+        assert!(s.snapshot().unwrap().contains(r#""r":0.4"#), "第二次累积");
+
+        // 增量渲染与全帧逐位一致
+        let (img, st) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        assert!(!st.full, "点击只变了 Counter 的球，应增量: {st:?}");
+        let run = s.run().clone();
+        let mut full = cga_gpu::Renderer::new(96, 72, 1, 3);
+        let want = full.render(run.scene.clone(), run.camera);
+        assert_eq!(
+            img.png,
+            cga_gpu::frame_to_png_bytes(&want),
+            "增量渲染必须与全帧逐位一致"
+        );
+        // 未命中区域点击 → None
+        assert!(s.click(0.5, 70.5, 96, 72).expect("miss").is_none());
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::scene::{Object, PerspectiveCamera, Scene};
 use crate::scene_graph::{vec3_dot, vec3_unit};
 use crate::shading::{shade_batched, Light, LightKind};
 use crate::texture::WrapMode;
-use cga_core::{vec3_cross, GeometryParams};
+use cga_core::{vec3_cross, GeometryParams, Multivector};
 use mlx_rs::{ops, Array};
 
 pub mod truth;
@@ -612,6 +612,112 @@ mod tests {
 
     fn assert_same_image(a: &Array, b: &Array) {
         assert_eq!(data_f32(a), data_f32(b), "增量与全帧渲染必须逐位一致");
+    }
+
+    // ---- 拾取（交互闭环，docs/roadmap.md §3.A）--------------------------------
+
+    #[test]
+    fn test_pick_nearest_and_miss() {
+        // 相机 (0,0,5) 看原点；球 r=0.6 在原点，另一个 r=0.5 在 (1.5, 0, -1)。
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
+            material: std_red_material(),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.5)),
+            material: std_red_material(),
+            position: [1.5, 0.0, -1.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        // 正中：前球，命中点 ≈ (0,0,0.6)，法线朝相机（+z）
+        let h = pick(&sc, &cam, 47.5, 35.5, 96, 72).expect("hit center");
+        assert_eq!(h.object, 0);
+        assert!((h.point[2] - 0.6).abs() < 1e-3, "{:?}", h.point);
+        assert!(h.normal[2] > 0.99, "{:?}", h.normal);
+        // 角落：未命中
+        assert!(pick(&sc, &cam, 0.5, 0.5, 96, 72).is_none());
+        // 右侧球的像素：相机空间 (1.5, 0, 6)（相机在原点上方 5 看 -z，世界 z=-1 → 深 6）
+        let fx = 72.0 / (2.0 * (45.0f64.to_radians() / 2.0).tan()) * (96.0 / 72.0);
+        let fy = 72.0 / (2.0 * (45.0f64.to_radians() / 2.0).tan());
+        let px = 47.5 + 1.5 / 6.0 * fx;
+        let py = 35.5; // y=0 → 中线
+        let h2 = pick(&sc, &cam, px, py, 96, 72).expect("hit second");
+        assert_eq!(h2.object, 1, "{h2:?}");
+        let _ = fy;
+    }
+
+    #[test]
+    fn test_pick_occlusion() {
+        // 同一条光线上两个球：近者胜出。
+        let mut sc = Scene::new(None);
+        for z in [0.0, -2.0] {
+            sc.add_object(Object::new(ObjectParams {
+                geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
+                material: std_red_material(),
+                position: [0.0, 0.0, z],
+                rotation_axis: [0.0, 0.0, 1.0],
+                rotation_angle: 0.0,
+                motor: None,
+            }));
+        }
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            1.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        let h = pick(&sc, &cam, 47.5, 35.5, 96, 72).expect("hit");
+        assert_eq!(h.object, 0, "近者优先");
+        assert!((h.t - 4.4).abs() < 0.1, "t={}（5 − 0.6）", h.t);
+    }
+
+    #[test]
+    fn test_pick_plane() {
+        // 地面平面：画面下半部命中平面。
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+            material: std_red_material(),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 2.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        let h = pick(&sc, &cam, 47.5, 60.0, 96, 72).expect("hit ground");
+        assert_eq!(h.object, 0);
+        assert!(h.point[1].abs() < 1e-3, "在地面上: {:?}", h.point);
+        assert!((h.normal[1] - 1.0).abs() < 1e-3, "法线 +y: {:?}", h.normal);
     }
 
     #[test]

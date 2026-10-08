@@ -398,7 +398,7 @@
     const session = {
       version: R.version,
       rootTag: tag,
-      schema: 2,
+      schema: 3,
       // 根元素由 begin() 装填。用一层稳定的 Root 组件包起来：每次 update 都渲染同一个
       // 组件类型，React 只重渲染它返回的元素树（组件身份不丢，hook 状态得以保留）。
       moduleFactory: null,
@@ -499,6 +499,7 @@
         const clean = (n) => {
           if (n.kind === 'text') return null;
           const out = { t: String(n.type), p: sanitize(n.props), c: [] };
+          if (n.kind === 'host') out.__id = n.id; // 实例 id：拾取 → 事件派发的映射
           const own = n.v || 0;
           let sv = own;
           for (const ch of n.children || []) {
@@ -618,7 +619,7 @@
 
   globalThis.CGA_REACT_HOST = {
     version: R.version,
-    schema: 2,
+    schema: 3,
     createSession,
     // 供宿主在派发事件时临时加高优先级（P2 事件驱动用）
     lanes: R.lanes,

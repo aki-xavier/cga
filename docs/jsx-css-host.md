@@ -78,12 +78,11 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 
 **"局部"的三段式落点**（帧间增量见 §6）：React 协调只重建变化的宿主实例；构建按子树版本整棵复用未变子树的产出对象；渲染只重追值可能变化的光线。三段都保守：拿不准就全量。
 
-**没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）、真实事件源与布局、portal 到 DOM。`onClick` 之类会被 React 正常装上，但需要宿主派发事件并长驻会话——交互运行时属于后续阶段；`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
+**没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）与布局、portal 到 DOM。`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
 
 **多帧与事件（宿主驱动）**：`SceneSession` 让一个模块跨多帧存活。
 - **宿主输入（props 监听）**：输入放在 React context（`useContext(HostInput)`），宿主 `set_input(json)` 后 `update()`；只有消费者重渲染，其余子树 bailout。`render_frames` 每帧推 `IN.t`，示例场景 `animation.jsx` 首帧 create=13、之后每帧 **create=0 / update=8**。
-- **事件派发**：自定义渲染器不会自动派发事件，由宿主决定"命中谁、派发什么"：`dispatch(instance_id, prop, payload)` 沿祖先链找第一个处理器并调用（简化版冒泡），随后 `drain`。测试里 `onClick` → `useState` → 局部更新（create=0，状态跨帧累积）。
-- 没有落点的是**事件源**（拾取/指针）：渲染器已经是光线追踪，`scene_session.instances()` 给出可命中的实例，把它接到拾取上即可做成查看器——属于后续工作。
+- **事件派发与事件源**：自定义渲染器不会自动派发事件，由宿主决定"命中谁、派发什么"：`dispatch(instance_id, prop, payload)` 沿祖先链找第一个处理器并调用（简化版冒泡），随后 `drain`。测试里 `onClick` → `useState` → 局部更新（create=0，状态跨帧累积）。**事件源已落地**（2026-10-08，roadmap A）：`SceneSession::pick(x,y,w,h)` 像素拾取（渲染器解析求交）→ `click` 直接驱动 `onClick`；处理器必须在**宿主元素**上（组件不产生宿主实例，要显式把处理器转发给宿主子元素）。
 
 **版本适配**：host config 面按 React 版本固定（19 移除了 `prepareUpdate`、把 diff 交给 `commitUpdate(instance, type, prevProps, nextProps)`、元素标记改名 `react.transitional.element`、dev 构建额外要求性能追踪/View Transition/test selector 一组键）。升级 React 只需改 `react-host.js` 并重跑 `make vendor-react`。
 
