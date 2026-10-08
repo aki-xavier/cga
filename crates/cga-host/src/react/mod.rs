@@ -1235,6 +1235,26 @@ const __scene = h(Boundary, {}, h(Boom, {}));
     }
 
     #[test]
+    fn console_logs_buffer_is_bounded() {
+        // 会话级日志缓冲必须有界（只增不减 = 泄漏）：刷 5000 条后
+        // 留在缓冲里的不得超过上限 2×MAX_LOGS（react-shim.js: 2048 条时砍半）。
+        let mut s = ReactSession::new(Runtime::Prod).unwrap();
+        s.begin(
+            "for (let i = 0; i < 5000; i++) console.log('spam', i); const __scene = h('group', {});",
+            &pose(&[]),
+        )
+        .unwrap();
+        s.drain().unwrap();
+        let logs = s.logs().unwrap();
+        assert!(logs.len() <= 2049, "日志缓冲必须有界: {}", logs.len());
+        assert!(
+            logs.iter().any(|l| l.text == "spam 4999"),
+            "保留的应是最近的日志: {:?}",
+            logs.last()
+        );
+    }
+
+    #[test]
     fn frame_transaction_mounts_and_snapshots_in_one_call() {
         let mut s = ReactSession::new(Runtime::Prod).unwrap();
         let out = s

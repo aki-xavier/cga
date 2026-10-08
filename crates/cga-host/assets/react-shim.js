@@ -31,7 +31,13 @@
     }
   };
   const fmt = (args) => Array.prototype.map.call(args, str).join(' ');
-  const push = (level, args) => S.logs.push({ level, text: fmt(args) });
+  // 日志缓冲必须有界：会话存活期间 console.* 只增不减 = 泄漏。
+  // 保留最近 1024 条，超限砍掉最旧的一半（摊还 O(1)）。
+  const MAX_LOGS = 1024;
+  const push = (level, args) => {
+    S.logs.push({ level, text: fmt(args) });
+    if (S.logs.length > MAX_LOGS * 2) S.logs.splice(0, MAX_LOGS);
+  };
 
   // console：作者期诊断（React 的 invalid hook call 等）也走这里，宿主可读回。
   globalThis.console = {

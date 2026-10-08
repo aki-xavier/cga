@@ -35,18 +35,31 @@
   // 是 DevTools 后端（浏览器扩展）的事——渲染器侧的义务就是这个握手。
   if (!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
     let nextRid = 1;
+    // 记录型桩必须有界：hook 挂在 globalThis 上、跨会话共享，无界累积 = 泄漏。
+    // renderers 只留元数据（不持有 reconciler → 不滞留 fiber 树），容量封顶；
+    // commits 保留最近 256 条 + 全量计数（devtools() 读 commitTotal）。
+    const MAX_RENDERERS = 64;
+    const MAX_COMMITS = 256;
     globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map(),
-      commits: [], // 每次提交 { rid, didError }
+      commits: [], // 最近若干次提交 { rid, didError }
+      commitTotal: 0, // 全量提交计数（无界增长的替代观测口）
       supportsFiber: true,
       checkDCE() {},
       inject(renderer) {
         const id = nextRid++;
-        this.renderers.set(id, renderer);
+        this.renderers.set(id, { rendererPackageName: renderer.rendererPackageName });
+        while (this.renderers.size > MAX_RENDERERS) {
+          this.renderers.delete(this.renderers.keys().next().value); // Map 迭代序 = 插入序
+        }
         return id;
       },
       onCommitFiberRoot(rid, _root, _priority, didError) {
+        this.commitTotal += 1;
         this.commits.push({ rid, didError: !!didError });
+        if (this.commits.length > MAX_COMMITS) {
+          this.commits.splice(0, this.commits.length - MAX_COMMITS);
+        }
       },
       onCommitFiberUnmount() {},
       onScheduleFiberRoot() {},
@@ -419,6 +432,12 @@
   function createSession(opts) {
     opts = opts || {};
     const errors = [];
+    // 错误缓冲有界：会话级数组只增不减 = 泄漏。保留最近 256 条。
+    const MAX_ERRORS = 256;
+    const pushError = (msg) => {
+      errors.push(msg);
+      if (errors.length > MAX_ERRORS * 2) errors.splice(0, MAX_ERRORS);
+    };
     const counters = { create: 0, text: 0, update: 0, remove: 0, insert: 0, mount: 0 };
     let idc = 0;
     const nextId = () => ++idc;
@@ -450,9 +469,9 @@
       false,
       null,
       '',
-      (e) => errors.push('uncaught: ' + (e && (e.stack || e.message) ? e.stack || e.message : String(e))),
-      (e) => errors.push('caught: ' + String(e)),
-      (e) => errors.push('recoverable: ' + String(e)),
+      (e) => pushError('uncaught: ' + (e && (e.stack || e.message) ? e.stack || e.message : String(e))),
+      (e) => pushError('caught: ' + String(e)),
+      (e) => pushError('recoverable: ' + String(e)),
       null,
     );
     const renderRoot = () => reconciler.updateContainer(React.createElement(Root), root, null, null);
@@ -645,7 +664,7 @@
         return JSON.stringify({
           renderers: rends.length,
           packageNames: rends.map((r) => r.rendererPackageName),
-          commits: hook ? hook.commits.length : 0,
+          commits: hook ? hook.commitTotal || hook.commits.length : 0,
         });
       },
       resetCounters() {

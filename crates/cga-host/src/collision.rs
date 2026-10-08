@@ -87,6 +87,8 @@ impl CollisionScan {
     /// 同一连杆/装配体的刚体绑定，互相重叠是预期而非干涉。
     ///
     /// 缓存键是对象对的指纹（几何 + 世界变换），与对象在表中的位置无关。
+    /// 缓存每轮 mark-and-sweep：只保留本轮查询过的键——内容指纹随场景变化，
+    /// 旧键永不再命中，不 sweep 就是无界增长（泄漏）。
     ///
     /// 空间索引（D3）：对象数 > [`SPATIAL_INDEX_THRESHOLD`] 时启用世界 AABB 宽相——
     /// AABB 不相交 ⇒ 几何不相交（认证的 No，`separation = None` 未算精确距离），
@@ -102,6 +104,7 @@ impl CollisionScan {
         } else {
             Vec::new()
         };
+        let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
         let mut out = Vec::new();
         for i in 0..objs.len() {
             for j in i + 1..objs.len() {
@@ -124,6 +127,7 @@ impl CollisionScan {
                     }
                 }
                 let key = (fps[i], fps[j]);
+                seen.insert(key);
                 let (hit, sep) = match self.cache.get(&key) {
                     Some(&r) => {
                         self.cache_hits += 1;
@@ -146,6 +150,7 @@ impl CollisionScan {
                 });
             }
         }
+        self.cache.retain(|k, _| seen.contains(k));
         out
     }
 
@@ -155,11 +160,14 @@ impl CollisionScan {
         self.contact_cache_hits = 0;
         let fps = fingerprints(&scene.objects);
         let hits = self.scan(scene);
-        hits.into_iter()
+        let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+        let out = hits
+            .into_iter()
             .map(|h| {
                 let contacts = match h.hit {
                     Hit::Yes => {
                         let key = (fps[h.a], fps[h.b]);
+                        seen.insert(key);
                         match self.contact_cache.get(&key) {
                             Some(c) => {
                                 self.contact_cache_hits += 1;
@@ -188,7 +196,10 @@ impl CollisionScan {
                     contacts,
                 }
             })
-            .collect()
+            .collect();
+        // 与 scan() 的缓存同理：mark-and-sweep，旧指纹键永不再命中。
+        self.contact_cache.retain(|k, _| seen.contains(k));
+        out
     }
 }
 
@@ -795,6 +806,38 @@ mod tests {
         scan.scan(&sc);
         assert_eq!(scan.computed, 2);
         assert_eq!(scan.cache_hits, 1);
+    }
+
+    #[test]
+    fn scan_cache_sweeps_stale_fingerprints() {
+        // 缓存无界增长守卫：每轮 scan 只保留本轮查询过的指纹键。
+        // 逐轮移动对象 → 旧键永不再命中，缓存大小必须稳定在当轮对数。
+        let mut sc = Scene::new(None);
+        sc.add_object(sphere_obj(0.0, 1.0, 0));
+        sc.add_object(sphere_obj(5.0, 1.0, 0));
+        sc.add_object(sphere_obj(9.0, 1.0, 0));
+        let mut scan = CollisionScan::new();
+        scan.scan(&sc);
+        assert_eq!(scan.cache.len(), 3);
+        for i in 1..10 {
+            sc.objects[1].position = [5.0 + f64::from(i) * 0.01, 0.0, 0.0];
+            scan.scan(&sc);
+            assert_eq!(scan.cache.len(), 3, "第 {i} 轮后缓存必须有界");
+        }
+    }
+
+    #[test]
+    fn contact_cache_sweeps_stale_fingerprints() {
+        // scan_contacts 的接触解缓存同理：移动的 Yes 对只留当轮键。
+        let mut sc = Scene::new(None);
+        sc.add_object(sphere_obj(0.0, 1.0, 0));
+        sc.add_object(sphere_obj(1.5, 1.0, 0)); // 与 0 重叠 → Yes
+        let mut scan = CollisionScan::new();
+        scan.scan_contacts(&sc);
+        assert_eq!(scan.contact_cache.len(), 1);
+        sc.objects[1].position = [1.6, 0.0, 0.0]; // 仍重叠，但指纹已变
+        scan.scan_contacts(&sc);
+        assert_eq!(scan.contact_cache.len(), 1, "旧指纹键必须被 sweep");
     }
 
     #[test]
