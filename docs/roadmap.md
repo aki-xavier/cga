@@ -93,16 +93,34 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
   认证不了进 `unknown`（绝不假装）。诚实边界：cam 联动（从动 q 非线性）与
   嵌套联动（复合运动非单螺旋）→ `skipped` 注明原因。闭式验证：反向联动臂撞柱
   q*=asin(0.98)、同轴互碰 q*=acos(0.1) 均 1e-9。
-- 空间索引：对象数量上量后再做（包围盒剪枝现在够用，不落空机制）。
+- **D3 ✓ 空间索引**：对象数 > 64 启用世界 AABB 宽相——AABB 不相交 ⇒ 认证 No
+  （精确判定，`separation=None` 诚实不造假距离），跳过指纹缓存+窄相；无界几何
+  不剪。小场景保持全对精确距离（报告/金标不变）。测试：100 球场景 5151 对
+  判定与逐对 probe 参考全一致，剪掉 >90% 窄相。
 
-### E. React 差距（不做，直到有消费者）
+### E. React 差距（已完成，2026-10-08）
 
-优先级分层（`resolveUpdatePriority` 恒 Default）、`lazy()`/动态 `import()`（无模块加载 shim）、DevTools。没有落点的机制不做。
+- **E1 优先级分层**：dispatch（click 等离散事件）期间 `setCurrentUpdatePriority
+  (Discrete)`，`resolveUpdatePriority` 返回被跟踪车道并计数（`lanes()` 可观测，
+  测试断言 click 的 setState 计在 discrete）。
+- **E2 `lazy()`/动态 `import()`**：bundler 把字面量规格的 `import("./x.jsx")`
+  编期打包（`__cga_dyn_import(id)` → 已求值模块命名空间的 Promise；非字面量/
+  缺文件编期报错）。配套修了真 bug：**boa 的 promise 任务队列只能由 Rust 推进**，
+  `drain`/`frame` 现在交织 `run_jobs` 与 JS 调度器到两连静止（lazy+Suspense
+  的 retry 就卡在这）。静态 import 既有，语义不变。
+- **E3 DevTools 握手**：装 `__REACT_DEVTOOLS_GLOBAL_HOOK__` 记录型桩 +
+  显式 `reconciler.injectIntoDevTools()`（渲染器侧义务，ReactDOM 同款）；
+  `devtools()` 可观测注册/提交。检查器协议（浏览器扩展后端）不在渲染器侧范围。
 
-### G5+. 空间闭链 / 多自由度环路
+### G5+. 空间闭链 / 多自由度环路（已完成）
 
-- 现 LM 只解 1-DOF pair；多自由度环路（球副/平面副在环上）需要速度级雅可比（依赖 B）。
-- Stewart 平台类：位置级约束 + 分析雅可比。
+- 闭链自由变量 = 路径上未固定 pair 的**全部 q 分量**（圆柱副/球副/平面副按分量展开）；
+  雅可比 = B 螺旋列的解析导数（d(pa)=w×pa+v，d(û)=w×û），FD 对拍为裁判
+  （`closure_jacobian_fd_check` 逐元素 6×5）；`lm_solve_j` 解析版与 `lm_solve`（FD）并存。
+- `guess` prop 支持数组（分量数 = 副的自由度数）。
+- 闭式验证：圆柱副+球副空间闭环，零位形天然闭合，偏移 guess 收回零（1e-6），
+  秩 5 钉死（dof 0）；矩形四连杆（1-DOF 路径）在解析雅可比下结果不变。
+- 闭链 `solved` 名单：1-DOF 保持裸名，多自由度按 `name[i]` 展开。
 
 ## 4. 推荐顺序
 

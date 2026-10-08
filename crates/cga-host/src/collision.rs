@@ -15,7 +15,8 @@ pub struct PairHit {
     pub a: usize,
     pub b: usize,
     pub hit: Hit,
-    /// 分离距离（相离正 / 相切 0 / 穿入负）；`None` = Unknown。
+    /// 分离距离（相离正 / 相切 0 / 穿入负）；`None` = Unknown，或 AABB 宽相
+    /// 认证相离（D3 大场景：判定是精确的 No，只是没算距离）。
     pub separation: Option<f64>,
 }
 
@@ -46,6 +47,30 @@ fn fingerprints(objs: &[Object]) -> Vec<u64> {
     objs.iter().map(|o| fp(&(o.motor(), &o.geometry))).collect()
 }
 
+/// 空间索引阈值：对象数超过此值启用 AABB 宽相（小场景保持全对精确距离）。
+pub const SPATIAL_INDEX_THRESHOLD: usize = 64;
+
+/// 对象的世界 AABB（局部包围盒 8 角点变换后取 min/max）；无界几何（平面）→ None。
+fn world_aabb(o: &Object) -> Option<[[f64; 3]; 2]> {
+    let [bmin, bmax] = cga_mesh::BakeExt::bounds(&o.geometry.identity_params())?;
+    let m = o.motor().to_matrix();
+    let mut mn = [f64::INFINITY; 3];
+    let mut mx = [f64::NEG_INFINITY; 3];
+    for ci in 0..8 {
+        let p = [
+            if ci & 1 == 0 { bmin[0] } else { bmax[0] },
+            if ci & 2 == 0 { bmin[1] } else { bmax[1] },
+            if ci & 4 == 0 { bmin[2] } else { bmax[2] },
+        ];
+        let pw = cga_core::transform_point(m, p);
+        for k in 0..3 {
+            mn[k] = mn[k].min(pw[k]);
+            mx[k] = mx[k].max(pw[k]);
+        }
+    }
+    Some([mn, mx])
+}
+
 fn fp<T: std::fmt::Debug>(x: &T) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -62,17 +87,41 @@ impl CollisionScan {
     /// 同一连杆/装配体的刚体绑定，互相重叠是预期而非干涉。
     ///
     /// 缓存键是对象对的指纹（几何 + 世界变换），与对象在表中的位置无关。
+    ///
+    /// 空间索引（D3）：对象数 > [`SPATIAL_INDEX_THRESHOLD`] 时启用世界 AABB 宽相——
+    /// AABB 不相交 ⇒ 几何不相交（认证的 No，`separation = None` 未算精确距离），
+    /// 跳过指纹缓存查询与窄相 probe。小场景保持全对精确距离（报告/金标不变）。
+    /// 无界几何（平面）的 AABB 为 None，宽相中与一切相交（不剪）。
     pub fn scan(&mut self, scene: &cga_gpu::scene::Scene) -> Vec<PairHit> {
         self.cache_hits = 0;
         self.computed = 0;
         let objs = &scene.objects;
         let fps = fingerprints(objs);
+        let aabbs: Vec<Option<[[f64; 3]; 2]>> = if objs.len() > SPATIAL_INDEX_THRESHOLD {
+            objs.iter().map(world_aabb).collect()
+        } else {
+            Vec::new()
+        };
         let mut out = Vec::new();
         for i in 0..objs.len() {
             for j in i + 1..objs.len() {
                 let (gi, gj) = (objs[i].group, objs[j].group);
                 if gi != 0 && gi == gj {
                     continue;
+                }
+                // 宽相：AABB 不相交 ⇒ 认证相离（精确的 Hit::No，距离未算）
+                if !aabbs.is_empty() {
+                    if let (Some(a), Some(b)) = (aabbs[i], aabbs[j]) {
+                        if (0..3).any(|k| a[0][k] > b[1][k] || b[0][k] > a[1][k]) {
+                            out.push(PairHit {
+                                a: i,
+                                b: j,
+                                hit: Hit::No,
+                                separation: None,
+                            });
+                            continue;
+                        }
+                    }
                 }
                 let key = (fps[i], fps[j]);
                 let (hit, sep) = match self.cache.get(&key) {
@@ -390,7 +439,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         coupled: moving_names[1..].to_vec(),
         skipped: None,
     };
-    let mut note = |out: &mut JointSweepOutcome, idx: usize, t: f64| {
+    let note = |out: &mut JointSweepOutcome, idx: usize, t: f64| {
         let q = lo + t * rate_x;
         if out.first.is_none_or(|(_, bq)| q < bq) {
             out.first = Some((idx, q));
@@ -782,9 +831,9 @@ mod tests {
 export default (
   <scene>
     <camera />
-    <translate t={[1.5, 1.0, 0]}><sphere r={0.5} /></translate>
+    <sphere r={0.5} t={[1.5, 1.0, 0]} />
     <link name="base" />
-    <link name="arm_link"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <link name="arm_link"><sphere r={0.2} t={[1.2, 0, 0]} /></link>
     <pair kind="revolute" name="arm" a="base" b="arm_link" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]} />
     <anchor link="base" />
   </scene>
@@ -810,10 +859,10 @@ export default (
 export default (
   <scene>
     <camera />
-    <translate t={[2.0, 1.5, 0]}><sphere r={0.5} /></translate>
+    <sphere r={0.5} t={[2.0, 1.5, 0]} />
     <link name="base" />
     <link name="upper" />
-    <link name="fore"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <link name="fore"><sphere r={0.2} t={[1.2, 0, 0]} /></link>
     <pair kind="revolute" name="base" a="base" b="upper" axis={[0, 0, 1]} at={[0, 0, 0]} limit={[0, 1.0]} />
     <pair kind="revolute" name="elbow" a="upper" b="fore" axis={[0, 0, 1]} at={[1.2, 0, 0]} limit={[0, 1.0]} />
     <anchor link="base" />
@@ -846,12 +895,12 @@ export default (
 export default (
   <scene>
     <camera />
-    <translate t={[10.0, 0.0, 0]}><sphere r={0.5} /></translate>
+    <sphere r={0.5} t={[10.0, 0.0, 0]} />
     <link name="base" />
     <link name="l_fix"><sphere r={0.2} /></link>
     <link name="l_ball"><sphere r={0.2} /></link>
     <link name="l_free"><sphere r={0.2} /></link>
-    <link name="l_arm"><translate t={[1.2, 0, 0]}><sphere r={0.2} /></translate></link>
+    <link name="l_arm"><sphere r={0.2} t={[1.2, 0, 0]} /></link>
     <pair kind="fixed" name="fix" a="base" b="l_fix" at={[0, 0, 0]} />
     <pair kind="spherical" name="ball" a="base" b="l_ball" axis={[0, 0, 1]} at={[0, 0, 0]} />
     <pair kind="revolute" name="free" a="base" b="l_free" axis={[0, 0, 1]} at={[0, 0, 0]} />
@@ -953,6 +1002,73 @@ export default (
     }
 
     #[test]
+    fn scan_spatial_index_matches_brute_force() {
+        // D3：100 球网格（>64 触发宽相）+ 一个无界平面 + 一对相交。
+        // 宽相的认证 No 必须与逐对 probe 的参考判定一致；相交对走窄相、
+        // separation 精确。
+        let mut sc = Scene::new(None);
+        for i in 0..5 {
+            for j in 0..5 {
+                for k in 0..4 {
+                    let mut o = sphere_obj(0.0, 1.0, 0);
+                    o.position = [i as f64 * 3.0, j as f64 * 3.0, k as f64 * 3.0];
+                    sc.add_object(o);
+                }
+            }
+        }
+        // 相交对：球 100 贴着球 0（球心距 0.75 < 2；距 (3,0,0) 的球 2.25 > 2 不误触）
+        let mut ov = sphere_obj(0.0, 1.0, 0);
+        ov.position = [0.75, 0.0, 0.0];
+        sc.add_object(ov);
+        // 无界平面（宽相不剪）
+        let mut pl = sphere_obj(0.0, 1.0, 0);
+        pl.geometry = Geometry::PlaneGeometry(cga_core::PlaneGeometry::new([0.0, 1.0, 0.0], -30.0));
+        pl.position = [0.0, 0.0, 0.0];
+        sc.add_object(pl);
+        let n = sc.objects.len();
+        assert!(n > SPATIAL_INDEX_THRESHOLD as usize, "{n}");
+
+        let mut scan = CollisionScan::new();
+        let hits = scan.scan(&sc);
+        // 参考：逐对直接 probe（跳过同组规则外的全对）
+        let total_pairs = n * (n - 1) / 2;
+        assert_eq!(hits.len(), total_pairs, "发射仍是全矩阵");
+        let mut mismatches = 0;
+        for h in &hits {
+            let wa = sc.objects[h.a].motor().to_matrix();
+            let wb = sc.objects[h.b].motor().to_matrix();
+            let (bh, _bsep) =
+                cga_collision::probe(&sc.objects[h.a].geometry, wa, &sc.objects[h.b].geometry, wb);
+            if h.hit != bh {
+                mismatches += 1;
+            }
+        }
+        assert_eq!(mismatches, 0, "宽相判定必须与窄相参考一致");
+        // 宽相确实剪了绝大多数对（网格球互不相交）
+        assert!(
+            scan.computed < total_pairs / 10,
+            "computed={} total={total_pairs}",
+            scan.computed
+        );
+        // 相交对走了窄相：Yes + 精确分离 −0.5
+        let yes: Vec<_> = hits.iter().filter(|h| h.hit == Hit::Yes).collect();
+        assert_eq!(yes.len(), 1, "只有球-球相交对（平面在远处地面）");
+        assert!(
+            (yes[0].separation.unwrap() + 1.25).abs() < 1e-9,
+            "{:?}",
+            yes[0]
+        );
+        // 无界平面（y=-30 地面，实体侧朝下）与所有球相离：AABB=None 不剪，
+        // 逐对走窄相得精确 No——mismatches==0 已覆盖；认证 No 的 separation 是
+        // None（诚实未算）：
+        let certified = hits
+            .iter()
+            .filter(|h| h.hit == Hit::No && h.separation.is_none())
+            .count();
+        assert!(certified > total_pairs * 9 / 10, "certified={certified}");
+    }
+
+    #[test]
     fn scan_contacts_cache_across_scans() {
         // D1：Yes 对的接触解按同一指纹键缓存——第二帧零接触解、结果逐位一致。
         let mut sc = Scene::new(None);
@@ -984,10 +1100,10 @@ export default (
 export default (
   <scene>
     <camera />
-    <translate t={[2.5, -1.0, 0]}><sphere r={0.1} /></translate>
+    <sphere r={0.1} t={[2.5, -1.0, 0]} />
     <link name="base" />
-    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
-    <link name="armB"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armA"><sphere r={0.1} t={[1, 0, 0]} /></link>
+    <link name="armB"><sphere r={0.1} t={[1, 0, 0]} /></link>
     <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,2.0]} />
     <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[2.5,0,0]} q={0} />
     <gear a="A" b="B" ratio={-1} />
@@ -1018,8 +1134,8 @@ export default (
   <scene>
     <camera />
     <link name="base" />
-    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
-    <link name="armB"><translate t={[-1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armA"><sphere r={0.1} t={[1, 0, 0]} /></link>
+    <link name="armB"><sphere r={0.1} t={[-1, 0, 0]} /></link>
     <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,1.6]} />
     <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[0,0,0]} q={0} />
     <gear a="A" b="B" ratio={-1} />
@@ -1101,8 +1217,8 @@ export default (
   <scene>
     <camera />
     <link name="base" />
-    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
-    <link name="armB"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armA"><sphere r={0.1} t={[1, 0, 0]} /></link>
+    <link name="armB"><sphere r={0.1} t={[1, 0, 0]} /></link>
     <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,0.5]} />
     <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[10,0,0]} q={0} />
     <gear a="A" b="B" ratio={-1} />

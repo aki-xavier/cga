@@ -118,7 +118,9 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
   `collides(a,b)` → 1/0、`inside(of, p)` → 1/0；`qadd/qsub/qmul/qdiv` 组合
   （JS 算术对查询对象是字符串拼接——不透明对象不能加）。**Unknown 一律构建
   报错**（三值不许变成数字）。tag 引用先定义后使用（与 `instances`/`when` 同）。
-  落点：图元的数值参数（`build_geo`）与 `<rotate angle>`（`p_num_lazy`）。
+  落点：图元的数值参数（`build_geo`，构造时把 `{__q}` 解析成数值）。变换 prop
+  里 `t`/`scale`/`mirror` 走 `p_vec3_lazy`（向量位的 `vadd`/`face` 等），`rotate`
+  是四元列表走 `p_num_list`——**只吃普通数值**，标量查询不落在变换上。
   注：`build_geo` 此前把 `{__q}` 对象静默成 0——现在要么给真值要么报错。
 - 报告：`collide <i> <j> yes|unknown sep=<d>` 行（只列非 No 的对，没有则整节省略，
   既有金标不受影响）。

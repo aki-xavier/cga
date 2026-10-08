@@ -39,7 +39,7 @@ pub fn gen_footer() -> String {
 
 pub fn gen_post(r: f64, h: f64) -> String {
     format!(
-        "<Rotate axis={{[1.0, 0.0, 0.0]}} angle={{ -1.5707963267948966 }}><Cylinder r={{ {} }} h={{ {} }} /></Rotate>",
+        "<Cylinder r={{ {} }} h={{ {} }} rotate={{[1.0, 0.0, 0.0, -1.5707963267948966]}} />",
         fmt_num(r),
         fmt_num(h)
     )
@@ -53,28 +53,30 @@ pub fn gen_flange_assembly(
     plate: &BasePlateSpec,
 ) -> String {
     let mut out = gen_header([7.5, 6.5, 9.5], [0.0, 1.8, 0.0]);
+    // 多子容器用 <Group t=…>（透明容器）；单元素直接折叠变换 prop
+    // （顺序固定 T·R·S·Mirror，与原嵌套等价）。
     out.push_str(&format!(
-        "    <Translate t={{[0.0, 0.15, 0.0]}}>\n{}    </Translate>\n",
+        "    <Group t={{[0.0, 0.15, 0.0]}}>\n{}    </Group>\n",
         plate.generate()
     ));
     out.push_str(&format!(
-        "    <Translate t={{[0.0, 0.55, 0.0]}}>\n{}    </Translate>\n",
+        "    <Group t={{[0.0, 0.55, 0.0]}}>\n{}    </Group>\n",
         flange.generate()
     ));
     out.push_str(&bolts.generate());
     out.push_str(&format!(
-        "    <Translate t={{[0.0, 2.9, 0.0]}}>{}</Translate>\n",
+        "    <Group t={{[0.0, 2.9, 0.0]}}>{}</Group>\n",
         gen_post_mat(0.55, 4.2, 0x9BA1A6, 0.3, 0.8)
     ));
     out.push_str(&format!(
-        "    <Translate t={{[0.0, 1.25, 0.0]}}>{}</Translate>\n",
+        "    <Group t={{[0.0, 1.25, 0.0]}}>{}</Group>\n",
         gen_post_mat(0.85, 0.9, 0x9BA1A6, 0.3, 0.8)
     ));
     out.push_str(&gear.generate());
     out.push_str(&format!(
-        "    <Translate t={{[0.0, 4.45, 0.0]}}><Rotate axis={{[1.0, 0.0, 0.0]}} angle={{ -1.5707963267948966 }}><Torus R={{0.72}} r={{0.16}} color={{0x4A4F54}} roughness={{0.45}} metalness={{0.65}} /></Rotate></Translate>\n\
-         \x20   <Translate t={{[0.0, 4.85, 0.0]}}><Box s={{[0.95, 0.5, 0.95]}} color={{0x6E747A}} roughness={{0.4}} metalness={{0.7}} /></Translate>\n\
-         \x20   <Translate t={{[0.62, 3.6, 0.0]}}><Box s={{[0.18, 0.9, 0.18]}} color={{0xC8A24A}} roughness={{0.35}} metalness={{0.75}} /></Translate>\n\
+        "    <Torus R={{0.72}} r={{0.16}} color={{0x4A4F54}} roughness={{0.45}} metalness={{0.65}} rotate={{[1.0, 0.0, 0.0, -1.5707963267948966]}} t={{[0.0, 4.45, 0.0]}} />\n\
+         \x20   <Box s={{[0.95, 0.5, 0.95]}} color={{0x6E747A}} roughness={{0.4}} metalness={{0.7}} t={{[0.0, 4.85, 0.0]}} />\n\
+         \x20   <Box s={{[0.18, 0.9, 0.18]}} color={{0xC8A24A}} roughness={{0.35}} metalness={{0.75}} t={{[0.62, 3.6, 0.0]}} />\n\
          \x20   <Plane n={{[0.0, 1.0, 0.0]}} d={{0.0}} color={{0x3A4046}} roughness={{0.9}} />\n",
     ));
     out.push_str(&gen_footer());
@@ -83,7 +85,7 @@ pub fn gen_flange_assembly(
 
 pub fn gen_post_mat(r: f64, h: f64, color: u32, roughness: f64, metalness: f64) -> String {
     format!(
-        "<Rotate axis={{[1.0, 0.0, 0.0]}} angle={{ -1.5707963267948966 }}><Cylinder r={{ {} }} h={{ {} }} color={{0x{:06X}}} roughness={{ {} }} metalness={{ {} }} /></Rotate>",
+        "<Cylinder r={{ {} }} h={{ {} }} color={{0x{:06X}}} roughness={{ {} }} metalness={{ {} }} rotate={{[1.0, 0.0, 0.0, -1.5707963267948966]}} />",
         fmt_num(r),
         fmt_num(h),
         color,
@@ -205,7 +207,7 @@ mod tests {
     fn post_golden() {
         assert_eq!(
             gen_post(2.6, 0.5),
-            "<Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 2.6 } h={ 0.5 } /></Rotate>"
+            "<Cylinder r={ 2.6 } h={ 0.5 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />"
         );
     }
 

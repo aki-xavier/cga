@@ -315,6 +315,8 @@ enum HostCall {
     ClearErrors,
     Logs,
     Instances,
+    Lanes,
+    Devtools,
     Unmount,
     FrameMount {
         src: String,
@@ -355,6 +357,8 @@ impl HostCall {
             HostCall::ClearErrors => json!({ "m": "clearErrors" }),
             HostCall::Logs => json!({ "m": "logs" }),
             HostCall::Instances => json!({ "m": "instances" }),
+            HostCall::Lanes => json!({ "m": "lanes" }),
+            HostCall::Devtools => json!({ "m": "devtools" }),
             HostCall::Unmount => json!({ "m": "unmount" }),
             HostCall::FrameMount { src, pose, sandbox } => json!({
                 "m": "frame", "a": { "action": "mount", "src": src, "pose": pose, "sandbox": sandbox }
@@ -615,6 +619,18 @@ impl<M> ReactSession<M> {
             .collect())
     }
 
+    /// E1：`resolveUpdatePriority` 的取值分布
+    /// （离散事件 click 的更新应计在 discrete 车道，普通帧计 default）。
+    pub fn lanes(&mut self) -> Result<Value, ReactError> {
+        self.exec(|w| w.rpc(&HostCall::Lanes))
+    }
+
+    /// E3：DevTools 握手状态——渲染器注册数、包名、提交计数。
+    /// 渲染器侧契约的最小实现；检查器协议本身（浏览器扩展）不在范围。
+    pub fn devtools(&mut self) -> Result<Value, ReactError> {
+        self.exec(|w| w.rpc(&HostCall::Devtools))
+    }
+
     /// 注册一个宿主原生函数（JSX 宿主的 `solve` 就走这里）。
     ///
     /// 原生函数里的 panic 不会跨 FFI 边界 unwind：这里用 `catch_unwind` 捕获并转成
@@ -670,14 +686,33 @@ impl<M> ReactSession<M> {
         self.exec(|w| w.rpc(&HostCall::Unmount).map(|_| ()))
     }
 
-    /// 把调度器跑到静止（微任务 + 定时器，带轮数上限）。
+    /// 把调度器跑到静止（微任务 + 定时器 + **boa 的 promise 任务队列**，带轮数上限）。
+    ///
+    /// promise 任务只能由 Rust 推进（`ctx.run_jobs`），而 promise 回调又会反过来往
+    /// JS 调度器塞活（lazy/Suspense 的 retry 就是这条路径）——所以必须交织：
+    /// 两侧都连续静止（两连 quiet pass）才算不动点。
     pub fn drain(&mut self) -> Result<DrainStats, ReactError> {
-        // 先跑掉 boa 自己的 promise 任务，再让 JS 调度器 drain。
         let v = self.exec(|w| {
-            let _ = w.ctx.run_jobs();
-            let out = w.rpc(&HostCall::Drain { max_rounds: None });
-            let _ = w.ctx.run_jobs();
-            out
+            let mut acc_rounds = 0u64;
+            let mut acc_errs = 0u64;
+            let mut quiet = 0;
+            for _ in 0..64 {
+                let _ = w.ctx.run_jobs();
+                let out = w.rpc(&HostCall::Drain { max_rounds: None })?;
+                let _ = w.ctx.run_jobs();
+                let st = drain_stats(&out);
+                acc_rounds += st.rounds as u64;
+                acc_errs += st.errors as u64;
+                if st.rounds == 0 {
+                    quiet += 1;
+                    if quiet >= 2 {
+                        break;
+                    }
+                } else {
+                    quiet = 0;
+                }
+            }
+            Ok(serde_json::json!({ "rounds": acc_rounds, "errs": acc_errs }))
         })?;
         Ok(drain_stats(&v))
     }
@@ -700,7 +735,39 @@ impl<M> ReactSession<M> {
             },
             FrameAction::None => HostCall::FrameNone,
         };
-        let v = self.exec(move |w| w.rpc(&call))?;
+        let v = self.exec(move |w| {
+            let mut v = w.rpc(&call)?;
+            // promise 交织（同 drain()）：动作帧可能产生 promise 任务（lazy/Suspense），
+            // 其回调又会调度 JS 侧工作——用空动作帧验证到不动点。
+            let mut quiet = 0;
+            for _ in 0..64 {
+                let _ = w.ctx.run_jobs();
+                let v2 = w.rpc(&HostCall::FrameNone)?;
+                let _ = w.ctx.run_jobs();
+                // 快照/统计/错误取最新一帧；dispatch 结果保留动作帧的。
+                let rounds = v2
+                    .get("stats")
+                    .and_then(|s| s.get("rounds"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let keep_dispatch = v.get("dispatch").cloned();
+                v = v2;
+                if let Some(d) = keep_dispatch {
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("dispatch".to_string(), d);
+                    }
+                }
+                if rounds == 0 {
+                    quiet += 1;
+                    if quiet >= 2 {
+                        break;
+                    }
+                } else {
+                    quiet = 0;
+                }
+            }
+            Ok(v)
+        })?;
         Ok(FrameOutcome {
             snapshot: v.get("snapshot").cloned().unwrap_or(Value::Null),
             stats: drain_stats(v.get("stats").unwrap_or(&Value::Null)),
@@ -891,6 +958,72 @@ const __scene = h(App, {});
     fn effects(s: &mut ReactSession) -> String {
         s.call("JSON.stringify(globalThis.__effects)")
             .expect("effects")
+    }
+
+    #[test]
+    fn lazy_suspense_resolves_within_drain() {
+        // lazy + Suspense（不经 bundler）：fallback 先挂载，promise retry 在
+        // drain 的 promise/JS 交织里收敛——最终树含 lazy 组件、无错误。
+        const M: &str = r#"
+const W = React.lazy(() => Promise.resolve({ default: function W() { return h('sphere', { r: 0.3 }); } }));
+const __scene = h('scene', {}, h(React.Suspense, { fallback: h('box', { s: [9, 9, 9] }) }, h(W, {})));
+"#;
+        let mut s = ReactSession::new(Runtime::Prod).expect("session");
+        s.begin(M, &pose(&[])).expect("begin");
+        s.drain().expect("drain");
+        let snap = s.snapshot().expect("snapshot");
+        assert!(snap.contains(r#""t":"sphere""#), "lazy 应解析: {snap}");
+        assert!(!snap.contains(r#""t":"box""#), "fallback 应被替换: {snap}");
+        assert_eq!(s.errors().expect("errors"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn e1_discrete_events_run_at_discrete_priority() {
+        // E1：click（离散事件）里的 setState 走 DiscreteEventPriority 车道；
+        // 普通挂载/update 走 Default。车道分布可观测（lanes()）。
+        const M: &str = r#"
+const { useState } = React;
+const Btn = function Btn() {
+  const [n, setN] = useState(0);
+  return h('box', { id: 'btn', n, onClick: () => setN((v) => v + 1) });
+};
+const __scene = h(Btn, {});
+"#;
+        let mut s = ReactSession::new(Runtime::Prod).expect("session");
+        s.begin(M, &pose(&[])).expect("begin");
+        s.drain().expect("drain");
+        let lanes0 = s.lanes().expect("lanes");
+        assert!(
+            lanes0["default"].as_u64().unwrap_or(0) >= 1,
+            "普通挂载应走 default 车道: {lanes0}"
+        );
+        assert_eq!(lanes0["discrete"].as_u64().unwrap_or(0), 0, "{lanes0}");
+        let inst = s.instances().expect("instances");
+        let btn = inst.iter().find(|i| i.type_name == "box").expect("box");
+        let out = s.dispatch(btn.id, "onClick", "").expect("dispatch");
+        assert!(out.found, "{out:?}");
+        let lanes1 = s.lanes().expect("lanes");
+        assert!(
+            lanes1["discrete"].as_u64().unwrap_or(0) >= 1,
+            "click 的 setState 应在离散车道: {lanes1}"
+        );
+        assert_eq!(s.errors().expect("errors"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn e3_devtools_handshake() {
+        // E3：渲染器注册进 __REACT_DEVTOOLS_GLOBAL_HOOK__（包名/版本），
+        // 提交通知有记录。检查器协议本身是 DevTools 后端的事，不在范围。
+        let (mut s, _snap) = start();
+        let d = s.devtools().expect("devtools");
+        assert_eq!(d["renderers"].as_u64().unwrap_or(0), 1, "{d}");
+        assert!(
+            d["packageNames"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some("cga-react"))),
+            "{d}"
+        );
+        assert!(d["commits"].as_u64().unwrap_or(0) >= 1, "{d}");
     }
 
     #[test]

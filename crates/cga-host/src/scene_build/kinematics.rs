@@ -834,71 +834,63 @@ pub(crate) fn solve_graph(
         if path.is_empty() {
             return Err(format!("JSX: closure {}-{} 两端不在同一棵树", cd.a, cd.b));
         }
-        // 自由 q：路径上未固定（未给 q / 无 pose / 未被 gear/cam/前序 closure 解出）的
-        // 1-DOF pair。
-        let free: Vec<usize> = path.iter().copied().filter(|&pi| !pinned[pi]).collect();
+        // 自由变量：路径上未固定 pair 的全部 q 分量（G5+：多自由度副按分量展开；
+        // 雅可比是 B 螺旋列的解析导数，FD 对拍见测试）。
+        let free: Vec<(usize, usize)> = path
+            .iter()
+            .filter(|&&pi| !pinned[pi])
+            .flat_map(|&pi| (0..decl.pairs[pi].kind.q_arity()).map(move |c| (pi, c)))
+            .collect();
         if free.is_empty() {
             return Err(format!(
                 "JSX: closure {}-{} 路径上没有可解的自由 q",
                 cd.a, cd.b
             ));
         }
-        for &pi in &free {
-            if !decl.pairs[pi].kind.is_1dof() {
-                return Err(format!(
-                    "JSX: closure {}-{} 路径上的 pair {} 不是 1-DOF（多自由度闭环求解另行立项）",
-                    cd.a,
-                    cd.b,
-                    pname(&decl.pairs[pi])
-                ));
-            }
-        }
         // 残差：闭合点重合（3）+ 闭合轴对齐（3，叉积分量）。
         let resid = |qs: &[Vec<f64>], world: &mut Vec<[f64; 16]>| -> Vec<f64> {
             propagate(qs, world, &parent, &order);
-            let pa = cga_core::transform_point(world[ia], cd.at);
-            let pb = cga_core::transform_point(world[ib], cd.b_at);
-            let (wa, wb) = (&world[ia], &world[ib]);
-            let aa = [
-                wa[0] * cd.axis[0] + wa[1] * cd.axis[1] + wa[2] * cd.axis[2],
-                wa[4] * cd.axis[0] + wa[5] * cd.axis[1] + wa[6] * cd.axis[2],
-                wa[8] * cd.axis[0] + wa[9] * cd.axis[1] + wa[10] * cd.axis[2],
-            ];
-            let ab = [
-                wb[0] * cd.axis[0] + wb[1] * cd.axis[1] + wb[2] * cd.axis[2],
-                wb[4] * cd.axis[0] + wb[5] * cd.axis[1] + wb[6] * cd.axis[2],
-                wb[8] * cd.axis[0] + wb[9] * cd.axis[1] + wb[10] * cd.axis[2],
-            ];
-            let cr = v3_cross(v3_unit(aa), v3_unit(ab));
-            vec![
-                pa[0] - pb[0],
-                pa[1] - pb[1],
-                pa[2] - pb[2],
-                cr[0],
-                cr[1],
-                cr[2],
-            ]
+            closure_residual(cd, ia, ib, world)
         };
-        // 初值：guess prop > 当前 q（默认 0）。
+        // 初值：guess prop > 当前 q（默认 0），按分量取。
         let mut x: Vec<f64> = free
             .iter()
-            .map(|&pi| {
-                if let Some(&g) = decl.pairs[pi].q_guess.first() {
+            .map(|&(pi, c)| {
+                if let Some(&g) = decl.pairs[pi].q_guess.get(c) {
                     guess_used[pi] = true;
                     g
                 } else {
-                    qs[pi][0]
+                    qs[pi][c]
                 }
             })
             .collect();
-        let mut wtmp = vec![mat4_identity(); n_links.max(1)];
-        let j_final = lm_solve(&mut x, &mut |x| {
-            for (k, &pi) in free.iter().enumerate() {
-                qs[pi][0] = x[k];
+        // 解析雅可比：自由变量 k=(pi,c) 的螺旋列 s=[w;v] 作用在它驱动的一侧端点上。
+        // 残差 r = [pa−pb; ûa×ûb]；d(pa)=w×pa+v，d(ûa)=w×ûa（旋转保持单位长）。
+        let qs0 = qs.clone();
+        let mut wtmp_r = vec![mat4_identity(); n_links.max(1)];
+        let mut rfn = |x: &[f64]| {
+            let mut qq = qs0.clone();
+            for (k, &(pi, c)) in free.iter().enumerate() {
+                qq[pi][c] = x[k];
             }
-            resid(&qs, &mut wtmp)
-        })
-        .map_err(|e| format!("JSX: closure {}-{} 未收敛: {e}", cd.a, cd.b))?;
+            resid(&qq, &mut wtmp_r)
+        };
+        let mut wtmp_j = vec![mat4_identity(); n_links.max(1)];
+        let mut jfn = |x: &[f64]| -> Vec<Vec<f64>> {
+            let mut qq = qs0.clone();
+            for (k, &(pi, c)) in free.iter().enumerate() {
+                qq[pi][c] = x[k];
+            }
+            propagate(&qq, &mut wtmp_j, &parent, &order);
+            closure_jacobian(decl, cd, &free, ia, ib, &link_idx, &parent, &qq, &wtmp_j)
+        };
+        let j_final = lm_solve_j(&mut x, &mut rfn, &mut jfn)
+            .map_err(|e| format!("JSX: closure {}-{} 未收敛: {e}", cd.a, cd.b))?;
+        let mut wtmp = vec![mat4_identity(); n_links.max(1)];
+        // 先把解写回 qs 再验残差（rfn/jfn 在克隆上工作，外层的 qs 未被更新）。
+        for (k, &(pi, c)) in free.iter().enumerate() {
+            qs[pi][c] = x[k];
+        }
         let r = resid(&qs, &mut wtmp);
         let rnorm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
         if rnorm > 1e-6 {
@@ -908,11 +900,19 @@ pub(crate) fn solve_graph(
             ));
         }
         let mut solved = Vec::new();
-        for (k, &pi) in free.iter().enumerate() {
-            qs[pi][0] = x[k];
+        for (k, &(pi, c)) in free.iter().enumerate() {
+            qs[pi][c] = x[k];
             pinned[pi] = true;
-            check_limit(&pname(&decl.pairs[pi]), decl.pairs[pi].limit, x[k])?;
-            solved.push((pname(&decl.pairs[pi]), x[k]));
+            if decl.pairs[pi].kind.is_1dof() {
+                check_limit(&pname(&decl.pairs[pi]), decl.pairs[pi].limit, x[k])?;
+            }
+            // 名字：1-DOF 保持裸名（报告与既有消费者不变），多自由度按分量展开。
+            let nm = if decl.pairs[pi].kind.is_1dof() {
+                pname(&decl.pairs[pi])
+            } else {
+                format!("{}[{c}]", pname(&decl.pairs[pi]))
+            };
+            solved.push((nm, x[k]));
         }
         propagate(&qs, &mut world, &parent, &order);
         closures.push(ClosureSolved {
@@ -1012,6 +1012,7 @@ fn tree_path(parent: &[Option<(usize, usize, bool)>], mut a: usize, mut b: usize
 /// 小规模 Levenberg–Marquardt：min |r(x)|，有限差分雅可比。
 /// 返回收敛处的雅可比（活动度的约束秩用）。不收敛（100 轮）→ Err。
 /// 用于闭链的位置级约束求解。
+#[cfg(test)] // FD 版是解析版 lm_solve_j 的裁判（closure_lm_fd_crosscheck），生产路径不用
 fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<Vec<Vec<f64>>, String> {
     let n = x.len();
     let mut lambda = 1e-3;
@@ -1035,6 +1036,164 @@ fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<Vec<
             }
         }
         // 解 (JᵀJ + λI)δ = −Jᵀr（小规模高斯消元）
+        let mut a = vec![vec![0.0; n]; n];
+        let mut b = vec![0.0; n];
+        for i in 0..m {
+            for u in 0..n {
+                b[u] -= j[i][u] * cur[i];
+                for v in 0..n {
+                    a[u][v] += j[i][u] * j[i][v];
+                }
+            }
+        }
+        let mut solved = false;
+        for _ in 0..50 {
+            let mut aa = a.clone();
+            for u in 0..n {
+                aa[u][u] += lambda * (a[u][u].abs() + 1e-12);
+            }
+            if let Some(delta) = gauss_solve(&aa, &b) {
+                let xn: Vec<f64> = x.iter().zip(delta.iter()).map(|(x, d)| x + d).collect();
+                let rn = r(&xn);
+                let rn_norm = rn.iter().map(|v| v * v).sum::<f64>().sqrt();
+                if rn_norm < cur_norm {
+                    x.copy_from_slice(&xn);
+                    cur = rn;
+                    cur_norm = rn_norm;
+                    lambda = (lambda / 3.0).max(1e-12);
+                    solved = true;
+                    break;
+                }
+            }
+            lambda *= 10.0;
+            if lambda > 1e12 {
+                break;
+            }
+        }
+        if !solved {
+            return Err(format!("LM 停滞（残差 {cur_norm:e}）"));
+        }
+    }
+    if cur_norm < 1e-7 {
+        return Ok(j);
+    }
+    Err(format!("LM 100 轮未收敛（残差 {cur_norm:e}）"))
+}
+
+/// 闭合残差（G5/G5+）：闭合点重合（3）+ 闭合轴对齐（3，叉积分量）。
+/// `world` 必须是当前 q 下 propagate 过的。
+pub(crate) fn closure_residual(
+    cd: &ClosureDecl,
+    ia: usize,
+    ib: usize,
+    world: &[[f64; 16]],
+) -> Vec<f64> {
+    let rot = |m: &[f64; 16], v: [f64; 3]| {
+        [
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+            m[4] * v[0] + m[5] * v[1] + m[6] * v[2],
+            m[8] * v[0] + m[9] * v[1] + m[10] * v[2],
+        ]
+    };
+    let pa = cga_core::transform_point(world[ia], cd.at);
+    let pb = cga_core::transform_point(world[ib], cd.b_at);
+    let ua = v3_unit(rot(&world[ia], cd.axis));
+    let ub = v3_unit(rot(&world[ib], cd.axis));
+    let cr = v3_cross(ua, ub);
+    vec![
+        pa[0] - pb[0],
+        pa[1] - pb[1],
+        pa[2] - pb[2],
+        cr[0],
+        cr[1],
+        cr[2],
+    ]
+}
+
+/// 闭合残差的解析雅可比（G5+）：自由变量 (pair, 分量) 的螺旋列 s=[w;v] 作用于
+/// 它驱动的一侧端点：d(pa) = w×pa+v，d(û) = w×û（旋转保持单位长）。
+/// 测试纪律：FD 对拍（`closure_jacobian_fd_check`）。
+pub(crate) fn closure_jacobian(
+    decl: &GraphDecl,
+    cd: &ClosureDecl,
+    free: &[(usize, usize)],
+    ia: usize,
+    ib: usize,
+    link_idx: &HashMap<&str, usize>,
+    parent: &[Option<(usize, usize, bool)>],
+    qs: &[Vec<f64>],
+    world: &[[f64; 16]],
+) -> Vec<Vec<f64>> {
+    let rot = |m: &[f64; 16], v: [f64; 3]| {
+        [
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+            m[4] * v[0] + m[5] * v[1] + m[6] * v[2],
+            m[8] * v[0] + m[9] * v[1] + m[10] * v[2],
+        ]
+    };
+    let is_down = |pi: usize, mut v: usize| -> bool {
+        while let Some((pj, u, _)) = parent[v] {
+            if pj == pi {
+                return true;
+            }
+            v = u;
+        }
+        false
+    };
+    let pa = cga_core::transform_point(world[ia], cd.at);
+    let pb = cga_core::transform_point(world[ib], cd.b_at);
+    let ua = v3_unit(rot(&world[ia], cd.axis));
+    let ub = v3_unit(rot(&world[ib], cd.axis));
+    let mut j = vec![vec![0.0; free.len()]; 6];
+    for (k, &(pi, c)) in free.iter().enumerate() {
+        let p = &decl.pairs[pi];
+        let fa = mat4_mul(
+            world[link_idx[p.a.as_str()]],
+            mat4_mul(translate4(p.at), rpy4(p.rpy)),
+        );
+        let s = screws_world_at(fa, &p.kind, p.axis, p.pitch.unwrap_or(0.0), &qs[pi])[c];
+        let (w, v) = ([s[0], s[1], s[2]], [s[3], s[4], s[5]]);
+        let (da, db) = (is_down(pi, ia), is_down(pi, ib));
+        let d_pa = if da {
+            v3_add(v3_cross(w, pa), v)
+        } else {
+            [0.0; 3]
+        };
+        let d_pb = if db {
+            v3_add(v3_cross(w, pb), v)
+        } else {
+            [0.0; 3]
+        };
+        let d_ua = if da { v3_cross(w, ua) } else { [0.0; 3] };
+        let d_ub = if db { v3_cross(w, ub) } else { [0.0; 3] };
+        let d_cr = v3_add(v3_cross(d_ua, ub), v3_cross(ua, d_ub));
+        for i in 0..3 {
+            j[i][k] = d_pa[i] - d_pb[i];
+            j[3 + i][k] = d_cr[i];
+        }
+    }
+    j
+}
+
+/// 解析雅可比版 LM（G5+：闭链残差的螺旋列解析导数；`lm_solve` 的 FD 版保留
+/// 给对拍测试）。收敛判据与停滞语义同 `lm_solve`。
+fn lm_solve_j(
+    x: &mut [f64],
+    r: &mut dyn FnMut(&[f64]) -> Vec<f64>,
+    jac: &mut dyn FnMut(&[f64]) -> Vec<Vec<f64>>,
+) -> Result<Vec<Vec<f64>>, String> {
+    let n = x.len();
+    let mut lambda = 1e-3;
+    let mut cur = r(x);
+    let mut cur_norm = cur.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let mut j: Vec<Vec<f64>> = Vec::new();
+    for _ in 0..100 {
+        if cur_norm < 1e-9 {
+            return Ok(j);
+        }
+        let m = cur.len();
+        j = jac(x);
+        debug_assert_eq!(j.len(), m);
         let mut a = vec![vec![0.0; n]; n];
         let mut b = vec![0.0; n];
         for i in 0..m {
@@ -1162,7 +1321,19 @@ fn gauss_solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
 /// 副在当前位姿的世界螺旋轴列（多 DOF 副多列，列序 = q 的分量序）。
 /// `fa_world` 是运动前的副 frame（F_a 的世界位姿，solve_graph 已填）。
 pub fn pair_screws_world(p: &PairDef) -> Vec<[f64; 6]> {
-    let f = p.fa_world;
+    screws_world_at(p.fa_world, &p.kind, p.axis, p.pitch.unwrap_or(0.0), &p.q)
+}
+
+/// 世界系螺旋轴列（给定 F_a 世界位姿与当前 q）。closure 求解的解析雅可比每轮
+/// 用新 fa 调它（`pair_screws_world` 是本函数在 PairDef 上的封装）。
+pub fn screws_world_at(
+    fa: [f64; 16],
+    kind: &JointKind,
+    axis: [f64; 3],
+    pitch: f64,
+    q: &[f64],
+) -> Vec<[f64; 6]> {
+    let f = fa;
     let r = |v: [f64; 3]| {
         [
             f[0] * v[0] + f[1] * v[1] + f[2] * v[2],
@@ -1171,33 +1342,32 @@ pub fn pair_screws_world(p: &PairDef) -> Vec<[f64; 6]> {
         ]
     };
     let o0 = [f[3], f[7], f[11]];
-    let axis_w = v3_unit(r(p.axis));
+    let axis_w = v3_unit(r(axis));
     let rot_col = |o: [f64; 3]| {
         let w = axis_w;
         let v = v3_cross(o, w);
         [w[0], w[1], w[2], v[0], v[1], v[2]]
     };
     let slide_col = [0.0, 0.0, 0.0, axis_w[0], axis_w[1], axis_w[2]];
-    match p.kind {
+    match kind {
         JointKind::Revolute | JointKind::Continuous => vec![rot_col(o0)],
         JointKind::Prismatic => vec![slide_col],
         JointKind::Helical => {
             // M = T(axis·p·q)·R(axis,q)：旋转心随平移走。
-            let pitch = p.pitch.unwrap_or(0.0);
-            let q = p.q.first().copied().unwrap_or(0.0);
+            let q = q.first().copied().unwrap_or(0.0);
             let o = v3_add(o0, v3_scale(axis_w, pitch * q));
             let v = v3_add(v3_cross(o, axis_w), v3_scale(axis_w, pitch));
             vec![[axis_w[0], axis_w[1], axis_w[2], v[0], v[1], v[2]]]
         }
         JointKind::Cylindrical => {
             // M = T(axis·qp)·R(axis,qr)：旋转心在平移后的点。
-            let qp = p.q.get(1).copied().unwrap_or(0.0);
+            let qp = q.get(1).copied().unwrap_or(0.0);
             let o = v3_add(o0, v3_scale(axis_w, qp));
             vec![rot_col(o), slide_col]
         }
         JointKind::Spherical => {
             // M = Rx·Ry·Rz（先 z 后 y 后 x）：瞬时轴 = x, Rx·y, Rx·Ry·z（F_a 系）。
-            let q = &p.q;
+            let q = q;
             let (rx, ry) = (
                 q.first().copied().unwrap_or(0.0),
                 q.get(1).copied().unwrap_or(0.0),
@@ -1227,10 +1397,10 @@ pub fn pair_screws_world(p: &PairDef) -> Vec<[f64; 6]> {
         JointKind::Planar => {
             // M = T(x·e1 + y·e2)·R(axis,θ)：平移在 F_a 系（不经 θ 旋转！），
             // 旋转轴过当前平移后的点。
-            let axis_l = p.axis;
+            let axis_l = axis;
             let e1 = v3_perp(axis_l);
             let e2 = v3_cross(axis_l, e1);
-            let q = &p.q;
+            let q = q;
             let th = q.get(2).copied().unwrap_or(0.0);
             let _ = th;
             let (x, y) = (
@@ -1579,9 +1749,6 @@ fn newton_minimize(f: &dyn Fn(&[f64]) -> f64, x: &mut [f64]) -> Result<(), Strin
     }
     Err("牛顿 200 轮未收敛".to_string())
 }
-fn link_idx_of(kin: &Kinematics, name: &str) -> usize {
-    kin.links.iter().position(|l| l.name == name).unwrap_or(0)
-}
 
 /// 由 SceneRun 计算各连杆的（名, 质量, 连杆局部系质心）。无质量的连杆不出现。
 pub fn link_masses(run: &crate::SceneRun) -> Vec<LinkMass> {
@@ -1606,4 +1773,160 @@ pub fn link_masses(run: &crate::SceneRun) -> Vec<LinkMass> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// G5+ 测试场景（手工 decl）：base —cyl(z)→ l1（臂端 [1,0,0]）—sph→ l2，
+    /// 闭合 l2 的 [0,1,0] 到 base 的 [1,1,0]，轴 z。零位形天然闭合：
+    /// q 全 0 时 l2 端点 = (1,0,0)+(0,1,0) = (1,1,0) 且轴对齐。
+    fn multi_dof_decl(guess_cyl: [f64; 2], guess_sph: [f64; 3]) -> GraphDecl {
+        GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![
+                PairDecl {
+                    name: Some("cyl".into()),
+                    kind: JointKind::Cylindrical,
+                    a: "base".into(),
+                    b: "l1".into(),
+                    at: [0.0; 3],
+                    axis: [0.0, 0.0, 1.0],
+                    rpy: [0.0; 3],
+                    q_init: vec![],
+                    q_guess: guess_cyl.to_vec(),
+                    q_given: false,
+                    pitch: None,
+                    limit: None,
+                },
+                PairDecl {
+                    name: Some("sph".into()),
+                    kind: JointKind::Spherical,
+                    a: "l1".into(),
+                    b: "l2".into(),
+                    at: [1.0, 0.0, 0.0],
+                    axis: [0.0, 0.0, 1.0],
+                    rpy: [0.0; 3],
+                    q_init: vec![],
+                    q_guess: guess_sph.to_vec(),
+                    q_given: false,
+                    pitch: None,
+                    limit: None,
+                },
+            ],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![ClosureDecl {
+                a: "l2".into(),
+                b: "base".into(),
+                at: [0.0, 1.0, 0.0],
+                b_at: [1.0, 1.0, 0.0],
+                axis: [0.0, 0.0, 1.0],
+            }],
+        }
+    }
+
+    #[test]
+    fn multi_dof_closure_recovers_known_assembly() {
+        // 自由变量 5（cyl 2 + sph 3），残差秩 5 → 局部唯一解 = 零位形。
+        // 从偏移 guess 收敛回零 = 空间多自由度闭链的闭式验证。
+        let decl = multi_dof_decl([0.15, 0.08], [0.12, -0.09, 0.2]);
+        let sol = solve_graph(&decl, &HashMap::new()).expect("solve");
+        assert_eq!(sol.closures.len(), 1);
+        let cl = &sol.closures[0];
+        assert!(cl.residual < 1e-8, "残差 {}", cl.residual);
+        assert_eq!(cl.rank, 5, "秩 5（点 3 + 轴叉积 2）");
+        assert_eq!(cl.solved.len(), 5, "{:?}", cl.solved);
+        for (n, q) in &cl.solved {
+            assert!(q.abs() < 1e-6, "{n} 应回到 0，got {q}");
+        }
+        // 名字按分量展开
+        assert!(cl.solved.iter().any(|(n, _)| n == "cyl[0]"));
+        assert!(cl.solved.iter().any(|(n, _)| n == "sph[2]"));
+    }
+
+    #[test]
+    fn closure_lm_fd_crosscheck() {
+        // FD 版 LM（lm_solve）作裁判：同一闭链系统用 FD 雅可比解一遍，
+        // 必须与解析版（solve_graph 内）收敛到同一根。
+        let decl = multi_dof_decl([0.15, 0.08], [0.12, -0.09, 0.2]);
+        let cd = &decl.closures[0];
+        let parent: [Option<(usize, usize, bool)>; 3] =
+            [None, Some((0, 0, true)), Some((1, 1, true))];
+        let order = [1usize, 2usize];
+        let fwd = |qs: &Vec<Vec<f64>>| -> Vec<[f64; 16]> {
+            let mut world = vec![mat4_identity(); 3];
+            for &v in &order {
+                let (pi, u, is_fwd) = parent[v].unwrap();
+                let p = &decl.pairs[pi];
+                let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
+                let m = joint_motion(&p.kind, p.axis, &qs[pi], p.pitch.unwrap_or(0.0));
+                world[v] = if is_fwd {
+                    mat4_mul(world[u], mat4_mul(fa, m))
+                } else {
+                    mat4_mul(world[u], mat4_inv(mat4_mul(fa, m)))
+                };
+            }
+            world
+        };
+        let mut x = vec![0.15, 0.08, 0.12, -0.09, 0.2];
+        lm_solve(&mut x, &mut |x: &[f64]| {
+            let qs = vec![vec![x[0], x[1]], vec![x[2], x[3], x[4]]];
+            closure_residual(cd, 2, 0, &fwd(&qs))
+        })
+        .expect("FD LM 收敛");
+        for (i, v) in x.iter().enumerate() {
+            assert!(v.abs() < 1e-6, "FD 根[{i}] 应回到 0，got {v}");
+        }
+    }
+
+    #[test]
+    fn closure_jacobian_fd_check() {
+        // 解析雅可比 vs FD（裁判）。任意非零位形，手工 parent/order/前向传播。
+        let decl = multi_dof_decl([0.0, 0.0], [0.0, 0.0, 0.0]);
+        let cd = &decl.closures[0];
+        let link_idx: HashMap<&str, usize> =
+            [("base", 0), ("l1", 1), ("l2", 2)].into_iter().collect();
+        // parent[v] = (pair, 上游 link, fwd)
+        let parent: [Option<(usize, usize, bool)>; 3] =
+            [None, Some((0, 0, true)), Some((1, 1, true))];
+        let order = [1usize, 2usize];
+        let qs: Vec<Vec<f64>> = vec![vec![0.3, 0.2], vec![0.1, -0.2, 0.15]];
+        let free: Vec<(usize, usize)> = vec![(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)];
+        let fwd = |qs: &Vec<Vec<f64>>| -> Vec<[f64; 16]> {
+            let mut world = vec![mat4_identity(); 3];
+            for &v in &order {
+                let (pi, u, is_fwd) = parent[v].unwrap();
+                let p = &decl.pairs[pi];
+                let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
+                let m = joint_motion(&p.kind, p.axis, &qs[pi], p.pitch.unwrap_or(0.0));
+                world[v] = if is_fwd {
+                    mat4_mul(world[u], mat4_mul(fa, m))
+                } else {
+                    mat4_mul(world[u], mat4_inv(mat4_mul(fa, m)))
+                };
+            }
+            world
+        };
+        let world = fwd(&qs);
+        let ja = closure_jacobian(&decl, cd, &free, 2, 0, &link_idx, &parent, &qs, &world);
+        // FD 雅可比
+        for (k, &(pi, c)) in free.iter().enumerate() {
+            let h = 1e-7;
+            let mut qp = qs.clone();
+            qp[pi][c] += h;
+            let rp = closure_residual(cd, 2, 0, &fwd(&qp));
+            let r0 = closure_residual(cd, 2, 0, &fwd(&qs));
+            for i in 0..6 {
+                let fd = (rp[i] - r0[i]) / h;
+                assert!(
+                    (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
+                    "J[{i}][{k}] 解析 {} vs FD {fd}",
+                    ja[i][k]
+                );
+            }
+        }
+    }
 }

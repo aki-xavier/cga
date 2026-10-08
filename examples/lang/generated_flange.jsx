@@ -5,83 +5,75 @@ export default (
     <DirectionalLight direction={[0.4, 1.0, 0.5]} intensity={0.5} />
     <PointLight position={[-5, 6, 4]} intensity={0.55} />
     <AmbientLight intensity={0.38} />
-    <Translate t={[0.0, 0.15, 0.0]}>
+    <Group t={[0.0, 0.15, 0.0]}>
       <Difference color={0x4A4F54} roughness={0.5} metalness={0.6}>
         <Box s={[7.0, 0.3, 7.0]} />
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.7853981633974483 }><Translate t={[2.9, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ 1.5707963267948966 }><Cone r={ 0.32 } h={ 0.35 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 2.356194490192345 }><Translate t={[2.9, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ 1.5707963267948966 }><Cone r={ 0.32 } h={ 0.35 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.9269908169872414 }><Translate t={[2.9, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ 1.5707963267948966 }><Cone r={ 0.32 } h={ 0.35 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.497787143782138 }><Translate t={[2.9, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ 1.5707963267948966 }><Cone r={ 0.32 } h={ 0.35 } /></Rotate></Translate></Rotate>
+        <Group rotate={[0.0, 1.0, 0.0, 0.7853981633974483]}><Group t={[2.9, 0.0, 0.0]}><Cone r={ 0.32 } h={ 0.35 } rotate={[1.0, 0.0, 0.0, 1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 2.356194490192345]}><Group t={[2.9, 0.0, 0.0]}><Cone r={ 0.32 } h={ 0.35 } rotate={[1.0, 0.0, 0.0, 1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 3.9269908169872414]}><Group t={[2.9, 0.0, 0.0]}><Cone r={ 0.32 } h={ 0.35 } rotate={[1.0, 0.0, 0.0, 1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 5.497787143782138]}><Group t={[2.9, 0.0, 0.0]}><Cone r={ 0.32 } h={ 0.35 } rotate={[1.0, 0.0, 0.0, 1.5707963267948966]} /></Group></Group>
       </Difference>
-    </Translate>
-    <Translate t={[0.0, 0.55, 0.0]}>
+    </Group>
+    <Group t={[0.0, 0.55, 0.0]}>
       <Difference color={0x9BA1A6} roughness={0.35} metalness={0.75}>
-        <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 2.6 } h={ 0.5 } /></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.0 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.7853981633974483 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 1.5707963267948966 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 2.356194490192345 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.141592653589793 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.9269908169872414 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 4.71238898038469 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.497787143782138 }><Translate t={[2.0, 0.0, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.16 } h={ 2.0 } /></Rotate></Translate></Rotate>
-        <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.58 } h={ 2.0 } /></Rotate>
+        <Cylinder r={ 2.6 } h={ 0.5 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+        <Group rotate={[0.0, 1.0, 0.0, 0.0]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 0.7853981633974483]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 1.5707963267948966]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 2.356194490192345]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 3.141592653589793]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 3.9269908169872414]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 4.71238898038469]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Group rotate={[0.0, 1.0, 0.0, 5.497787143782138]}><Group t={[2.0, 0.0, 0.0]}><Cylinder r={ 0.16 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group></Group>
+        <Cylinder r={ 0.58 } h={ 2.0 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
       </Difference>
-    </Translate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.0 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.7853981633974483 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 1.5707963267948966 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 2.356194490192345 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.141592653589793 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.9269908169872414 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 4.71238898038469 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.497787143782138 }><Translate t={[2.0, 0.55, 0.0]}>
-      <Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } /></Rotate>
-      <Translate t={[0.0, 0.43999999999999995, 0.0]}><Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    </Translate></Rotate>
-    <Translate t={[0.0, 2.9, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.55 } h={ 4.2 } color={0x9BA1A6} roughness={ 0.3 } metalness={ 0.8 } /></Rotate></Translate>
-    <Translate t={[0.0, 1.25, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 0.85 } h={ 0.9 } color={0x9BA1A6} roughness={ 0.3 } metalness={ 0.8 } /></Rotate></Translate>
-    <Translate t={[0.0, 2.6, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Cylinder r={ 1.15 } h={ 0.45 } color={0xC8A24A} roughness={ 0.3 } metalness={ 0.8 } /></Rotate></Translate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.0 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.39269908169872414 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 0.7853981633974483 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 1.1780972450961724 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 1.5707963267948966 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 1.9634954084936207 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 2.356194490192345 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 2.748893571891069 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.141592653589793 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.5342917352885173 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 3.9269908169872414 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 4.319689898685965 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 4.71238898038469 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.105088062083414 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.497787143782138 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Rotate axis={[0.0, 1.0, 0.0]} angle={ 5.890486225480862 }><Translate t={[1.45, 2.6, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} /></Translate></Rotate>
-    <Translate t={[0.0, 4.45, 0.0]}><Rotate axis={[1.0, 0.0, 0.0]} angle={ -1.5707963267948966 }><Torus R={0.72} r={0.16} color={0x4A4F54} roughness={0.45} metalness={0.65} /></Rotate></Translate>
-    <Translate t={[0.0, 4.85, 0.0]}><Box s={[0.95, 0.5, 0.95]} color={0x6E747A} roughness={0.4} metalness={0.7} /></Translate>
-    <Translate t={[0.62, 3.6, 0.0]}><Box s={[0.18, 0.9, 0.18]} color={0xC8A24A} roughness={0.35} metalness={0.75} /></Translate>
+    </Group>
+    <Group rotate={[0.0, 1.0, 0.0, 0.0]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 0.7853981633974483]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 1.5707963267948966]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 2.356194490192345]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 3.141592653589793]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 3.9269908169872414]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 4.71238898038469]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 5.497787143782138]}><Group t={[2.0, 0.55, 0.0]}>
+      <Cylinder r={ 0.13 } h={ 0.7 } color={0x6E747A} roughness={ 0.4 } metalness={ 0.7 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} />
+      <Box s={[0.41600000000000004, 0.18, 0.41600000000000004]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 0.43999999999999995, 0.0]} /></Group></Group>
+    <Group t={[0.0, 2.9, 0.0]}><Cylinder r={ 0.55 } h={ 4.2 } color={0x9BA1A6} roughness={ 0.3 } metalness={ 0.8 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group>
+    <Group t={[0.0, 1.25, 0.0]}><Cylinder r={ 0.85 } h={ 0.9 } color={0x9BA1A6} roughness={ 0.3 } metalness={ 0.8 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group>
+    <Group t={[0.0, 2.6, 0.0]}><Cylinder r={ 1.15 } h={ 0.45 } color={0xC8A24A} roughness={ 0.3 } metalness={ 0.8 } rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 0.0]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 0.39269908169872414]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 0.7853981633974483]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 1.1780972450961724]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 1.5707963267948966]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 1.9634954084936207]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 2.356194490192345]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 2.748893571891069]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 3.141592653589793]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 3.5342917352885173]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 3.9269908169872414]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 4.319689898685965]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 4.71238898038469]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 5.105088062083414]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 5.497787143782138]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Group rotate={[0.0, 1.0, 0.0, 5.890486225480862]}><Box s={[0.7200000000000001, 0.45, 0.22]} color={0xC8A24A} roughness={0.3} metalness={0.8} t={[1.45, 2.6, 0.0]} /></Group>
+    <Torus R={0.72} r={0.16} color={0x4A4F54} roughness={0.45} metalness={0.65} rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} t={[0.0, 4.45, 0.0]} />
+    <Box s={[0.95, 0.5, 0.95]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 4.85, 0.0]} />
+    <Box s={[0.18, 0.9, 0.18]} color={0xC8A24A} roughness={0.35} metalness={0.75} t={[0.62, 3.6, 0.0]} />
     <Plane n={[0.0, 1.0, 0.0]} d={0.0} color={0x3A4046} roughness={0.9} />
   </Scene>
 );

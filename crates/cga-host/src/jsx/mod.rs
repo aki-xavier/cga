@@ -18,14 +18,14 @@ use boa_engine::Context;
 use serde_json::Value;
 use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS};
 use swc_core::ecma::ast::{
-    BindingIdent, Decl, Ident, Module, ModuleDecl, ModuleItem, Pat, Stmt, VarDecl, VarDeclKind,
-    VarDeclarator,
+    BindingIdent, CallExpr, Callee, Decl, Expr, ExprOrSpread, Ident, Lit, Module, ModuleDecl,
+    ModuleItem, Number, Pat, Stmt, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
 use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
 use swc_core::ecma::transforms::base::{hygiene, resolver};
 use swc_core::ecma::transforms::react::{jsx, Options as ReactOptions, Runtime};
-use swc_core::ecma::visit::VisitMutWith;
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use cga_core::Multivector;
 
@@ -109,6 +109,63 @@ fn emit_js(cm: &Lrc<SourceMap>, mut module: Module) -> Result<String, String> {
     })
 }
 
+/// E2：动态 `import("./x.jsx")` 打包——字面量 .jsx 规格在编期解析进 bundle
+/// （与静态 import 同一套：模块体在加载时求值一次，Promise 只包命名空间）。
+/// 非字面量 / 非 .jsx → 编期报错（不许运行时裸奔）。
+struct DynImportV<'a, 'b> {
+    b: &'a mut Bundler<'b>,
+    errs: Vec<String>,
+}
+
+impl VisitMut for DynImportV<'_, '_> {
+    fn visit_mut_call_expr(&mut self, e: &mut CallExpr) {
+        e.visit_mut_children_with(self);
+        if !matches!(e.callee, Callee::Import(_)) {
+            return;
+        }
+        let spec = match e.args.as_slice() {
+            [ExprOrSpread { spread: None, expr }] => match &**expr {
+                Expr::Lit(Lit::Str(s)) => s.value.to_string_lossy().into_owned(),
+                _ => {
+                    self.errs
+                        .push("JSX: dynamic import() needs a string literal".to_string());
+                    return;
+                }
+            },
+            _ => {
+                self.errs
+                    .push("JSX: dynamic import() takes exactly one argument".to_string());
+                return;
+            }
+        };
+        if !spec.ends_with(".jsx") {
+            self.errs.push(format!(
+                "JSX: unsupported dynamic import {spec} (only .jsx literals)"
+            ));
+            return;
+        }
+        match self.b.bundle_import(&spec) {
+            Ok((id, _)) => {
+                let span = e.span;
+                // import("…") → __cga_dyn_import(id)
+                e.callee = Callee::Expr(Box::new(Expr::Ident(Ident::new_no_ctxt(
+                    "__cga_dyn_import".into(),
+                    span,
+                ))));
+                e.args = vec![ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Lit(Lit::Num(Number {
+                        span,
+                        value: id as f64,
+                        raw: None,
+                    }))),
+                }];
+            }
+            Err(err) => self.errs.push(err),
+        }
+    }
+}
+
 /// A module's export surface (validated at import time, bundle-time errors).
 #[derive(Clone, Default)]
 struct Exports {
@@ -186,7 +243,18 @@ impl Bundler<'_> {
 
     /// Rewrite import/export declarations of one module body. `is_entry`:
     /// the scene file itself (its default export becomes `__scene`).
-    fn rewrite(&mut self, body: Vec<ModuleItem>, is_entry: bool) -> Result<Rewritten, String> {
+    fn rewrite(&mut self, mut body: Vec<ModuleItem>, is_entry: bool) -> Result<Rewritten, String> {
+        // E2：先打包动态 import()（递归 bundle 在这里发生），再走静态 import 重写。
+        {
+            let mut v = DynImportV {
+                b: self,
+                errs: Vec::new(),
+            };
+            body.visit_mut_with(&mut v);
+            if let Some(e) = v.errs.into_iter().next() {
+                return Err(e);
+            }
+        }
         let mut items: Vec<ModuleItem> = Vec::new();
         let mut rw = Rewritten::default();
         for item in body {
@@ -1556,6 +1624,20 @@ fn scale_matrix(v: [f64; 3]) -> [f64; 16] {
     m
 }
 
+/// 组合变换的可逆性：线性部分 |det| < 1e-15 时 cga-core 的 `AffineGeometry::new`
+/// 直接 panic（几何被压成零体积）。宿主在三条路径的矩阵组合点先给可读错误。
+fn check_invertible(tag: &str, m: &[f64; 16]) -> Result<(), String> {
+    let det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8])
+        + m[2] * (m[4] * m[9] - m[5] * m[8]);
+    if det.abs() < 1e-15 {
+        return Err(format!(
+            "JSX: <{tag}> transform is singular (linear |det|={det:.3e} < 1e-15) — \
+             geometry would flatten to zero volume (check scale/mirror)"
+        ));
+    }
+    Ok(())
+}
+
 fn mirror_matrix(axis: [f64; 3]) -> Result<[f64; 16], String> {
     let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
     if n < 1e-12 {
@@ -1580,6 +1662,92 @@ fn mirror_matrix(axis: [f64; 3]) -> Result<[f64; 16], String> {
         0.0,
         1.0,
     ])
+}
+
+/// 已删除的修饰符元素 → 统一报错（渲染 / CSG / 查询三条路径都经 `build_geo`）。
+fn deleted_modifier_tag(tag: &str) -> Option<String> {
+    let hint = match tag {
+        "translate" => "t=[x, y, z]",
+        "rotate" => "rotate=[ax, ay, az, angle]",
+        "scale" => "scale=数 | [x, y, z]",
+        "mirror" => "mirror=[x, y, z]",
+        _ => return None,
+    };
+    Some(format!(
+        "JSX: <{tag}> element was removed — use the transform prop {hint} instead \
+         (composition order is fixed T·R·S·Mirror, see docs/jsx-css-host.md §2)"
+    ))
+}
+
+/// CSG 构造前的宿主侧校验：`CsgGeometry::new` 需要 ≥2 子，违反会在 cga-core 里
+/// panic。渲染 / CSG 收集 / 查询三条路径都必须先在这里拦下（union 不开例外——
+/// 它同样走 `CsgGeometry::new`）。
+fn csg_children_check(tag: &str, n: usize) -> Result<(), String> {
+    if n < 2 {
+        return Err(format!("JSX: {tag} needs >= 2 geometry children, got {n}"));
+    }
+    Ok(())
+}
+
+/// 不产生几何的元素出现在几何位置（CSG 子、查询目标）→ 统一可读报错，
+/// 而不是让底层 builder 报 `unknown primitive camera` 之类。
+fn non_geometry_tag(tag: &str) -> Option<String> {
+    let hint = match tag {
+        "scene" => "the scene root cannot appear inside geometry",
+        "camera" | "background" | "ambient_light" | "directional_light" | "point_light" => {
+            "camera and lights do not produce geometry"
+        }
+        "pair" | "anchor" | "gear" | "cam" | "closure" => {
+            "kinematics elements are graph edges/nodes, not geometry"
+        }
+        "link" => "<link> geometry comes from the solved graph and cannot be nested here",
+        "joint" => "<joint> was replaced by <link>/<pair>/<anchor> — see docs/kinematics-graph.md",
+        _ => return None,
+    };
+    Some(format!("JSX: <{tag}> is not geometry — {hint}"))
+}
+
+/// CSG 子树里"无处可去"的通道：`<difference>` 等合并成**一个**对象，只能有一个
+/// 材质、一个分组、一份质量属性，所以子元素上的材质 / 样式（CSS 只作用于材质）/
+/// 分组 / density 落不到任何地方——报错，不许静默丢。
+fn csg_dropped_channel(tag: &str, props: &HashMap<String, Value>) -> Option<String> {
+    let where_to = "put it on the <difference>/<union>/<intersection> element itself";
+    for k in MATERIAL_KEYS {
+        if props.contains_key(k) {
+            return Some(format!(
+                "JSX: <{tag}> has material prop \"{k}\" inside a CSG — a CSG emits a single \
+                 material; {where_to}"
+            ));
+        }
+    }
+    for k in ["class", "className", "id"] {
+        if props.contains_key(k) {
+            return Some(format!(
+                "JSX: <{tag}> has \"{k}\" inside a CSG — CSS/`id` only style materials and a \
+                 CSG emits a single material; {where_to}"
+            ));
+        }
+    }
+    if props.contains_key("group") {
+        return Some(format!(
+            "JSX: <{tag}> has group inside a CSG — a CSG emits a single object; {where_to}"
+        ));
+    }
+    if props.contains_key("density") {
+        return Some(format!(
+            "JSX: <{tag}> has density inside a CSG — mass props belong to the emitted \
+             object; {where_to}"
+        ));
+    }
+    None
+}
+
+/// 惰性查询取参数：JS 侧值为 `undefined` 时 JSON 序列化会**丢掉该键**，
+/// 缺键必须报错，不能用 `o["k"]` 索引 panic。
+fn q_arg<'a>(o: &'a serde_json::Map<String, Value>, k: &str, q: &str) -> Result<&'a Value, String> {
+    o.get(k).ok_or_else(|| {
+        format!("JSX: query {q}(…) is missing its \"{k}\" argument (was it undefined?)")
+    })
 }
 
 impl<'p> Builder<'p> {
@@ -1793,6 +1961,9 @@ impl<'p> Builder<'p> {
             if let Some(ids) = self.prev_object_instances {
                 self.object_instances.extend_from_slice(&ids[range.clone()]);
             }
+            if let Some(mp) = self.prev_mass_props {
+                self.mass_props.extend_from_slice(&mp[range.clone()]);
+            }
             self.reused_subtrees += 1;
             self.reused_objects += scene.objects.len() - start;
             // 复用路径也要登记当前 link 的 meshes（对象换了下标区间）。
@@ -1825,7 +1996,7 @@ impl<'p> Builder<'p> {
         let style = self.style_for(el, stack, mat)?;
         // 公共属性（2026-10-07 RFC）：变换 prop（t/rotate/scale/mirror，
         // 固定顺序 T·R·S·Mirror）+ tag prop（注册表命名）。修饰符元素
-        // （translate/rotate/scale/mirror）豁免——它们的 prop 是自己的语义。
+        // （translate/rotate/scale/mirror）已删除——变换只能写成 prop。
         // <link> 也豁免：它的 frame 来自图求解（link_el 自己处理变换与 tag prop）。
         let local = if el.tag == "link" {
             None
@@ -1836,6 +2007,7 @@ impl<'p> Builder<'p> {
             Some(m) => mat4_mul(ctx, m),
             None => ctx,
         };
+        check_invertible(&el.tag, &ctx)?;
         // 分组（档 2）：`<group name>` 元素或任意元素的 `group` prop，
         // 子树产出的对象都打上这个分组 id。无名的 <group> 是透明容器
         // （共享变换/tag/材质 prop 的落点）。
@@ -1880,14 +2052,12 @@ impl<'p> Builder<'p> {
     /// 公共变换 prop → 局部矩阵。固定合成顺序 **T·R·S·Mirror**（镜像最先、
     /// 平移最后）。`rotate` = `[ax, ay, az, angle]` 四元列表。非几何元素
     /// （camera/灯光/background/gear/cam）带这些 prop 报错——不许静默丢。
-    /// 修饰符元素豁免（它们的 prop 是自己的语义，由 walk_inner 消费）。
     fn local_matrix(&mut self, el: &El) -> Result<Option<[f64; 16]>, String> {
         let has = |k: &str| matches!(prop(el, k), Some(v) if !v.is_null());
         if !(has("t") || has("rotate") || has("scale") || has("mirror")) {
             return Ok(None);
         }
         match el.tag.as_str() {
-            "translate" | "rotate" | "scale" | "mirror" => return Ok(None),
             "camera" | "ambient_light" | "directional_light" | "point_light" | "background"
             | "gear" | "cam" => {
                 return Err(format!(
@@ -1959,13 +2129,6 @@ impl<'p> Builder<'p> {
                 }
                 Ok(())
             }
-            "translate" | "rotate" | "scale" | "mirror" => {
-                let m2 = mat4_mul(ctx, self.modifier_matrix(el)?);
-                for (i, c) in el.children.iter().enumerate() {
-                    self.walk(Frame::new(c, i), stack, m2, mat, scene, cam)?;
-                }
-                Ok(())
-            }
             "material" => {
                 // 自身的内联 prop 已经在 style 里（Inline 级），直接下传。
                 for (i, c) in el.children.iter().enumerate() {
@@ -1978,9 +2141,7 @@ impl<'p> Builder<'p> {
                 for c in &el.children {
                     self.collect_geom(c, ctx, &mut kids)?;
                 }
-                if kids.len() < 2 && el.tag != "union" {
-                    return Err(format!("JSX: {} needs >= 2 geometry children", el.tag));
-                }
+                csg_children_check(&el.tag, kids.len())?;
                 let op = match el.tag.as_str() {
                     "union" => cga_core::CsgOp::Union,
                     "difference" => cga_core::CsgOp::Difference,
@@ -2093,27 +2254,69 @@ impl<'p> Builder<'p> {
         }
     }
 
+    /// 收集 CSG 子树的几何。**只从 CSG 分支进入**——因此这里遇到的每个元素都严格
+    /// 位于某个 `<difference>`/`<union>`/`<intersection>` 内部，它产出的对象会被
+    /// 合并成一个，接不住材质 / 样式 / 分组 / density 这些"每个对象一份"的通道。
     fn collect_geom(
         &mut self,
         el: &El,
         ctx: [f64; 16],
         kids: &mut Vec<cga_core::Geometry>,
     ) -> Result<(), String> {
+        if let Some(msg) = csg_dropped_channel(&el.tag, &el.props) {
+            return Err(msg);
+        }
         // 公共变换 prop 在 CSG 子树里同样生效（与 walk 路径一致）。
         let ctx = match self.local_matrix(el)? {
             Some(m) => mat4_mul(ctx, m),
             None => ctx,
         };
+        check_invertible(&el.tag, &ctx)?;
         match el.tag.as_str() {
-            "translate" | "rotate" | "scale" | "mirror" => {
-                let m = self.modifier_matrix(el)?;
-                self.collect_geom_children(el, mat4_mul(ctx, m), kids)
+            // 透明容器（与渲染路径同构）：material/fragment 自身不产生几何。
+            "material" | "fragment" => {
+                for c in &el.children {
+                    self.collect_geom(c, ctx, kids)?;
+                }
+                Ok(())
+            }
+            // <group>：透明容器。变换 prop 已在上面生效，子元素按同一 ctx 展开
+            // （多子变换容器的展开语义由它承接）。
+            "group" => {
+                for c in &el.children {
+                    self.collect_geom(c, ctx, kids)?;
+                }
+                Ok(())
+            }
+            // <tag name>：注册名并透明下传（叶子的 register_tags 消费 pending_tags）。
+            "tag" => {
+                let name = p_str(el, "name")?.ok_or_else(|| "JSX: tag needs a name".to_string())?;
+                self.pending_tags.push((name, ctx));
+                for c in &el.children {
+                    self.collect_geom(c, ctx, kids)?;
+                }
+                self.pending_tags.pop();
+                Ok(())
+            }
+            // <when>：条件容器（与渲染路径同规则），不命中就什么都不展开。
+            "when" => {
+                let of = p_str(el, "of")?.ok_or_else(|| "JSX: when needs of".to_string())?;
+                let count =
+                    p_num(el, "count")?.ok_or_else(|| "JSX: when needs count".to_string())?;
+                let n = self.tags.get(&of).map(|v| v.len()).unwrap_or(0);
+                if (n as f64 - count).abs() < 1e-9 {
+                    for c in &el.children {
+                        self.collect_geom(c, ctx, kids)?;
+                    }
+                }
+                Ok(())
             }
             "union" | "difference" | "intersection" => {
                 let mut inner = Vec::new();
                 for c in &el.children {
                     self.collect_geom(c, ctx, &mut inner)?;
                 }
+                csg_children_check(&el.tag, inner.len())?;
                 let op = match el.tag.as_str() {
                     "union" => cga_core::CsgOp::Union,
                     "difference" => cga_core::CsgOp::Difference,
@@ -2155,45 +2358,16 @@ impl<'p> Builder<'p> {
         }
     }
 
-    fn collect_geom_children(
-        &mut self,
-        el: &El,
-        ctx: [f64; 16],
-        kids: &mut Vec<cga_core::Geometry>,
-    ) -> Result<(), String> {
-        for c in &el.children {
-            self.collect_geom(c, ctx, kids)?;
-        }
-        Ok(())
-    }
-
-    fn modifier_matrix(&mut self, el: &El) -> Result<[f64; 16], String> {
-        Ok(match el.tag.as_str() {
-            "translate" => translate4(self.p_vec3_lazy(el, "t")?.unwrap_or([0.0; 3])),
-            "rotate" => {
-                let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
-                let ang = self.p_num_lazy(el, "angle")?.unwrap_or(0.0);
-                Multivector::rotor(ax, ang).to_matrix()
-            }
-            "scale" => {
-                let v = match prop(el, "s") {
-                    None => [1.0, 1.0, 1.0],
-                    Some(Value::Number(_)) => {
-                        let x = p_num(el, "s")?.unwrap_or(1.0);
-                        [x, x, x]
-                    }
-                    Some(_) => self.p_vec3_lazy(el, "s")?.unwrap_or([1.0, 1.0, 1.0]),
-                };
-                scale_matrix(v)
-            }
-            _ => {
-                let ax = self.p_vec3_lazy(el, "axis")?.unwrap_or([0.0, 0.0, 1.0]);
-                mirror_matrix(ax)?
-            }
-        })
-    }
-
     fn build_geo(&mut self, el: &El) -> Result<cga_core::Geometry, String> {
+        // 修饰符元素已删除：三条路径（渲染 / CSG 收集 / 查询）都落到 build_geo，
+        // 这里给唯一的、可操作的报错。
+        if let Some(msg) = deleted_modifier_tag(&el.tag) {
+            return Err(msg);
+        }
+        // 场景级元素不产生几何：放错位置时报同一个可读错误。
+        if let Some(msg) = non_geometry_tag(&el.tag) {
+            return Err(msg);
+        }
         let mut args: HashMap<String, ArgValue> = HashMap::new();
         for (k, v) in &el.props {
             if MATERIAL_KEYS.contains(&k.as_str())
@@ -2380,18 +2554,16 @@ impl<'p> Builder<'p> {
         el: &El,
         m: [f64; 16],
     ) -> Result<(cga_core::Geometry, [f64; 16]), String> {
+        // 公共变换 prop 对查询目标同样生效（与渲染路径一致：`<sphere t=…>`
+        // 作目标时不再丢变换）。
+        let m = match self.local_matrix(el)? {
+            Some(l) => mat4_mul(m, l),
+            None => m,
+        };
+        check_invertible(&el.tag, &m)?;
         match el.tag.as_str() {
-            "translate" | "rotate" | "scale" | "mirror" => {
-                let m2 = mat4_mul(m, self.modifier_matrix(el)?);
-                if el.children.len() != 1 {
-                    return Err(format!(
-                        "JSX: {} query target needs exactly one child",
-                        el.tag
-                    ));
-                }
-                self.el_geometry(&el.children[0], m2)
-            }
-            "material" => {
+            // 透明容器：目标几何从唯一子元素取（多子变换容器由 <group> 承接）。
+            "group" | "material" | "fragment" | "tag" => {
                 if el.children.len() != 1 {
                     return Err(format!(
                         "JSX: {} query target needs exactly one child",
@@ -2400,11 +2572,52 @@ impl<'p> Builder<'p> {
                 }
                 self.el_geometry(&el.children[0], m)
             }
+            // 条件容器：与渲染路径同规则（count 命中才展开）。
+            "when" => {
+                let of = p_str(el, "of")?.ok_or_else(|| "JSX: when needs of".to_string())?;
+                let count =
+                    p_num(el, "count")?.ok_or_else(|| "JSX: when needs count".to_string())?;
+                let n = self.tags.get(&of).map(|v| v.len()).unwrap_or(0);
+                if (n as f64 - count).abs() > 1e-9 {
+                    return Err(format!(
+                        "JSX: <when of=\"{of}\" count={count}> does not hold ({n} registered) — no query target geometry"
+                    ));
+                }
+                if el.children.len() != 1 {
+                    return Err(format!(
+                        "JSX: {} query target needs exactly one child",
+                        el.tag
+                    ));
+                }
+                self.el_geometry(&el.children[0], m)
+            }
+            // 实例容器：查询目标必须是单一几何。
+            "instances" => {
+                let name = p_str(el, "of")?.ok_or_else(|| "JSX: instances needs of".to_string())?;
+                let insts = match self.tags.get(&name) {
+                    Some(l) if !l.is_empty() => l,
+                    _ => return Err(format!("JSX: unknown reference \"{name}\"")),
+                };
+                if insts.len() != 1 {
+                    return Err(format!(
+                        "JSX: <instances of=\"{name}\"> has {} instances — a query target needs exactly one; reference the tag by name instead",
+                        insts.len()
+                    ));
+                }
+                let (geo, world) = (insts[0].geo.clone(), insts[0].world);
+                Ok((geo, mat4_mul(m, world)))
+            }
+            // 钻孔 cutter：与渲染路径同源。
+            "drill" => {
+                let (geo, w) = self.drill_cutter(el, m)?;
+                Ok((geo, w))
+            }
             "union" | "difference" | "intersection" => {
                 let mut kids = Vec::new();
                 for c in &el.children {
                     self.collect_geom(c, m, &mut kids)?;
                 }
+                csg_children_check(&el.tag, kids.len())?;
                 let op = match el.tag.as_str() {
                     "union" => cga_core::CsgOp::Union,
                     "difference" => cga_core::CsgOp::Difference,
@@ -2535,23 +2748,23 @@ impl<'p> Builder<'p> {
         let q = o["__q"].as_str().unwrap_or("");
         match q {
             "vadd" | "vsub" => {
-                let a = self.resolve_vec3(&o["a"], what)?;
-                let b = self.resolve_vec3(&o["b"], what)?;
+                let a = self.resolve_vec3(q_arg(o, "a", q)?, what)?;
+                let b = self.resolve_vec3(q_arg(o, "b", q)?, what)?;
                 let s = if q == "vadd" { 1.0 } else { -1.0 };
                 Ok([a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]])
             }
             "vscale" => {
-                let a = self.resolve_vec3(&o["a"], what)?;
-                let s = o["s"].as_f64().unwrap_or(1.0);
+                let a = self.resolve_vec3(q_arg(o, "a", q)?, what)?;
+                let s = o.get("s").and_then(Value::as_f64).unwrap_or(1.0);
                 Ok([a[0] * s, a[1] * s, a[2] * s])
             }
             "face" | "fnrm" => {
-                let key = o["key"].as_str().unwrap_or("+z");
-                let (p, n) = self.face_of(&o["of"], key, q)?;
+                let key = o.get("key").and_then(Value::as_str).unwrap_or("+z");
+                let (p, n) = self.face_of(q_arg(o, "of", q)?, key, q)?;
                 Ok(if q == "face" { p } else { n })
             }
             "xdir" | "ydir" | "zdir" => {
-                let (m, _) = self.query_target(&o["of"], q)?;
+                let (m, _) = self.query_target(q_arg(o, "of", q)?, q)?;
                 let col = match q {
                     "xdir" => [m[0], m[4], m[8]],
                     "ydir" => [m[1], m[5], m[9]],
@@ -2564,7 +2777,7 @@ impl<'p> Builder<'p> {
                 Ok([col[0] / n, col[1] / n, col[2] / n])
             }
             _ => {
-                let (_, b) = self.query_target(&o["of"], q)?;
+                let (_, b) = self.query_target(q_arg(o, "of", q)?, q)?;
                 let b = b.ok_or_else(|| format!("JSX: {q}: reference has no finite bounds"))?;
                 Ok(match q {
                     "center" => [
@@ -2589,15 +2802,6 @@ impl<'p> Builder<'p> {
         }
     }
 
-    /// p_num 的惰性版：标量查询节点（`clearance`/`collides`/`inside`）在构建期解析。
-    fn p_num_lazy(&mut self, el: &El, key: &str) -> Result<Option<f64>, String> {
-        match prop(el, key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::Object(o)) if o.contains_key("__q") => self.eval_lazy_num(o, key).map(Some),
-            Some(_) => p_num(el, key),
-        }
-    }
-
     /// 标量惰性查询（C1，`docs/collision-plan.md` D5 修正：走 `{__q}` 通道而非
     /// `solve()` 的求值期语义——求值期场景还没建成）。三值里的 Unknown 不许变成
     /// 数字（D2）：报错并写明原因。
@@ -2609,8 +2813,8 @@ impl<'p> Builder<'p> {
         let q = o["__q"].as_str().unwrap_or("");
         match q {
             "clearance" => {
-                let a = self.query_solids(&o["a"], what)?;
-                let b = self.query_solids(&o["b"], what)?;
+                let a = self.query_solids(q_arg(o, "a", q)?, what)?;
+                let b = self.query_solids(q_arg(o, "b", q)?, what)?;
                 let mut best: Option<f64> = None;
                 for (ga, wa) in &a {
                     for (gb, wb) in &b {
@@ -2624,8 +2828,8 @@ impl<'p> Builder<'p> {
                 })
             }
             "collides" => {
-                let a = self.query_solids(&o["a"], what)?;
-                let b = self.query_solids(&o["b"], what)?;
+                let a = self.query_solids(q_arg(o, "a", q)?, what)?;
+                let b = self.query_solids(q_arg(o, "b", q)?, what)?;
                 let mut any_unknown = false;
                 for (ga, wa) in &a {
                     for (gb, wb) in &b {
@@ -2644,7 +2848,7 @@ impl<'p> Builder<'p> {
                 Ok(0.0)
             }
             "inside" => {
-                let solids = self.query_solids(&o["of"], what)?;
+                let solids = self.query_solids(q_arg(o, "of", q)?, what)?;
                 let pv = o
                     .get("p")
                     .ok_or_else(|| format!("JSX: {what}: inside needs p=[x,y,z]"))?;
@@ -2676,8 +2880,8 @@ impl<'p> Builder<'p> {
                 Ok(0.0)
             }
             "qadd" | "qsub" | "qmul" | "qdiv" => {
-                let a = self.eval_num_value(&o["a"], what)?;
-                let b = self.eval_num_value(&o["b"], what)?;
+                let a = self.eval_num_value(q_arg(o, "a", q)?, what)?;
+                let b = self.eval_num_value(q_arg(o, "b", q)?, what)?;
                 Ok(match q {
                     "qadd" => a + b,
                     "qsub" => a - b,
@@ -3039,8 +3243,12 @@ fn collect_decl(el: &El, decl: &mut GraphDecl) -> Result<(), String> {
                     ))
                 }
             };
-            if !q_guess.is_empty() && q_guess.len() != 1 {
-                return Err("JSX: pair guess 目前只支持单标量（1-DOF 闭环求解）".to_string());
+            if !q_guess.is_empty() && q_guess.len() != kind.q_arity() {
+                return Err(format!(
+                    "JSX: pair guess 分量数必须等于 {} 的自由度数 {}",
+                    kind.name(),
+                    kind.q_arity()
+                ));
             }
             decl.pairs.push(PairDecl {
                 name: p_str(el, "name")?,
@@ -3896,15 +4104,15 @@ const fixed = <sphere r={1} />;
 function Dial() {
   const IN = useContext(HostInput);
   const x = IN.x === undefined ? 0 : IN.x;
-  return <translate t={[x, 0, 0]}><sphere r={0.25} /></translate>;
+  return <sphere r={0.25} t={[x, 0, 0]} />;
 }
 
 function Counter() {
   const [n, setN] = useState(0);
   return (
-    <translate t={[0, 2, 0]} onClick={() => setN(n + 1)}>
+    <group onClick={() => setN(n + 1)} t={[0, 2, 0]}>
       <sphere r={0.2 + n * 0.1} />
-    </translate>
+    </group>
   );
 }
 
@@ -4032,7 +4240,7 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
     #[test]
     fn import_component_default() {
         let dial = "export default function Dial(props) {\n\
-            \x20 return <translate t={[props.x || 0, 0, 0]}><sphere r={0.5} /></translate>;\n\
+            \x20 return <sphere r={0.5} t={[props.x || 0, 0, 0]} />;\n\
             }";
         let entry = "import Dial from './dial.jsx';\n\
             export default (<scene><camera /><Dial x={2} /></scene>);";
@@ -4044,8 +4252,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
 
     #[test]
     fn import_element_default_and_named() {
-        let part = "export default (<translate t={[1, 0, 0]}><box s={[1, 1, 1]} /></translate>);\n\
-            export const dot = <translate t={[3, 0, 0]}><sphere r={0.2} /></translate>;";
+        let part = "export default (<box s={[1, 1, 1]} t={[1, 0, 0]} />);\n\
+            export const dot = <sphere r={0.2} t={[3, 0, 0]} />;";
         let entry = "import part, { dot } from './part.jsx';\n\
             export default (<scene><camera />{part}{dot}</scene>);";
         let s = SceneSession::open_modules(entry, None, &[("part.jsx", part)]).expect("open");
@@ -4061,7 +4269,7 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
     fn import_is_transitive_and_shared() {
         let base = "export const unit = <sphere r={0.1} />;";
         let mid = "import { unit } from './base.jsx';\n\
-            export default (<translate t={[5, 0, 0]}>{unit}</translate>);";
+            export default (<group t={[5, 0, 0]}>{unit}</group>);";
         let entry = "import mid from './mid.jsx';\n\
             import { unit } from './base.jsx';\n\
             export default (<scene><camera />{mid}{unit}</scene>);";
@@ -4070,6 +4278,45 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         let xs = object_xs(&s);
         assert_eq!(xs.len(), 2, "mid's unit + entry's unit: {xs:?}");
         assert!((xs[0] - 5.0).abs() < 1e-9 && xs[1].abs() < 1e-9, "{xs:?}");
+    }
+
+    #[test]
+    fn lazy_dynamic_import_resolves() {
+        // E2：React.lazy(() => import("./widget.jsx"))——动态 import 编期打包进 bundle，
+        // Suspense 边界在 drain 内解析（promise/JS 交织驱动到不动点），最终树含
+        // lazy 组件的产物。
+        let widget = "export default function W() {\n\
+            \x20 return <sphere r={0.3} t={[4, 0, 0]} />;\n\
+            }";
+        let entry = "const W = React.lazy(() => import('./widget.jsx'));\n\
+            export default (<scene><camera />\
+            <React.Suspense fallback={<box s={[9, 9, 9]} />}><W /></React.Suspense>\
+            </scene>);";
+        let s = SceneSession::open_modules(entry, None, &[("widget.jsx", widget)]).expect("open");
+        let xs = object_xs(&s);
+        assert_eq!(xs.len(), 1, "fallback 应被 lazy 组件替换: {xs:?}");
+        assert!((xs[0] - 4.0).abs() < 1e-9, "lazy 组件的球在 x=4: {xs:?}");
+    }
+
+    #[test]
+    fn lazy_dynamic_import_error_paths() {
+        // 非字面量 / 非 .jsx / 缺文件——编期报错带 JSX: 前缀（不许运行时裸奔）。
+        let entry = "const W = React.lazy(() => import('./missing.jsx'));\n\
+            export default (<scene><React.Suspense fallback={null}><W /></React.Suspense></scene>);";
+        let e = SceneSession::open_modules(entry, None, &[])
+            .err()
+            .expect("missing");
+        assert!(e.contains("JSX:") && e.contains("missing.jsx"), "{e}");
+        let entry2 = "const f = './w.jsx';\n\
+            const W = React.lazy(() => import(f));\n\
+            export default (<scene><React.Suspense fallback={null}><W /></React.Suspense></scene>);";
+        let e2 = SceneSession::open_modules(entry2, None, &[])
+            .err()
+            .expect("non-literal");
+        assert!(
+            e2.contains("dynamic import() needs a string literal"),
+            "{e2}"
+        );
     }
 
     #[test]
@@ -4118,7 +4365,7 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
     #[test]
     fn import_supports_default_function_decl() {
         let m = "export default function Tag() {\n\
-            \x20 return <translate t={[7, 0, 0]}><sphere r={0.3} /></translate>;\n\
+            \x20 return <sphere r={0.3} t={[7, 0, 0]} />;\n\
             }";
         let entry =
             "import Tag from './m.jsx';\nexport default (<scene><camera /><Tag /></scene>);";
@@ -4147,47 +4394,272 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             let run = run_jsx(src, None, ".").expect(src);
             format!("{:?}", run.scene.objects)
         };
-        // 平移 prop ≡ translate 元素
+        // 平移 prop ≡ <group t> 包裹（透明容器，落点相同）
         assert_eq!(
             dbg(r#"export default <sphere r={0.5} t={[2, 1, 0]} />;"#),
-            dbg(r#"export default <translate t={[2, 1, 0]}><sphere r={0.5} /></translate>;"#)
+            dbg(r#"export default <group t={[2, 1, 0]}><sphere r={0.5} /></group>;"#)
         );
-        // 固定顺序 T·R·S·Mirror：prop ≡ 同序元素嵌套
+        // 固定顺序 T·R·S·Mirror：prop 书写顺序无关
         assert_eq!(
             dbg(
                 r#"export default <box s={[1, 0.2, 0.2]} t={[1, 0, 0]} rotate={[0, 0, 1, 1.5707963267948966]} />;"#
             ),
             dbg(
-                r#"export default <translate t={[1, 0, 0]}><rotate axis={[0, 0, 1]} angle={1.5707963267948966}><box s={[1, 0.2, 0.2]} /></rotate></translate>;"#
+                r#"export default <box s={[1, 0.2, 0.2]} rotate={[0, 0, 1, 1.5707963267948966]} t={[1, 0, 0]} />;"#
             )
         );
-        // scale / mirror prop ≡ 元素
+        // 固定顺序 ≡ 同序 group 嵌套（镜像最内、平移最外）
+        assert_eq!(
+            dbg(
+                r#"export default <sphere r={0.5} t={[1, 0, 0]} rotate={[0, 0, 1, 1.5707963267948966]} scale={2} mirror={[1, 0, 0]} />;"#
+            ),
+            dbg(
+                r#"export default <group t={[1, 0, 0]}><group rotate={[0, 0, 1, 1.5707963267948966]}><group scale={2}><group mirror={[1, 0, 0]}><sphere r={0.5} /></group></group></group></group>;"#
+            )
+        );
+        // scale / mirror 单独 prop ≡ group 包裹
         assert_eq!(
             dbg(r#"export default <sphere r={0.5} scale={2} />;"#),
-            dbg(r#"export default <scale s={2}><sphere r={0.5} /></scale>;"#)
+            dbg(r#"export default <group scale={2}><sphere r={0.5} /></group>;"#)
         );
         assert_eq!(
             dbg(r#"export default <cone r={0.5} h={1} mirror={[1, 0, 0]} />;"#),
-            dbg(r#"export default <mirror axis={[1, 0, 0]}><cone r={0.5} h={1} /></mirror>;"#)
+            dbg(r#"export default <group mirror={[1, 0, 0]}><cone r={0.5} h={1} /></group>;"#)
         );
-        // prop 与元素可叠加（prop 在元素之内层）
+        // prop 与容器可叠加（容器在元素之外层）
         assert_eq!(
+            dbg(r#"export default <group t={[0, 5, 0]}><sphere r={0.5} t={[1, 0, 0]} /></group>;"#),
             dbg(
-                r#"export default <translate t={[0, 5, 0]}><sphere r={0.5} t={[1, 0, 0]} /></translate>;"#
-            ),
-            dbg(
-                r#"export default <translate t={[0, 5, 0]}><translate t={[1, 0, 0]}><sphere r={0.5} /></translate></translate>;"#
+                r#"export default <group t={[0, 5, 0]}><group t={[1, 0, 0]}><sphere r={0.5} /></group></group>;"#
             )
         );
-        // CSG 子树里同样生效
+        // CSG 子树里同样生效（group 展开进父 CSG 的孩子列表）
         assert_eq!(
             dbg(
                 r#"export default <union><sphere r={0.5} t={[2, 0, 0]} /><box s={[1, 1, 1]} /></union>;"#
             ),
             dbg(
-                r#"export default <union><translate t={[2, 0, 0]}><sphere r={0.5} /></translate><box s={[1, 1, 1]} /></union>;"#
+                r#"export default <union><group t={[2, 0, 0]}><sphere r={0.5} /></group><box s={[1, 1, 1]} /></union>;"#
             )
         );
+    }
+
+    /// 修饰符元素已删除：三条路径（渲染 / CSG / 查询）都要给同一个可操作报错。
+    #[test]
+    fn modifier_tags_removed_with_friendly_error() {
+        for (src, hint) in [
+            (
+                "<translate t={[1, 0, 0]}><sphere r={1} /></translate>",
+                "t=[x, y, z]",
+            ),
+            (
+                "<rotate axis={[0, 0, 1]} angle={1}><sphere r={1} /></rotate>",
+                "rotate=[ax, ay, az, angle]",
+            ),
+            ("<scale s={2}><sphere r={1} /></scale>", "scale="),
+            (
+                "<mirror axis={[1, 0, 0]}><sphere r={1} /></mirror>",
+                "mirror=[x, y, z]",
+            ),
+        ] {
+            let e = run_jsx(&format!("export default {src};"), None, ".")
+                .expect_err(&format!("{src} should fail"));
+            assert!(e.contains("removed"), "{e}");
+            assert!(e.contains(hint), "{e}");
+        }
+        // CSG 收集路径
+        let e = run_jsx(
+            r#"export default <scene><difference><box s={[1, 1, 1]} /><translate t={[1, 0, 0]}><sphere r={1} /></translate></difference></scene>;"#,
+            None,
+            ".",
+        )
+        .unwrap_err();
+        assert!(e.contains("removed"), "{e}");
+        // 查询目标路径（face/through 的元素实参）
+        let e = run_jsx(
+            r#"export default <scene><box s={[1, 1, 1]} t={face(<translate t={[0, 0, 5]}><sphere r={1} /></translate>, "+z")} /></scene>;"#,
+            None,
+            ".",
+        )
+        .unwrap_err();
+        assert!(e.contains("removed"), "{e}");
+    }
+
+    /// 查询目标（face/xdir/through 的元素实参）与渲染路径一致：变换 prop 生效。
+    #[test]
+    fn query_target_applies_transform_prop() {
+        let run = run_jsx(
+            r#"
+export default (
+  <scene>
+    <box s={[0.2, 0.2, 0.2]} t={face(<sphere r={1} t={[0, 0, 5]} />, "+z")} />
+  </scene>
+);
+"#,
+            None,
+            ".",
+        )
+        .expect("run");
+        let m = run.scene.objects[0].base.motor().to_matrix();
+        // sphere 中心 z=5、半径 1 → +z 面在 z=6；丢变换会得到 z=1
+        assert!((m[11] - 6.0).abs() < 1e-9, "t_z = {}", m[11]);
+    }
+
+    /// CSG 子树里的 <group> 容器（多子修饰符迁移后的形态）。
+    #[test]
+    fn csg_group_container_flattens_into_parent() {
+        let dbg = |src: &str| {
+            let run = run_jsx(src, None, ".").expect(src);
+            format!("{:?}", run.scene.objects)
+        };
+        let a = dbg(
+            r#"export default <scene><difference><group t={[1, 0, 0]}><box s={[1, 1, 1]} /><sphere r={0.5} /></group></difference></scene>;"#,
+        );
+        let b = dbg(
+            r#"export default <scene><difference><box s={[1, 1, 1]} t={[1, 0, 0]} /><sphere r={0.5} t={[1, 0, 0]} /></difference></scene>;"#,
+        );
+        assert_eq!(a, b);
+    }
+
+    /// CSG 子数不变量（`CsgGeometry::new` 需要 ≥2 子，否则在 cga-core 里 panic）：
+    /// 三条路径必须**在宿主侧先拦**，且不再给 union 开例外（单子/空 union 从前 panic）。
+    #[test]
+    fn csg_child_count_checked_on_every_path() {
+        let err = |src: &str| match run_jsx(src, None, ".") {
+            Ok(_) => panic!("should fail: {src}"),
+            Err(e) => e,
+        };
+        // 渲染路径（顶层）
+        assert!(
+            err(r#"export default <scene><difference><sphere r={1} /></difference></scene>;"#)
+                .contains("needs >= 2 geometry children")
+        );
+        // union 不再例外
+        assert!(
+            err(r#"export default <scene><union><sphere r={1} /></union></scene>;"#)
+                .contains("needs >= 2 geometry children")
+        );
+        assert!(err(r#"export default <scene><union /></scene>;"#)
+            .contains("needs >= 2 geometry children"));
+        // CSG 收集路径（嵌套）
+        assert!(err(
+            r#"export default <scene><difference><box s={[1,1,1]} /><difference><sphere r={1} /></difference></difference></scene>;"#
+        )
+        .contains("needs >= 2 geometry children"));
+        // 查询路径
+        assert!(err(
+            r#"export default <scene><box s={[1,1,1]} t={face(<difference><sphere r={1} /></difference>, "+z")} /></scene>;"#
+        )
+        .contains("needs >= 2 geometry children"));
+    }
+
+    /// 惰性查询缺参数：JS 侧值为 `undefined` 时 JSON 序列化会丢键，
+    /// Rust 侧必须报错而不是 `o["of"]` 索引 panic。
+    #[test]
+    fn lazy_query_missing_argument_is_error_not_panic() {
+        let err = |src: &str| run_jsx(src, None, ".").unwrap_err();
+        for src in [
+            // face(undefined, "+z") → {__q:'face', key} 丢了 of
+            r#"export default <scene><box s={[1,1,1]} t={face(undefined, "+z")} /></scene>;"#,
+            // center(undefined) → 丢了 of
+            r#"export default <scene><box s={[1,1,1]} t={center(undefined)} /></scene>;"#,
+            // vadd(undefined, [0,1,0]) → 丢了 a
+            r#"export default <scene><box s={[1,1,1]} t={vadd(undefined, [0, 1, 0])} /></scene>;"#,
+            // clearance(undefined, "b") → 丢了 a
+            r#"export default <scene><sphere r={clearance(undefined, "b")} /> </scene>;"#,
+        ] {
+            let e = err(src);
+            assert!(!e.is_empty() && !e.contains("panic"), "{src} → {e}");
+        }
+    }
+
+    /// 容器元素在渲染 / CSG / 查询三条路径上语义一致：
+    /// `<material>`/`<fragment>` 透明、`<tag>` 注册并透明、`<when>` 条件展开。
+    #[test]
+    fn containers_consistent_across_walk_csg_query() {
+        let run = |src: &str| run_jsx(src, None, ".").expect(src);
+        // CSG 里：<material> 透明（不带材质 prop；带了会报错，见下）
+        let r = run(
+            r#"export default <scene><difference><material><box s={[2,2,2]} /></material><sphere r={1} /></difference></scene>;"#,
+        );
+        assert_eq!(r.scene.objects.len(), 1);
+        // CSG 里：<tag> 注册并透明（从前报 tag has no parameter name）
+        let r = run(
+            r#"export default <scene><difference><tag name="a"><box s={[2,2,2]} /></tag><sphere r={1} /></difference></scene>;"#,
+        );
+        assert_eq!(r.scene.objects.len(), 1);
+        assert!(r.tags.contains_key("a"), "tag 要在 CSG 内注册");
+        // CSG 里：<when> 条件展开（从前报 when has no parameter of）
+        let r = run(
+            r#"export default <scene><box s={[0.1,0.1,0.1]} tag="x" /><difference><when of="x" count={1}><box s={[2,2,2]} /></when><sphere r={1} /></difference></scene>;"#,
+        );
+        assert_eq!(r.scene.objects.len(), 2);
+        // 查询：<material>/<tag>/<fragment> 都取唯一子几何
+        for src in [
+            r#"export default <scene><box s={[1,1,1]} t={face(<material color={0xFF0000}><sphere r={1} /></material>, "+z")} /></scene>;"#,
+            r#"export default <scene><box s={[1,1,1]} t={face(<tag name="q"><sphere r={1} /></tag>, "+z")} /></scene>;"#,
+            r#"export default <scene><box s={[1,1,1]} t={face(<><sphere r={1} /></>, "+z")} /></scene>;"#,
+        ] {
+            let r = run(src);
+            let m = r.scene.objects[0].base.motor().to_matrix();
+            assert!((m[11] - 1.0).abs() < 1e-9, "{src} → t_z={}", m[11]);
+        }
+    }
+
+    /// 复合元素作查询目标：与 CSG 收集路径同样可用（单实例几何 / cutter 几何），
+    /// 多实例给明确报错（不是 panic，也不是随手取其中一个）。
+    #[test]
+    fn composite_elements_usable_as_query_target() {
+        // <instances>：恰好一个实例
+        let r = run_jsx(
+            r#"export default <scene><box s={[1,1,1]} tag="x" /><cylinder r={0.1} h={1} t={face(<instances of="x" />, "+z")} /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("single instance query");
+        let m = r.scene.objects[1].base.motor().to_matrix();
+        // box s=[1,1,1] 的 +z 面在 z=0.5（实例世界矩阵要算进去）
+        assert!((m[11] - 0.5).abs() < 1e-9, "t_z={}", m[11]);
+        // <instances>：多实例 → 报错要求按名字引用
+        let e = run_jsx(
+            r#"export default <scene><box s={[1,1,1]} tag="x" /><box s={[1,1,1]} tag="x" /><sphere r={0.1} t={face(<instances of="x" />, "+z")} /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect_err("multi instance query must fail");
+        assert!(e.contains("exactly one"), "{e}");
+        // <drill>：cutter 几何
+        let r = run_jsx(
+            r#"export default <scene><box s={[4,4,4]} tag="p" /><cylinder r={0.1} h={1} t={face(<drill r={0.5} through="p" axis={1} />, "+z")} /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("drill query");
+        assert_eq!(r.scene.objects.len(), 2);
+        assert!(r.scene.objects[1].base.motor().to_matrix()[11].is_finite());
+    }
+
+    /// 场景级元素（不产生几何）出现在几何位置：三条路径给同一个友好报错，
+    /// 而不是底层 builder 的 `unknown primitive camera`。
+    #[test]
+    fn scene_level_element_in_geometry_position_errors() {
+        for (src, hint) in [
+            (
+                r#"export default <scene><difference><camera fov={50} /><sphere r={1} /></difference></scene>;"#,
+                "camera",
+            ),
+            (
+                r#"export default <scene><difference><directional_light intensity={2} /><sphere r={1} /></difference></scene>;"#,
+                "directional_light",
+            ),
+            (
+                r#"export default <scene><box s={[1,1,1]} t={face(<background color={0x111111} />, "+z")} /></scene>;"#,
+                "background",
+            ),
+        ] {
+            let e = run_jsx(src, None, ".").unwrap_err();
+            assert!(e.contains("not geometry") && e.contains(hint), "{e}");
+        }
     }
 
     #[test]
@@ -4206,6 +4678,94 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         )
         .unwrap_err();
         assert!(e.contains("transform props"), "{e}");
+    }
+
+    /// CSG 合并成一个对象 → 子元素上的材质 / 样式 / 分组 / density 无处可去：
+    /// 报错并指明写到 CSG 元素上，不许静默丢（材质写在 CSG 上是唯一生效位置）。
+    #[test]
+    fn csg_child_style_channels_error_instead_of_dropping() {
+        let err = |src: &str| match run_jsx(src, None, ".") {
+            Ok(_) => panic!("should fail: {src}"),
+            Err(e) => e,
+        };
+        // 显式材质 prop
+        let e = err(
+            r#"export default <scene><difference><box s={[2,2,2]} color={0xFF0000} /><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(
+            e.contains("material prop \"color\"") && e.contains("single material"),
+            "{e}"
+        );
+        // <material> 包裹带材质
+        let e = err(
+            r#"export default <scene><difference><material color={0xFF0000}><box s={[2,2,2]} /></material><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("material prop \"color\""), "{e}");
+        // class / id（CSS 只作用于材质）
+        let e = err(
+            r#"export default <scene><difference><box s={[2,2,2]} class="red" /><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("\"class\" inside a CSG"), "{e}");
+        // group / density
+        let e = err(
+            r#"export default <scene><difference><box s={[2,2,2]} group="g" /><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("group inside a CSG"), "{e}");
+        let e = err(
+            r#"export default <scene><difference><box s={[2,2,2]} density={7800} /><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("density inside a CSG"), "{e}");
+        // 深层容器里的同样报错（collect_geom 覆盖整棵子树）
+        let e = err(
+            r#"export default <scene><difference><group color={0xFF0000}><box s={[2,2,2]} /></group><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("material prop \"color\""), "{e}");
+        // CSG 元素自己写材质 → 合法（那正是唯一生效的位置）
+        run_jsx(
+            r#"export default <scene><difference color={0xFF0000}><box s={[2,2,2]} /><sphere r={1} /></difference></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("material on the CSG itself");
+    }
+
+    /// 变换不可逆（线性 |det| < 1e-15）→ 三条路径都给可读错误，
+    /// 而不是让 cga-core 的 `AffineGeometry::new` panic。
+    #[test]
+    fn singular_transform_errors_instead_of_panicking() {
+        let err = |src: &str| match run_jsx(src, None, ".") {
+            Ok(_) => panic!("should fail: {src}"),
+            Err(e) => e,
+        };
+        // 渲染路径：单个分量为 0
+        let e = err(r#"export default <scene><box s={[2,2,2]} scale={[0,1,1]} /></scene>;"#);
+        assert!(e.contains("singular"), "{e}");
+        // 标量 scale=0
+        let e =
+            err(r#"export default <scene><group scale={0}><box s={[2,2,2]} /></group></scene>;"#);
+        assert!(e.contains("singular"), "{e}");
+        // 嵌套组合后才奇异（单个都合法）
+        let e = err(
+            r#"export default <scene><group scale={[1e-8,1,1]}><box s={[2,2,2]} scale={[1e-8,1,1]} /></group></scene>;"#,
+        );
+        assert!(e.contains("singular"), "{e}");
+        // CSG 收集路径
+        let e = err(
+            r#"export default <scene><difference><box s={[2,2,2]} scale={[0,1,1]} /><sphere r={1} /></difference></scene>;"#,
+        );
+        assert!(e.contains("singular"), "{e}");
+        // 查询路径
+        let e = err(
+            r#"export default <scene><box s={[1,1,1]} t={face(<sphere r={1} scale={[0,1,1]} />, "+z")} /></scene>;"#,
+        );
+        assert!(e.contains("singular"), "{e}");
+        // 合法输入不受影响（非均匀/负缩放都可逆）
+        run_jsx(
+            r#"export default <scene><box s={[2,2,2]} scale={[0.5,2,-1]} /></scene>;"#,
+            None,
+            ".",
+        )
+        .expect("invertible transform");
     }
 
     #[test]
@@ -4261,7 +4821,7 @@ export default (
 export default (
   <scene>
     <group color={0x112233}><sphere r={0.5} /></group>
-    <translate t={[2, 0, 0]} color={0x445566}><sphere r={0.5} /></translate>
+    <group color={0x445566} t={[2, 0, 0]}><sphere r={0.5} /></group>
     <material color={0x778899}><sphere r={0.5} /></material>
   </scene>
 );
@@ -4283,7 +4843,7 @@ const { useContext } = React;
 function Dial() {
   const IN = useContext(HostInput);
   const x = IN.x === undefined ? 0 : IN.x;
-  return <translate t={[x, 0, 0]}><sphere r={0.25} /></translate>;
+  return <sphere r={0.25} t={[x, 0, 0]} />;
 }
 export default (
   <scene>
@@ -4369,13 +4929,13 @@ const { useContext } = React;
 function Ball() {
   const IN = useContext(HostInput);
   const x = IN.x === undefined ? 0 : IN.x;
-  return <tag name="ball"><translate t={[x, 0, 0]}><sphere r={0.5} /></translate></tag>;
+  return <tag name="ball"><sphere r={0.5} t={[x, 0, 0]} /></tag>;
 }
 export default (
   <scene>
     <camera />
     <Ball />
-    <translate t={vadd(center("ball"), [0, 2, 0])}><sphere r={0.3} /></translate>
+    <sphere r={0.3} t={vadd(center("ball"), [0, 2, 0])} />
   </scene>
 );
 "#;
@@ -4405,8 +4965,8 @@ export default (
   <scene>
     <camera />
     <tag name="a"><sphere r={1} /></tag>
-    <tag name="b"><translate t={[3, 0, 0]}><sphere r={1} /></translate></tag>
-    <tag name="c"><translate t={[1.5, 0, 0]}><sphere r={1} /></translate></tag>
+    <tag name="b"><sphere r={1} t={[3, 0, 0]} /></tag>
+    <tag name="c"><sphere r={1} t={[1.5, 0, 0]} /></tag>
     <sphere r={clearance("a", "b")} />
     <sphere r={qadd(0.5, collides("a", "c"))} />
     <sphere r={qadd(0.5, collides("a", "b"))} />
@@ -4434,7 +4994,7 @@ export default (
   <scene>
     <camera />
     <tag name="t1"><torus R={1} r={0.25} /></tag>
-    <tag name="t2"><translate t={[3, 0, 0]}><torus R={1} r={0.25} /></translate></tag>
+    <tag name="t2"><torus R={1} r={0.25} t={[3, 0, 0]} /></tag>
     <sphere r={clearance("t1", "t2")} />
   </scene>
 );
@@ -4473,7 +5033,7 @@ export default (
     <camera />
     <group name="arm">
       <sphere r={1} />
-      <translate t={[3, 0, 0]}><box s={[0.5, 0.5, 0.5]} group="hand" /></translate>
+      <box s={[0.5, 0.5, 0.5]} group="hand" t={[3, 0, 0]} />
     </group>
     <sphere r={0.5} group="loose" />
   </scene>
@@ -4556,7 +5116,7 @@ export default (
     #[test]
     fn test_jsx_component_and_control_flow() {
         let src = r#"
-const Ball = ({ r, x }) => <translate t={[x, r, 0]}><sphere r={r} /></translate>;
+const Ball = ({ r, x }) => <sphere r={r} t={[x, r, 0]} />;
 export default (
   <scene>
     {[0, 1, 2].map(i => <Ball r={0.5} x={i * 2} />)}
@@ -4596,10 +5156,10 @@ export default (
     /// objects: [0]=sphere(.a .b) [1]=box(.b) [2]=cylinder
     const TREE: &str = r#"export default (
   <scene>
-    <translate>
+    <group>
       <sphere r={0.5} class="a b" />
       <box s={[1, 1, 1]} class="b" />
-    </translate>
+    </group>
     <cylinder r={0.2} h={1} />
   </scene>
 );"#;
@@ -4614,7 +5174,7 @@ export default (
         assert_eq!(hx(&run.scene.objects[1].material.color), 0xFFFFFF);
 
         // 子代选择器
-        let run = c("translate > .a { color: #222222; }");
+        let run = c("group > .a { color: #222222; }");
         assert_eq!(hx(&run.scene.objects[0].material.color), 0x222222);
         assert_eq!(hx(&run.scene.objects[1].material.color), 0xFFFFFF);
 
@@ -4670,30 +5230,30 @@ export default (
             ),
             ("scene > .a { color: #010101; }", [0xFFFFFF; 3]),
             (
-                "scene > translate { color: #010101; }",
+                "scene > group { color: #010101; }",
                 [0x010101, 0x010101, 0xFFFFFF],
             ),
             (
-                "scene > translate > .a { color: #010101; }",
+                "scene > group > .a { color: #010101; }",
                 [0x010101, 0xFFFFFF, 0xFFFFFF],
             ),
             (
-                "translate > .a { color: #010101; }",
+                "group > .a { color: #010101; }",
                 [0x010101, 0xFFFFFF, 0xFFFFFF],
             ),
             (
-                "translate > .b { color: #010101; }",
+                "group > .b { color: #010101; }",
                 [0x010101, 0x010101, 0xFFFFFF],
             ),
             (
-                "translate .b { color: #010101; }",
+                "group .b { color: #010101; }",
                 [0x010101, 0x010101, 0xFFFFFF],
             ),
             (
-                "translate > sphere { color: #010101; }",
+                "group > sphere { color: #010101; }",
                 [0x010101, 0xFFFFFF, 0xFFFFFF],
             ),
-            ("translate > translate { color: #010101; }", [0xFFFFFF; 3]),
+            ("group > group { color: #010101; }", [0xFFFFFF; 3]),
             (
                 ".a + .b { color: #010101; }",
                 [0xFFFFFF, 0x010101, 0xFFFFFF],
@@ -5023,7 +5583,7 @@ export default (
                 r#"export default (
   <scene>
     <link name="base" />
-    <link name="arm" density={{1.0}}><translate t={{[1, 0, 0]}}><sphere r={{0.2}} /></translate></link>
+    <link name="arm" density={{1.0}}><sphere r={{0.2}} t={{[1, 0, 0]}} /></link>
     {extra}
     <anchor link="base" />
   </scene>
@@ -5052,8 +5612,8 @@ export default (
         let src2 = r#"export default (
   <scene>
     <link name="base" />
-    <link name="arm1" density={1.0}><translate t={[1, 0, 0]}><sphere r={0.2} /></translate></link>
-    <link name="arm2" density={1.0}><translate t={[1, 0, 0]}><sphere r={0.2} /></translate></link>
+    <link name="arm1" density={1.0}><sphere r={0.2} t={[1, 0, 0]} /></link>
+    <link name="arm2" density={1.0}><sphere r={0.2} t={[1, 0, 0]} /></link>
     <pair kind="revolute" name="j1" a="base" b="arm1" axis={[0,0,1]} q={0} />
     <pair kind="revolute" name="j2" a="arm1" b="arm2" axis={[0,0,1]} at={[1,0,0]} q={0.3} />
     <anchor link="base" />
@@ -5234,12 +5794,12 @@ export default (
 export default (
   <scene>
     <link name="base">
-      <translate t={[0, 0.1, 0]}><box s={[0.15, 0.2, 0.15]} /></translate>
-      <translate t={[2, 0.1, 0]}><box s={[0.15, 0.2, 0.15]} /></translate>
+      <box s={[0.15, 0.2, 0.15]} t={[0, 0.1, 0]} />
+      <box s={[0.15, 0.2, 0.15]} t={[2, 0.1, 0]} />
     </link>
-    <link name="crank"><translate t={[0.5, 0, 0]}><box s={[1, 0.06, 0.06]} /></translate></link>
-    <link name="coupler"><translate t={[1, 0, 0]}><box s={[2, 0.06, 0.06]} /></translate></link>
-    <link name="rocker"><translate t={[0.5, 0, 0]}><box s={[1, 0.06, 0.06]} /></translate></link>
+    <link name="crank"><box s={[1, 0.06, 0.06]} t={[0.5, 0, 0]} /></link>
+    <link name="coupler"><box s={[2, 0.06, 0.06]} t={[1, 0, 0]} /></link>
+    <link name="rocker"><box s={[1, 0.06, 0.06]} t={[0.5, 0, 0]} /></link>
     <pair kind="revolute" name="p0" a="base" b="crank" at={[0,0,0]} axis={[0,0,1]} q={1.5707963267948966} />
     <pair kind="revolute" name="p1" a="crank" b="coupler" at={[1,0,0]} axis={[0,0,1]} guess={-1.5} />
     <pair kind="revolute" name="p2" a="coupler" b="rocker" at={[2,0,0]} axis={[0,0,1]} guess={-1.5} />
@@ -5300,6 +5860,40 @@ export default (
     }
 
     #[test]
+    fn test_closure_multi_dof_spatial() {
+        // 空间多自由度闭环（G5+）：圆柱副（z 轴，原点）+ 球副（臂端 [1,0,0]）在环上，
+        // 闭合 l2 的 [0,1,0] 到 base 的 [1,1,0]（轴 z）。零位形天然闭合；
+        // 偏移 guess → 收回零（闭式验证）；5 自由变量 vs 秩 5 约束 → 机构钉死 dof 0。
+        let src = r#"
+export default (
+  <scene>
+    <link name="base"><sphere r={0.05} t={[1, 1, 0]} /></link>
+    <link name="l1"><box s={[1, 0.06, 0.06]} t={[0.5, 0, 0]} /></link>
+    <link name="l2"><box s={[0.06, 1, 0.06]} t={[0, 0.5, 0]} /></link>
+    <pair kind="cylindrical" name="cyl" a="base" b="l1" axis={[0,0,1]} guess={[0.15, 0.08]} />
+    <pair kind="spherical" name="sph" a="l1" b="l2" at={[1,0,0]} guess={[0.12, -0.09, 0.2]} />
+    <closure a="l2" b="base" at={[0,1,0]} bAt={[1,1,0]} axis={[0,0,1]} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_jsx(src, None, "").expect("run");
+        let k = &run.kinematics;
+        assert_eq!(k.closures.len(), 1);
+        let cl = &k.closures[0];
+        assert!(cl.residual < 1e-8, "残差 {}", cl.residual);
+        assert_eq!(cl.rank, 5);
+        assert_eq!(cl.solved.len(), 5, "{:?}", cl.solved);
+        for (n, q) in &cl.solved {
+            assert!(q.abs() < 1e-6, "{n} 应回到 0，got {q}");
+        }
+        // 活动度：gross = 5（cyl 2 + sph 3）+ 1（closure 自带）= 6；
+        // pins = rank 5 + 1 = 6 → dof 0（装配唯一确定）。
+        let m = crate::scene_build::mobility(k);
+        assert_eq!(m.dof, 0, "多自由度闭环装配应唯一: {m:?}");
+    }
+
+    #[test]
     fn test_closure_error_paths() {
         // 引用未知 link
         let e = run_jsx(
@@ -5329,7 +5923,7 @@ export default (
             r#"export default (
   <scene>
     <link name="a" />
-    <link name="b"><translate t={[0.5, 0, 0]}><box s={[1, 0.1, 0.1]} /></translate></link>
+    <link name="b"><box s={[1, 0.1, 0.1]} t={[0.5, 0, 0]} /></link>
     <pair kind="revolute" name="p" a="a" b="b" axis={[0,0,1]} />
     <closure a="b" b="a" at={[50,0,0]} bAt={[0,0,0]} axis={[0,0,1]} />
     <anchor link="a" />
@@ -5406,7 +6000,7 @@ export default (
         // solve: 线性方程一步收敛。
         let run = run_jsx(
             r#"const [x] = solve([0.0], [v => eq(v[0], 0.42)]);
-export default <translate t={[x, 0, 0]}><sphere r={0.1} /></translate>;"#,
+export default <sphere r={0.1} t={[x, 0, 0]} />;"#,
             None,
             "",
         )
@@ -5445,7 +6039,7 @@ export default <sphere r={0.1} />;"#,
 
         // 变量级覆盖：P 约定。
         let run = run_jsx_pose(
-            r#"export default <translate t={[P.x ?? 0, 0, 0]}><sphere r={0.1} /></translate>;"#,
+            r#"export default <sphere r={0.1} t={[P.x ?? 0, 0, 0]} />;"#,
             None,
             "",
             &[("x".to_string(), 3.0)],

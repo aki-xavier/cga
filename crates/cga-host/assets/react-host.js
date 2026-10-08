@@ -28,6 +28,43 @@
   }
   const React = R.React;
 
+  // ---- DevTools 握手（E3）：渲染器侧契约的诚实最小实现 -------------------
+  // react-reconciler 在创建 reconciler 时若发现 __REACT_DEVTOOLS_GLOBAL_HOOK__
+  // 会 inject(renderer)，并在每次提交后调 hook.onCommitFiberRoot。这里装记录型桩：
+  // 渲染器注册 + 提交计数可观测、可测试。完整的检查器协议（选择/高亮/props 编辑）
+  // 是 DevTools 后端（浏览器扩展）的事——渲染器侧的义务就是这个握手。
+  if (!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+    let nextRid = 1;
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map(),
+      commits: [], // 每次提交 { rid, didError }
+      supportsFiber: true,
+      checkDCE() {},
+      inject(renderer) {
+        const id = nextRid++;
+        this.renderers.set(id, renderer);
+        return id;
+      },
+      onCommitFiberRoot(rid, _root, _priority, didError) {
+        this.commits.push({ rid, didError: !!didError });
+      },
+      onCommitFiberUnmount() {},
+      onScheduleFiberRoot() {},
+      sub() {
+        return 0;
+      },
+      unsub() {},
+    };
+  }
+
+  // E2：动态 import() 的模块命名空间（bundler 把 import("./x.jsx") 改写成
+  // __cga_dyn_import(id)；模块体在打包时已全部求值——Promise 只包命名空间）。
+  globalThis.__cga_dyn_import = (id) => {
+    const ns = globalThis['__exp_' + id];
+    if (!ns) return Promise.reject(new Error('cga: no bundled module __exp_' + id));
+    return Promise.resolve(ns);
+  };
+
   // 场景源码可以像旧 PRELUDE 一样直接用 h()/Fragment（P1 的 PRELUDE 会覆盖为其增强版）。
   globalThis.React = React;
   globalThis.h = React.createElement;
@@ -144,6 +181,11 @@
   function elementTree(el) {
     if (Array.isArray(el)) return childrenTree(el);
     if (!isElement(el)) return sanitize(el);
+    // Fragment 在属性位置（face(<><sphere/></>, '+z')）也是透明容器：与渲染路径
+    // 的 fragment 分支同形。此前返回 undefined → JSON 丢键 → Rust 侧缺参报错。
+    if (el.type === React.Fragment || el.type === Symbol.for('react.fragment')) {
+      return { t: 'fragment', p: {}, c: childrenTree(el.props.children) };
+    }
     if (typeof el.type !== 'string') return undefined;
     return { t: el.type, p: sanitize(sceneProps(el.props)), c: childrenTree(el.props.children) };
   }
@@ -176,6 +218,10 @@
 
   function makeHost(counters, nextId) {
     let updatePriority = R.lanes.DefaultEventPriority;
+    // E1：事件优先级——dispatch（click 等离散事件）期间置 Discrete。
+    let eventPriority = R.lanes.DefaultEventPriority;
+    // 可观测性：resolveUpdatePriority 的取值分布（测试断言离散事件走离散车道）。
+    const laneStats = { discrete: 0, continuous: 0, default: 0, other: 0 };
     // 实例版本：每次创建 / props 更新 / 结构变更（增删移动子节点）都在受影响实例上
     // 递增。快照时自底向上取子树最大值 __v —— 子树任何变化都会沿祖先链抬高 __v，
     // 宿主据此复用未变子树的构建产物（增量构建，见 docs/jsx-css-host.md）。
@@ -219,10 +265,23 @@
       // --- 调度与优先级 ---
       scheduleTimeout: (fn, d) => globalThis.setTimeout(fn, d),
       cancelTimeout: (id) => globalThis.clearTimeout(id),
-      getCurrentEventPriority: () => R.lanes.DefaultEventPriority,
-      resolveUpdatePriority: () => R.lanes.DefaultEventPriority,
+      getCurrentEventPriority: () => eventPriority,
+      resolveUpdatePriority: () => {
+        const p = updatePriority;
+        if (p === R.lanes.DiscreteEventPriority) laneStats.discrete++;
+        else if (p === R.lanes.ContinuousEventPriority) laneStats.continuous++;
+        else if (p === R.lanes.DefaultEventPriority) laneStats.default++;
+        else laneStats.other++;
+        return p;
+      },
       setCurrentUpdatePriority: (p) => {
         updatePriority = p;
+      },
+      // 非标准键（reconciler 不读）：laneStats 引用与事件优先级写入器，
+      // 供同文件的 session.dispatch/lanes 访问（词法作用域在 makeHost 内）。
+      __laneStats: laneStats,
+      __setEventPriority: (p) => {
+        eventPriority = p;
       },
       getCurrentUpdatePriority: () => updatePriority,
       trackSchedulerEvent: () => {},
@@ -366,6 +425,9 @@
     const container = { kind: 'root', id: 0, type: '#root', props: {}, children: [] };
     const hostConfig = makeHost(counters, nextId);
     const reconciler = R.Reconciler(hostConfig);
+    // E3：显式 injectIntoDevTools（渲染器侧义务，ReactDOM 同款）——reconciler
+    // 不会自动注册。之后每次提交 reconciler 会回调 hook.onCommitFiberRoot。
+    if (typeof reconciler.injectIntoDevTools === 'function') reconciler.injectIntoDevTools();
     const tag = opts.tag === 'legacy' ? R.roots.LegacyRoot : R.roots.ConcurrentRoot;
 
     // 宿主输入通道：用 React context，而不是可变闭包。改值只让 useContext(HostInput)
@@ -449,12 +511,21 @@
           const n = path[i];
           const handler = n.props ? n.props[prop] : undefined;
           if (typeof handler === 'function') {
-            handler({
-              type: prop,
-              target: { id: n.id, type: n.type },
-              currentTarget: { id: n.id, type: n.type },
-              payload,
-            });
+            // E1：离散事件（click 等）的更新走 DiscreteEventPriority 车道。
+            const prevUp = hostConfig.getCurrentUpdatePriority();
+            hostConfig.setCurrentUpdatePriority(R.lanes.DiscreteEventPriority);
+            hostConfig.__setEventPriority(R.lanes.DiscreteEventPriority);
+            try {
+              handler({
+                type: prop,
+                target: { id: n.id, type: n.type },
+                currentTarget: { id: n.id, type: n.type },
+                payload,
+              });
+            } finally {
+              hostConfig.setCurrentUpdatePriority(prevUp);
+              hostConfig.__setEventPriority(R.lanes.DefaultEventPriority);
+            }
             return JSON.stringify({ found: true, id: n.id, type: n.type });
           }
         }
@@ -561,6 +632,22 @@
       counters() {
         return JSON.stringify(counters);
       },
+      // E1：resolveUpdatePriority 的取值分布（离散事件应走离散车道）。
+      lanes() {
+        return JSON.stringify(hostConfig.__laneStats);
+      },
+      // E2：动态 import() 的模块命名空间（bundler 把 import("./x.jsx") 改写成
+      // __cga_dyn_import(id)）。
+      // E3：DevTools 握手状态（渲染器注册 + 提交计数）。
+      devtools() {
+        const hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+        const rends = hook ? Array.from(hook.renderers.values()) : [];
+        return JSON.stringify({
+          renderers: rends.length,
+          packageNames: rends.map((r) => r.rendererPackageName),
+          commits: hook ? hook.commits.length : 0,
+        });
+      },
       resetCounters() {
         for (const k of Object.keys(counters)) counters[k] = 0;
         return true;
@@ -600,6 +687,8 @@
       clearErrors: () => session.clearErrors(),
       logs: () => JSON.parse(session.logs()),
       instances: () => JSON.parse(session.instances()),
+      lanes: () => JSON.parse(session.lanes()),
+      devtools: () => JSON.parse(session.devtools()),
       unmount: () => session.unmount(),
       frame: (a) => session.frame(a),
     };

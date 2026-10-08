@@ -10,26 +10,14 @@ export default (
 
     <plane n={[0, 1, 0]} d={0} class="ground" />
 
-    <translate t={[0, 1, 0]}>
-      <sphere r={1} class="red" />
-    </translate>
-    <translate t={[-2.2, 0.6, 0.5]}>
-      <sphere r={0.6} class="blue" />
-    </translate>
-    <translate t={[2.2, 0.7, -0.5]}>
-      <cylinder r={0.7} class="gold" />
-    </translate>
-    <translate t={[0.8, 0.45, 1.8]}>
-      <box s={[0.9, 0.9, 0.9]} class="green" />
-    </translate>
-    <translate t={[-2.4, 2.2, 0.8]}>
-      <rotate axis={[1, 0, 0]} angle={-0.4}>
-        <circle r={0.9} class="purple" />
-      </rotate>
-    </translate>
-    <translate t={[0.4, 1.5, 2.6]}>
+    <sphere r={1} class="red" t={[0, 1, 0]} />
+    <sphere r={0.6} class="blue" t={[-2.2, 0.6, 0.5]} />
+    <cylinder r={0.7} class="gold" t={[2.2, 0.7, -0.5]} />
+    <box s={[0.9, 0.9, 0.9]} class="green" t={[0.8, 0.45, 1.8]} />
+    <circle r={0.9} class="purple" rotate={[1, 0, 0, -0.4]} t={[-2.4, 2.2, 0.8]} />
+    <group t={[0.4, 1.5, 2.6]}>
       <Glass r={0.8} />
-    </translate>
+    </group>
 
     <directional_light direction={[0.4, 1.0, 0.35]} intensity={0.38} />
     <point_light position={[0, 4, 3.5]} intensity={0.7} />

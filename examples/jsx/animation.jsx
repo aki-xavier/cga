@@ -9,9 +9,7 @@ function Orbiter({ phase, radius, cls, lift }) {
   const t = IN.t === undefined ? 0 : IN.t;
   const a = phase + t * Math.PI * 2;
   return (
-    <translate t={[Math.cos(a) * 1.9, lift, Math.sin(a) * 1.9]}>
-      <sphere r={radius} class={cls} />
-    </translate>
+    <sphere r={radius} class={cls} t={[Math.cos(a) * 1.9, lift, Math.sin(a) * 1.9]} />
   );
 }
 
@@ -23,9 +21,7 @@ function FrameCounter() {
     setFrames((n) => n + 1);
   }, [IN.t]);
   return (
-    <translate t={[-2.6, 1.2, 0]}>
-      <box s={[0.3 + frames * 0.25, 0.25, 0.25]} class="counter" />
-    </translate>
+    <box s={[0.3 + frames * 0.25, 0.25, 0.25]} class="counter" t={[-2.6, 1.2, 0]} />
   );
 }
 
@@ -35,9 +31,7 @@ export default (
     <directional_light direction={[0.4, 1.0, 0.3]} intensity={0.6} />
     <ambient_light intensity={0.35} />
     <plane n={[0, 1, 0]} d={0} class="ground" />
-    <translate t={[0, 0.55, 0]}>
-      <sphere r={0.6} class="sun" />
-    </translate>
+    <sphere r={0.6} class="sun" t={[0, 0.55, 0]} />
     <Orbiter phase={0} radius={0.3} cls="moon" lift={0.5} />
     <Orbiter phase={2.1} radius={0.22} cls="moon2" lift={0.85} />
     <FrameCounter />

@@ -331,10 +331,6 @@ fn sig_names(name: &str) -> Vec<&'static str> {
         "torus" => vec!["R", "r"],
         "cyclide" => vec!["a", "b", "d"],
         "ellipsoid" => vec!["radii"],
-        "translate" => vec!["t"],
-        "rotate" => vec!["axis", "angle"],
-        "scale" => vec!["s"],
-        "mirror" => vec!["axis"],
         "difference" => vec![],
         "intersection" => vec![],
         "directional_light" => vec!["direction"],
@@ -423,7 +419,7 @@ mod tests {
     #[test]
     fn test_jsx_modifier_ordering() {
         let sc = crate::jsx::run_jsx(
-            "export default <translate t={[10,0,0]}><scale s={2}><sphere r={1} /></scale></translate>;",
+            "export default <sphere r={1} scale={2} t={[10,0,0]} />;",
             None,
             "",
         )
@@ -435,7 +431,7 @@ mod tests {
         assert!(p[1].abs() < 1e-6);
         assert!(p[2].abs() < 1e-6);
         let sc2 = crate::jsx::run_jsx(
-            "export default <mirror axis={[1,0,0]}><translate t={[2.5,0,0]}><sphere r={1} /></translate></mirror>;",
+            "export default <group mirror={[1,0,0]}><sphere r={1} t={[2.5,0,0]} /></group>;",
             None,
             "",
         )

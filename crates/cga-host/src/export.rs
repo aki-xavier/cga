@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn moved_object_lands_in_world_space() {
         // 平移后的球：导出顶点应落在 [9,11] 区间（而不是原点附近）
-        let jsx = "export default <translate t={[10,0,0]}><sphere r={1} /></translate>;";
+        let jsx = "export default <sphere r={1} t={[10,0,0]} />;";
         let run = crate::run_jsx(jsx, None, "").unwrap();
         let (mesh, _) = scene_to_mesh(&run.scene, 0.25).unwrap();
         let xs: Vec<f64> = mesh.vertices.iter().map(|v| v[0]).collect();

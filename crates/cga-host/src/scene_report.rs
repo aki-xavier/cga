@@ -493,17 +493,17 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
     #[test]
     fn test_report_contacts() {
         // 两个重叠的球（sep = 1.5 − 2 = −0.5）→ 接触表一行；全分离则无此节。
-        let report = rep(
-            "export default <scene><sphere r={1} /><translate t={[1.5,0,0]}><sphere r={1} /></translate></scene>;",
-        );
+        let report =
+            rep("export default <scene><sphere r={1} /><sphere r={1} t={[1.5,0,0]} /></scene>;");
         assert!(report.contains("collide 0 1 yes sep=-0.5"), "{report}");
-        let quiet = rep("export default <scene><sphere r={1} /><translate t={[5,0,0]}><sphere r={1} /></translate></scene>;");
+        let quiet =
+            rep("export default <scene><sphere r={1} /><sphere r={1} t={[5,0,0]} /></scene>;");
         assert!(!quiet.contains("collide"), "{quiet}");
     }
 
     #[test]
     fn test_report_minimal_golden() {
-        let rep = rep("export default <translate t={[2,0,0]}><sphere r={0.5} color={0xFF0000} /></translate>;");
+        let rep = rep("export default <sphere r={0.5} color={0xFF0000} t={[2,0,0]} />;");
         let want = [
             "scene version=1",
             "background(color=0x87CEEB);",
@@ -523,11 +523,11 @@ bbox_hi=[2.5,0.5,0.5]",
     #[test]
     fn test_report_rotation_canonical() {
         let rep = rep("export default <scene>\
-<rotate axis={[0,0,1]} angle={Math.PI/2}><sphere r={1} /></rotate>\
-<rotate axis={[0,0,1]} angle={-Math.PI/2}><sphere r={1} /></rotate>\
+<sphere r={1} rotate={[0,0,1, Math.PI/2]} />\
+<sphere r={1} rotate={[0,0,1, -Math.PI/2]} />\
 <sphere r={1} />\
-<translate t={[1e-9,0,0]}><sphere r={1} /></translate>\
-<rotate axis={[0,0,1]} angle={2*Math.PI}><sphere r={1} /></rotate>\
+<sphere r={1} t={[1e-9,0,0]} />\
+<sphere r={1} rotate={[0,0,1, 2*Math.PI]} />\
 <plane n={[0,0,1]} d={-0.0} />\
 </scene>;");
         assert_has(
@@ -562,8 +562,8 @@ plane(n=[0,0,1], d=0);",
     fn test_report_csg_nested_frames() {
         let rep = rep(
             "export default <scene>\
-<difference><translate t={[0.5,0,0]}><box s={[2,2,2]} /></translate><scale s={[2,1,1]}><sphere r={1} /></scale></difference>\
-<difference><difference><box s={[4,4,4]} /><sphere r={0.5} /></difference><translate t={[1,0,0]}><sphere r={0.5} /></translate></difference>\
+<difference><box s={[2,2,2]} t={[0.5,0,0]} /><sphere r={1} scale={[2,1,1]} /></difference>\
+<difference><difference><box s={[4,4,4]} /><sphere r={0.5} /></difference><sphere r={0.5} t={[1,0,0]} /></difference>\
 </scene>;",
         );
         assert_has(
@@ -594,8 +594,8 @@ sphere(r=0.5)), frame(t=[1,0,0], sphere(r=0.5)));"
         let rep = rep("export default <scene>\
 <cylinder r={1} />\
 <plane n={[0,0,1]} d={0} />\
-<translate t={[0,1,0]}><box s={[2,1,2]} /></translate>\
-<scale s={[2,1,1]}><box s={[1,1,1]} /></scale>\
+<box s={[2,1,2]} t={[0,1,0]} />\
+<box s={[1,1,1]} scale={[2,1,1]} />\
 </scene>;");
         assert_has(&rep, &format!("object 0 {DEF_MAT} cylinder(r=1, h=-1);"));
         assert_has(&rep, "bounds 0 none");
@@ -618,11 +618,11 @@ bbox_hi=[1,1.5,1]",
     fn test_report_tags() {
         let src = "export default <scene>\
 <tag name=\"zeta\"><sphere r={1} /></tag>\
-<tag name=\"alpha\"><translate t={[1,0,0]}><sphere r={0.5} /></translate></tag>\
-<tag name=\"alpha\"><translate t={[2,0,0]}><sphere r={0.5} /></translate></tag>\
+<tag name=\"alpha\"><sphere r={0.5} t={[1,0,0]} /></tag>\
+<tag name=\"alpha\"><sphere r={0.5} t={[2,0,0]} /></tag>\
 <tag name=\"alpha\"><difference><box s={[2,2,2]} /><sphere r={0.5} /></difference></tag>\
-<tag name=\"alpha\"><scale s={[2,1,1]}><box s={[1,1,1]} /></scale></tag>\
-<tag name=\"zeta\"><translate t={[3,0,0]}><sphere r={0.5} /></translate></tag>\
+<tag name=\"alpha\"><box s={[1,1,1]} scale={[2,1,1]} /></tag>\
+<tag name=\"zeta\"><sphere r={0.5} t={[3,0,0]} /></tag>\
 </scene>;";
         let a = rep(src);
         let b = rep(src);

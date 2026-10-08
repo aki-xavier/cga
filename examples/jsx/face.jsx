@@ -6,34 +6,39 @@ import './face.css';
 const eye = (s) => {
   const ex = s * 0.24;
   const ey = 1.66;
-  const ez = 0.46;
+  const ez = 0.43;
   return [
     // 巩膜（眼球）
     <sphere key={`sclera${s}`} r={0.13} t={[ex, ey, ez]} class="sclera" />,
     // 虹膜：球冠（r=0.132 的球 ∩ 半空间盒，切面 z≥0.5775 → 冠半径 0.060）
-    <intersection key={`iris${s}`}>
-      <sphere r={0.132} t={[ex, ey, ez]} class="iris" />
+    // CSG 块的材质取自身元素的 class，不下探子元素。
+    <intersection key={`iris${s}`} class="iris">
+      <sphere r={0.132} t={[ex, ey, ez]} />
       <box s={[0.5, 0.5, 0.5]} t={[ex, ey, ez + 0.3675]} />
     </intersection>,
     // 瞳孔：更小的前冠（切面 z≥0.5917 → 冠半径 0.025），叠在虹膜前 0.002
-    <intersection key={`pupil${s}`}>
-      <sphere r={0.134} t={[ex, ey, ez]} class="pupil" />
+    <intersection key={`pupil${s}`} class="pupil">
+      <sphere r={0.134} t={[ex, ey, ez]} />
       <box s={[0.5, 0.5, 0.5]} t={[ex, ey, ez + 0.3817]} />
     </intersection>,
   ];
 };
 
 const brow = (s) => (
-  // 弧管眉：绕 y 轴倾斜 ±0.44 rad 贴合太阳穴方向的面部曲率
-  <rotate axis={[0, 1, 0]} angle={s * 0.44} key={`brow${s}`}>
-    <torus R={0.16} r={0.028} arc={2.4} t={[s * 0.24, 1.66, 0.577]} rotate={[0, 0, 1, 0.35]} class="brow" />
-  </rotate>
+  // 弧管眉
+  <group key={`brow${s}`} t={[s * 0.23, 1.685, 0.6]}>
+    <group rotate={[0, 1, 0, s * 0.35]}>
+      <torus R={0.16} r={0.028} arc={2.4} class="brow" rotate={[0, 0, 1, 0.37]} />
+    </group>
+  </group>
 );
 
 const ear = (s) => (
-  <rotate axis={[0, 1, 0]} angle={(s * Math.PI) / 2} key={`ear${s}`}>
-    <torus R={0.12} r={0.035} arc={4.6} t={[s * 0.63, 1.6, -0.02]} rotate={[0, 0, 1, 4.6]} class="skin" />
-  </rotate>
+  <group key={`ear${s}`} t={[s * 0.645, 1.5, 0.04]}>
+    <group rotate={[0, 1, 0, (s * Math.PI) / 2]}>
+      <torus R={0.135} r={0.035} arc={4.6} class="skin" rotate={[0, 0, 1, s > 0 ? Math.PI : 0]} />
+    </group>
+  </group>
 );
 
 export default (
@@ -68,18 +73,19 @@ export default (
     <ellipsoid radii={[0.15, 0.04, 0.065]} t={[0, 1.06, 0.43]} class="lips" />
     <ellipsoid radii={[0.13, 0.012, 0.055]} t={[0, 1.092, 0.485]} class="mouthline" />
 
-    {/* 发：大椭球 − 头椭球 → 贴头薄壳；− 面部盒（露脸+发际线）− 低位盒（短发） */}
+    {/* 发：大椭球 − 头椭球 → 贴头薄壳；− 面部盒（露脸+发际线）
+        − 低位盒（短发）− 耳袋球（露出耳朵） */}
     <difference class="hair">
       <ellipsoid radii={[0.655, 0.815, 0.695]} t={[0, 1.64, -0.015]} />
       <ellipsoid radii={[0.62, 0.78, 0.66]} t={[0, 1.62, 0]} />
       <box s={[2, 2, 2]} t={[0, 0.9, 1.2]} />
       <box s={[4, 4, 6]} t={[0, -0.5, -2]} />
+      <sphere r={0.17} t={[-0.65, 1.5, 0.04]} />
+      <sphere r={0.17} t={[0.65, 1.5, 0.04]} />
     </difference>
 
-    {/* 颈与肩 */}
-    <rotate axis={[1, 0, 0]} angle={-Math.PI / 2}>
-      <cylinder r={0.24} h={1.0} t={[0, 0.7, -0.06]} class="skin" />
-    </rotate>
+    {/* 颈与肩：t 在内层 rotate 外（world = T·R·geo） */}
+    <cylinder r={0.24} h={1.0} class="skin" rotate={[1, 0, 0, -Math.PI / 2]} t={[0, 0.7, -0.06]} />
     <ellipsoid radii={[0.95, 0.35, 0.42]} t={[0, 0.35, -0.05]} class="shirt" />
   </scene>
 );

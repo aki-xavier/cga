@@ -35,7 +35,7 @@ impl FlangeSpec {
         for i in 0..self.n_holes {
             let a = i as f64 * 2.0 * std::f64::consts::PI / self.n_holes as f64;
             out.push_str(&format!(
-                "        <Rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><Translate t={{[{}, 0.0, 0.0]}}>{}</Translate></Rotate>\n",
+                "        <Group rotate={{[0.0, 1.0, 0.0, {}]}}><Group t={{[{}, 0.0, 0.0]}}>{}</Group></Group>\n",
                 fmt_num(a),
                 fmt_num(self.hole_circle_r),
                 gen_post(self.hole_r, self.hole_h)

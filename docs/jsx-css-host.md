@@ -2,7 +2,7 @@
 # JSX + CSS 场景宿主：React 模式前端
 
 状态：已实现（2026-10-06，路线 A：真 JS；2026-10-07，P1：改用**真 React 运行时**；2026-10-07，帧间增量 §6：版本化 + 子树复用 + 像素级增量渲染）。适用：`crates/cga-host/src/jsx/`、`crates/cga-host/src/react/`、CLI `render_jsx` / `report_jsx` / `render_frames`。
-R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX，且使用与宿主一致的 PascalCase 元素名（`<Scene>` / `<Rotate>` / `<Difference>` …）；互操作**仅导出**（URDF / STL），不提供导入；文本语法解析器已删除，只剩 builder/kinematics/报告支撑（`scene_build`）。
+R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改出 JSX，且使用与宿主一致的 PascalCase 元素名（`<Scene>` / `<Group>` / `<Difference>` …）；互操作**仅导出**（URDF / STL），不提供导入；文本语法解析器已删除，只剩 builder/kinematics/报告支撑（`scene_build`）。
 决策记录：用户拍板"以 React + CSS 模式为主，本仓库红线（确定性错误契约/单遍/文本即真相）可以不管"。因此不走"降级为 IR"的保守路线，直接内嵌真 JS 引擎。
 
 ## 1. 技术栈与管线
@@ -32,8 +32,10 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 - 材质键：`color roughness metalness emissive opacity ior absorption map`；JSX 元素可直接带这些 prop，也可由 CSS 类命中。
 - 分组：`<Group name="…">` 元素或任意元素的 `group="…"` prop，子树产出的对象带分组 id（`SceneRun::groups` 注册表，`Object::group`）。分组是**缓存/失效与拾取的元数据单元，不是 z-index**——对象前后关系永远由求交决定。
 - 驼峰/蛇形双写兼容（`driverProfile` ≡ `driver_profile`）。
-- **公共属性**（2026-10-07）：任何几何元素/容器都可直接带变换与注册 prop——`t=[x,y,z]`、`rotate=[ax,ay,az,angle]`、`scale=数|[x,y,z]`、`mirror=[x,y,z]`、`tag="name"`。变换的固定合成顺序为 **T·R·S·Mirror**（先镜像、再缩放、再旋转、再平移），与 prop 书写顺序无关。修饰符元素（`<translate>` 等）豁免（它们的 prop 是自己的语义）；非几何元素（camera/灯光/background/gear/cam）带变换 prop 报错（不许静默丢）。`<tag name>` 元素与 `tag` prop 同义；无 `name` 的 `<group>` 是透明容器（共享 prop 的落点）。
-- **材质就是 prop**：材质键在任何元素上都是内联 prop（级联的内联层，沿元素树继承）——`<group color=...>`、`<translate color=...>` 都成立；`<material>` 容器保持可用，但已只是一个透明兼容壳。
+- **公共属性**（2026-10-07）：任何几何元素/容器都可直接带变换与注册 prop——`t=[x,y,z]`、`rotate=[ax,ay,az,angle]`、`scale=数|[x,y,z]`、`mirror=[x,y,z]`、`tag="name"`。变换的固定合成顺序为 **T·R·S·Mirror**（先镜像、再缩放、再旋转、再平移），与 prop 书写顺序无关。**修饰符元素已删除**（2026-10-08）：`<translate>/<rotate>/<scale>/<mirror>` 只剩上面的 prop 形式，写成元素会在渲染 / CSG 收集 / 查询三条路径上都报「改用变换 prop」的同一个错；非几何元素（camera/灯光/background/gear/cam）带变换 prop 报错（不许静默丢）。`<tag name>` 元素与 `tag` prop 同义；无 `name` 的 `<group>` 是透明容器（共享 prop 的落点），也是多子变换的落点。
+- **三条路径一致**（2026-10-08）：渲染 walk、CSG 收集（`<difference>`/`<union>`/`<intersection>` 的子树）、查询目标（`face(<…>, '+z')` 的 `of`）对同一元素必须给出同一语义。透明容器 `<group>` / `<material>` / `<fragment>` / `<tag name>` 在三条路径上都展开（`<tag>` 在 CSG 里照常注册）；`<when>` 都按 `count` 条件展开；`<instances>` / `<drill>` 在 CSG 与查询里同样可用（查询要求恰好一个实例，否则提示按名字引用）。放错位置与退化输入都给**可读错误**而不是 panic：不产生几何的元素（camera / 灯光 / background / link / pair / anchor / gear / cam / closure / scene）出现在几何位置 → `<tag> is not geometry`（真正未知的元素仍报 `unknown primitive frob`）；CSG 子数 < 2（`union` 不开例外）→ `needs >= 2 geometry children`；变换线性部分 `|det| < 1e-15` → `transform is singular`；惰性查询缺参数（JS 侧 `undefined` 经 JSON 序列化丢键）→ `query … is missing its "of" argument`。其中 `needs >= 2 geometry children` 与 `transform is singular` 在 cga-core 里是 `panic!`，`missing its … argument` 在宿主里是 `serde_json::Map` 索引 panic，`is not geometry` 原本是误导性的 `unknown primitive camera`——四类现在都在宿主侧、三条路径的共同入口先拦。
+- **CSG 只有一个对象、一个材质**（2026-10-08）：`<difference>` 等把子树合并成一个对象，因此子元素上"每个对象一份"的通道无处可去——材质键、`class`/`className`/`id`（CSS 只作用于材质）、`group`、`density` 一律报错并指明「put it on the `<difference>/<union>/<intersection>` element itself」，不再静默丢（此前 `<difference><box color=red/>…` 的报告材质是白色）。写在 CSG 元素自己身上照常生效；`<material>` 作为不带材质 prop 的透明容器在 CSG 里仍然可用。
+- **材质就是 prop**：材质键在任何元素上都是内联 prop（级联的内联层，沿元素树继承）——`<group color=...>`、`<sphere color=...>` 都成立；`<material>` 容器保持可用，但已只是一个透明兼容壳。
 - **命名通道的分工**（不合并）：`class`/`className` 是 CSS 匹配通道（样式）；`id` 是 CSS `#id` 选择器（语义上唯一）；`tag` 是几何注册表通道（一名可注册多个实例，供 `instances`/`when`/查询/碰撞引用）。`<fragment>` 是 React 结构管道（多根快照的包装，不产生宿主实例）；`<group>` 是作者容器（真实实例，可带公共属性，可带名进分组）。无名 `<group>` 与 `<fragment>` 在 walk 语义上等价（都是透明容器），但前者可带 prop、后者是 `<>` 语法和 React 协调的落点。
 - 碰撞查询（构建期惰性标量，`{__q}` 通道）：`clearance(a,b)` 分离距离、`collides(a,b)` / `inside(of,[x,y,z])` → 1/0，`qadd/qsub/qmul/qdiv` 组合（JS 算术对查询对象无效）。Unknown（不支持的几何对）报构建错误——三值不许变成数字。引用是先定义后使用的 tag 名或内联元素。场景级扫描见 `SceneSession::collisions()` 与报告的 `collide` 行。
 
@@ -45,7 +47,7 @@ R3/R4 已完成（2026-10-06）：生成管线（`jsx_gen`、`jsx_to_urdf`）改
 ```jsx
 // dial.jsx
 export default function Dial(props) {
-  return <translate t={[props.x || 0, 0, 0]}><sphere r={0.5} /></translate>;
+  return <sphere r={0.5} t={[props.x || 0, 0, 0]} />;
 }
 // scene.jsx（入口）
 import Dial from './dial.jsx';
@@ -74,11 +76,19 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 
 **协调语义**：只有变化的实例被重建 —— 子组件自身 `setState` → 新建 0 / 更新 1；keyed 插入 → 新建 1、其余实例身份不变；卸载跑副作用清理。
 
-**确定性**：调度器的时间由宿主 `drain` 推进（微任务 + 定时器，有界轮数），"挂载 → 提交 → 副作用"在没有事件循环的情况下跑到不动点；同输入同输出（有测试）。
+**确定性**：调度器的时间由宿主 `drain` 推进（微任务 + 定时器 + boa promise 任务队列
+交织，两连静止为不动点，有界轮数），"挂载 → 提交 → 副作用"在没有事件循环的情况下
+跑到不动点；同输入同输出（有测试）。
 
 **"局部"的三段式落点**（帧间增量见 §6）：React 协调只重建变化的宿主实例；构建按子树版本整棵复用未变子树的产出对象；渲染只重追值可能变化的光线。三段都保守：拿不准就全量。
 
-**没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）与布局、portal 到 DOM。`lazy()` / 动态 `import()` 还需要一个模块加载 shim。
+**E 补齐（2026-10-08）**：`lazy()` + 动态 `import("./x.jsx")`（bundler 编期打包字面量
+模块，`Promise` 包命名空间；Suspense retry 由 drain 的 promise/JS 交织收敛）；
+优先级分层（离散事件走 DiscreteEventPriority 车道，`lanes()` 可观测）；DevTools
+握手（`injectIntoDevTools` + 记录型全局 hook，`devtools()` 可观测）。
+
+**没有落点**（不是 React 的限制，是本项目尚无宿主）：DOM（`document`/`window`）与布局、
+portal 到 DOM；DevTools 检查器协议本身是浏览器扩展后端的事。
 
 **多帧与事件（宿主驱动）**：`SceneSession` 让一个模块跨多帧存活。
 - **宿主输入（props 监听）**：输入放在 React context（`useContext(HostInput)`），宿主 `set_input(json)` 后 `update()`；只有消费者重渲染，其余子树 bailout。`render_frames` 每帧推 `IN.t`，示例场景 `animation.jsx` 首帧 create=13、之后每帧 **create=0 / update=8**。
@@ -91,7 +101,7 @@ export default (<scene><camera /><Dial x={2} /></scene>);
 | JSX | 语义 |
 | --- | --- |
 | `<Sphere r Plane Box Cylinder Circle Cone Torus Cyclide Ellipsoid>` | 图元（参数校验复用 scene_build builder）。网格/曲面（mesh/bezier/extrude/loft）与烘焙已随网格支持一并移除 |
-| `<Translate t>` `<Rotate axis angle>` `<Scale s>` `<Mirror axis>` | 修饰符（组合 4×4 ctx）。**等价 prop 形式**：`t` / `rotate=[ax,ay,az,angle]` / `scale` / `mirror`（顺序固定 T·R·S·Mirror） |
+| `<Translate t>` `<Rotate axis angle>` `<Scale s>` `<Mirror axis>` | **已删除**（2026-10-08）：变换只能写成 prop `t` / `rotate=[ax,ay,az,angle]` / `scale` / `mirror`（顺序固定 T·R·S·Mirror）；多子变换用 `<Group>`。写成元素在渲染 / CSG / 查询三条路径上报同一个「改用变换 prop」错 |
 | `<Material …>` | 透明兼容壳——材质键本来就可以带在任何元素上（内联 prop + 继承） |
 | `<Union/Difference/Intersection>` | CSG 块（≥2 子几何，纯解析图元的递归布尔） |
 | `<AmbientLight/DirectionalLight/PointLight/Camera/Background>` | 灯光与相机 |
@@ -122,10 +132,11 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 - CSS 验收（`test_css_*`，全集见 `docs/css-conformance.md` §8）：31 行选择器匹配表（复合多类 / 四类组合器 / `*` / `[attr]` / `:root` 根限定 / tag 大小写 / 组合链）、10 格级联矩阵（`#id` > `.class` > `tag` > `*`、源码顺序、`!important` 跨规则与压过内联普通声明）、值转换（`rgb`/`hsl`/具名/hex/八位 hex → opacity、百分比、`var()` 与 fallback、`--x` 别名、未知属性静默）、错误契约（`@` 规则、CSS 嵌套、伪类/伪元素、不支持的值与单位、缺失变量）、以及父规则声明向子几何的继承。
 - 图模型（`docs/kinematics-graph.md`）：`<Link>/<Pair>/<Anchor>` 全部元素可用；gear 推导 q（`0.5·0.6=0.3`）与对象归属正确；`<pair kind>` 与组件写法等价；反向声明的副（a/b 写反）生成树反向传播成立；报告含 pair/link/gear/cam/anchor 行。
 - 多 DOF 副的 `q` 数组（cylindrical `[qr,qp]`、spherical/planar 三个数）；`gen_pairs_showcase` 覆盖全部 8 种副 + 齿轮/凸轮高副，报告含全部 `type=` 与 gear/cam 行；再生的 `pairs.png` 与图模型迁移前**逐位一致**；闭链 `<closure>`（G5）：矩形四连杆闭式解（q1=q2=−π/2）1e-6 吻合 + 端点落点 + 同输入同解 + 错误路径。
-- 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错。
+- 错误：JSX 语法错带行号；未知元素报 `unknown primitive frob`（复用 scene_build 文本）；缺 `export default` 显式报错；场景级元素出现在几何位置报 `<tag> is not geometry`；CSG 子数与变换可逆性在宿主侧校验、CSG 子树里的材质/样式/分组/density 报错（§2「三条路径一致」「CSG 只有一个对象、一个材质」）。
 - 帧间增量（§6）：实例版本随创建 / props 更新 / 结构变更正确抬升（`react::tests::instance_versions_track_changes`）；复用构建与全量构建逐字段一致（`incremental_build_reuses_unchanged_subtrees`）；兄弟组合器样式表关闭复用（`incremental_build_disabled_by_sibling_rules`）；增量渲染与全帧渲染逐位一致（cga-gpu `test_incremental_*` ×5 + `session_render_incremental_is_bitexact`）；分组流向 `Object::group`（`group_prop_and_element`）。
 - 碰撞（`docs/collision-plan.md` C0–C4）：`clearance`/`collides`/`inside` 惰性查询解析正确（含 `qadd` 组合），Unknown 报构建错误；`CollisionScan` 同组免检 + 跨帧指纹缓存（动一个对象只重算含它的对）；报告 `collide` 行；画廊 8 场景 Yes/Unknown 计数基线 + animation 太阳球陷入地面 0.05 的语义抽查；接触点解析断言与标记渲染金标（C2）；螺旋 CCD 闭式验证与关节行程扫描（C3/C4）。
-- 公共属性（§2）：变换/tag prop 与修饰符/`<tag>` 元素逐字段等价（含 CSG 子树与注册框架），固定顺序 T·R·S·Mirror，非几何元素带变换 prop 报错，容器带材质 prop 生效，`<material>`/无名 `<group>` 是透明容器，带 `tag` prop 的子树在增量构建里标记为不纯。
+- 公共属性（§2）：变换/tag prop 是唯一写法（修饰符元素已删除，报错带替代写法），与 `<group>` 包裹逐字段等价（含 CSG 子树与注册框架），固定顺序 T·R·S·Mirror，非几何元素带变换 prop 报错，容器带材质 prop 生效，`<material>`/无名 `<group>` 是透明容器，带 `tag` prop 的子树在增量构建里标记为不纯。
+- 三路径一致（§2）：`csg_child_count_checked_on_every_path`（渲染 / 嵌套 CSG / 查询三处都先拦，`union` 不开例外）、`containers_consistent_across_walk_csg_query`（`<material>`/`<tag>`/`<when>`/`<>` 在 CSG 与查询里同样透明、注册、条件展开）、`composite_elements_usable_as_query_target`（`<instances>` 单实例取几何、多实例报错、`<drill>` 取 cutter）、`scene_level_element_in_geometry_position_errors`、`singular_transform_errors_instead_of_panicking`（单分量 0 / 标量 0 / 嵌套组合后才奇异，覆盖渲染、CSG、查询）、`lazy_query_missing_argument_is_error_not_panic`、`csg_child_style_channels_error_instead_of_dropping`（材质 prop / `<material>` 带材质 / `class` / `group` / `density` 落到 CSG 子树报错，写在 CSG 元素上则合法——画廊 9 场景无一处受影响）。
 - CLI：`render_jsx examples/jsx/orbit.jsx out.png 320 240 2` 出图正常；`render_frames` 逐帧动画走增量构建 + 增量渲染并打印每帧统计。
 
 ## 6. 帧间增量：版本化、子树复用与像素级增量渲染

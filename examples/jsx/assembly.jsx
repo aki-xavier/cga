@@ -7,9 +7,7 @@ const [off] = solve([0.5], [v => eq(2 * v[0], 1.6), v => le(v[0], 1.9)]);
 
 // 几何值绑定: 板; 派生钻孔 through= 取目标包围盒
 const plate = (
-  <translate t={[0, 0.2, 0]}>
-    <box s={[3.2, 0.4, 1.6]} />
-  </translate>
+  <box s={[3.2, 0.4, 1.6]} t={[0, 0.2, 0]} />
 );
 
 export default (
@@ -22,26 +20,24 @@ export default (
     <difference class="plate">
       {plate}
       {[-1, 1].map((s) => (
-        <translate t={[s * off, 0, 0]}>
-          <drill r={0.16} through={plate} axis={1} />
-        </translate>
+        <drill r={0.16} through={plate} axis={1} t={[s * off, 0, 0]} />
       ))}
     </difference>
 
     {[-1, 1].map((s) => (
       <tag name="post">
-        <translate t={vadd(face(plate, '+y'), [s * (off + 0.55), 0.5, 0])}>
-          <rotate axis={[1, 0, 0]} angle={-Math.PI / 2}>
-            <cylinder r={0.12} h={1.0} class="post" />
-          </rotate>
-        </translate>
+        <cylinder
+          r={0.12}
+          h={1.0}
+          class="post"
+          rotate={[1, 0, 0, -Math.PI / 2]}
+          t={vadd(face(plate, '+y'), [s * (off + 0.55), 0.5, 0])}
+        />
       </tag>
     ))}
 
     <when of="post" count={2}>
-      <translate t={vadd(center('post'), [0, 0.62, 0])}>
-        <box s={[3.4, 0.24, 0.5]} class="beam" />
-      </translate>
+      <box s={[3.4, 0.24, 0.5]} class="beam" t={vadd(center('post'), [0, 0.62, 0])} />
     </when>
   </scene>
 );

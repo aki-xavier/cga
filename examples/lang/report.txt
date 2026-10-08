@@ -86,4 +86,54 @@ object 39 translate([0.62,3.6,0]) material(color=0xC8A24A, roughness=0.35, metal
 bounds 39 lo=[0.53,3.15,-0.09] hi=[0.71,4.05,0.09]
 object 40 material(color=0x3A4046, roughness=0.9, metalness=0, emissive=0x000000, opacity=1, ior=1.5, absorption=0) plane(n=[0,1,0], d=0);
 bounds 40 none
+collide 0 1 unknown sep=unknown
+collide 0 2 unknown sep=unknown
+collide 0 4 unknown sep=unknown
+collide 0 6 unknown sep=unknown
+collide 0 8 unknown sep=unknown
+collide 0 10 unknown sep=unknown
+collide 0 12 unknown sep=unknown
+collide 0 14 unknown sep=unknown
+collide 0 16 unknown sep=unknown
+collide 0 40 unknown sep=unknown
+collide 1 2 unknown sep=unknown
+collide 1 4 unknown sep=unknown
+collide 1 6 unknown sep=unknown
+collide 1 8 unknown sep=unknown
+collide 1 10 unknown sep=unknown
+collide 1 12 unknown sep=unknown
+collide 1 14 unknown sep=unknown
+collide 1 16 unknown sep=unknown
+collide 1 18 unknown sep=unknown
+collide 1 19 unknown sep=unknown
+collide 1 40 unknown sep=unknown
+collide 2 3 unknown sep=unknown
+collide 4 5 unknown sep=unknown
+collide 8 9 unknown sep=unknown
+collide 10 11 unknown sep=unknown
+collide 12 13 unknown sep=unknown
+collide 14 15 unknown sep=unknown
+collide 16 17 unknown sep=unknown
+collide 18 19 unknown sep=unknown
+collide 18 20 unknown sep=unknown
+collide 18 37 unknown sep=unknown
+collide 18 38 unknown sep=unknown
+collide 18 39 unknown sep=unknown
+collide 20 21 unknown sep=unknown
+collide 20 22 unknown sep=unknown
+collide 20 23 unknown sep=unknown
+collide 20 24 unknown sep=unknown
+collide 20 25 unknown sep=unknown
+collide 20 26 unknown sep=unknown
+collide 20 27 unknown sep=unknown
+collide 20 28 unknown sep=unknown
+collide 20 29 unknown sep=unknown
+collide 20 30 unknown sep=unknown
+collide 20 31 unknown sep=unknown
+collide 20 32 unknown sep=unknown
+collide 20 33 unknown sep=unknown
+collide 20 34 unknown sep=unknown
+collide 20 35 unknown sep=unknown
+collide 20 36 unknown sep=unknown
+collide 37 38 unknown sep=unknown
 summary objects=41 lights=3 no_bounds=1 bbox_lo=[-3.5,-2.3,-3.5] bbox_hi=[3.5,5.55,3.5]

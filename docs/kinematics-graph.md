@@ -94,6 +94,17 @@
   验收：矩形四连杆闭式解（q1=q2=−π/2）1e-6 吻合 + 摇杆端点落点断言 +
   同输入同解 + 错误路径（未知引用/无自由 q/装不上）+ 报告 closure 行。
 
+- **G5+ ✓（2026-10-08，空间/多自由度闭链）**：闭链自由变量 = 路径上未固定 pair
+  的全部 q 分量（圆柱副/球副/平面副按分量展开，旧「不是 1-DOF 另行立项」拒绝
+  删除）。雅可比从 FD 升级为 **B 螺旋列的解析导数**（`screws_world_at`：
+  d(pa)=w×pa+v，d(û)=w×û，驱动侧由生成树子树关系定）；`lm_solve_j`（解析）与
+  `lm_solve`（FD）并存，FD 对拍为裁判（`closure_jacobian_fd_check` 6×5 逐元素）。
+  `guess` prop 支持数组（分量数 = 副自由度数）。`closure_residual` /
+  `closure_jacobian` 抽出为 pub(crate) 可测单元。闭式验证：圆柱副+球副空间闭环
+  零位形天然闭合、偏移 guess 收回零（1e-6）、秩 5 钉死（mobility dof 0）；
+  四连杆（1-DOF）结果与 FD 版逐位一致。`solved` 名单：1-DOF 裸名、多自由度
+  `name[i]`。
+
 <details><summary>原计划阶段表（留档）</summary>
 
 | 阶段 | 内容 | 验收 |

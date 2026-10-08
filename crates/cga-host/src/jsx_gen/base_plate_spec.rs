@@ -33,12 +33,12 @@ impl BasePlateSpec {
         for i in 0..4 {
             let a = i as f64 * std::f64::consts::PI / 2.0 + std::f64::consts::PI / 4.0;
             out.push_str(&format!(
-                "        <Rotate axis={{[0.0, 1.0, 0.0]}} angle={{ {} }}><Translate t={{[{}, 0.0, 0.0]}}><Rotate axis={{[1.0, 0.0, 0.0]}} angle={{ {} }}><Cone r={{ {} }} h={{ {} }} /></Rotate></Translate></Rotate>\n",
+                "        <Group rotate={{[0.0, 1.0, 0.0, {}]}}><Group t={{[{}, 0.0, 0.0]}}><Cone r={{ {} }} h={{ {} }} rotate={{[1.0, 0.0, 0.0, {}]}} /></Group></Group>\n",
                 fmt_num(a),
                 fmt_num(self.hole_offset),
-                fmt_num(std::f64::consts::PI / 2.0),
                 fmt_num(self.sink_r),
-                fmt_num(self.sink_h)
+                fmt_num(self.sink_h),
+                fmt_num(std::f64::consts::PI / 2.0)
             ));
         }
         out.push_str("      </Difference>\n");

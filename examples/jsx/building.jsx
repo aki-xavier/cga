@@ -8,39 +8,31 @@ const Storey = ({ y, width, depth, floorH, cols, bay }) => {
   const js = Array.from({ length: cols }, (_, j) => j);
   return (
     <scene>
-      <translate t={[0, y, 0]}>
-        <box s={[width, slabT, depth]} class="slab" />
-      </translate>
+      <box s={[width, slabT, depth]} class="slab" t={[0, y, 0]} />
       {[-1, 1].map((side) => {
         const z = (side * depth) / 2;
         return (
           <scene>
-            <translate t={[0, y + floorH / 2, z]}>
-              <difference class="brick">
-                <box s={[width, floorH, 0.24]} />
-                {js.map((j) => (
-                  <translate t={[-width / 2 + (j + 0.5) * bay, 0.15, 0]}>
-                    <box s={[winW, winH, 0.6]} />
-                  </translate>
-                ))}
-              </difference>
-            </translate>
+            <difference class="brick" t={[0, y + floorH / 2, z]}>
+              <box s={[width, floorH, 0.24]} />
+              {js.map((j) => (
+                <box s={[winW, winH, 0.6]} t={[-width / 2 + (j + 0.5) * bay, 0.15, 0]} />
+              ))}
+            </difference>
             {js.map((j) => (
-              <translate t={[-width / 2 + (j + 0.5) * bay, y + floorH / 2 + 0.15, z]}>
-                <box s={[winW - 0.1, winH - 0.1, 0.06]} class="glass" />
-              </translate>
+              <box
+                s={[winW - 0.1, winH - 0.1, 0.06]}
+                class="glass"
+                t={[-width / 2 + (j + 0.5) * bay, y + floorH / 2 + 0.15, z]}
+              />
             ))}
           </scene>
         );
       })}
       {Array.from({ length: cols + 1 }, (_, j) => -width / 2 + j * bay).map((x) => (
         <scene>
-          <translate t={[x, y + floorH / 2, depth / 2]}>
-            <box s={[0.45, floorH, 0.45]} class="slab" />
-          </translate>
-          <translate t={[x, y + floorH / 2, -depth / 2]}>
-            <box s={[0.45, floorH, 0.45]} class="slab" />
-          </translate>
+          <box s={[0.45, floorH, 0.45]} class="slab" t={[x, y + floorH / 2, depth / 2]} />
+          <box s={[0.45, floorH, 0.45]} class="slab" t={[x, y + floorH / 2, -depth / 2]} />
         </scene>
       ))}
     </scene>
@@ -49,31 +41,17 @@ const Storey = ({ y, width, depth, floorH, cols, bay }) => {
 
 const Parapet = ({ top, width, depth }) => (
   <scene>
-    <translate t={[0, top + 0.3, depth / 2 - 0.15]}>
-      <box s={[width, 0.6, 0.3]} class="slab" />
-    </translate>
-    <translate t={[0, top + 0.3, -depth / 2 + 0.15]}>
-      <box s={[width, 0.6, 0.3]} class="slab" />
-    </translate>
-    <translate t={[width / 2 - 0.15, top + 0.3, 0]}>
-      <box s={[0.3, 0.6, depth]} class="slab" />
-    </translate>
-    <translate t={[-width / 2 + 0.15, top + 0.3, 0]}>
-      <box s={[0.3, 0.6, depth]} class="slab" />
-    </translate>
+    <box s={[width, 0.6, 0.3]} class="slab" t={[0, top + 0.3, depth / 2 - 0.15]} />
+    <box s={[width, 0.6, 0.3]} class="slab" t={[0, top + 0.3, -depth / 2 + 0.15]} />
+    <box s={[0.3, 0.6, depth]} class="slab" t={[width / 2 - 0.15, top + 0.3, 0]} />
+    <box s={[0.3, 0.6, depth]} class="slab" t={[-width / 2 + 0.15, top + 0.3, 0]} />
   </scene>
 );
 
 const Tree = ({ x, z, s = 1.0 }) => (
   <scene>
-    <translate t={[x, 0.9 * s, z]}>
-      <rotate axis={[1, 0, 0]} angle={-Math.PI / 2}>
-        <cylinder r={0.12 * s} h={1.8 * s} class="trunk" />
-      </rotate>
-    </translate>
-    <translate t={[x, 2.1 * s, z]}>
-      <sphere r={0.9 * s} class="crown" />
-    </translate>
+    <cylinder r={0.12 * s} h={1.8 * s} class="trunk" rotate={[1, 0, 0, -Math.PI / 2]} t={[x, 0.9 * s, z]} />
+    <sphere r={0.9 * s} class="crown" t={[x, 2.1 * s, z]} />
   </scene>
 );
 
@@ -91,15 +69,9 @@ export default (
       <Storey y={i * floorH} width={width} depth={depth} floorH={floorH} cols={cols} bay={bay} />
     ))}
     <Parapet top={floors * floorH} width={width} depth={depth} />
-    <translate t={[width / 4, floors * floorH + 0.9, 0]}>
-      <box s={[2.2, 1.8, 3.0]} class="penthouse" />
-    </translate>
-    <translate t={[0, floorH + 0.1, depth / 2 + 1.0]}>
-      <box s={[5.0, 0.15, 2.0]} class="canopy" />
-    </translate>
-    <translate t={[0, floorH / 2, depth / 2 + 0.4]}>
-      <box s={[3.2, floorH - 0.6, 0.8]} class="entrance" />
-    </translate>
+    <box s={[2.2, 1.8, 3.0]} class="penthouse" t={[width / 4, floors * floorH + 0.9, 0]} />
+    <box s={[5.0, 0.15, 2.0]} class="canopy" t={[0, floorH + 0.1, depth / 2 + 1.0]} />
+    <box s={[3.2, floorH - 0.6, 0.8]} class="entrance" t={[0, floorH / 2, depth / 2 + 0.4]} />
     <plane n={[0, 1, 0]} d={0} class="ground" />
     <Tree x={9.5} z={4.0} />
     <Tree x={9.5} z={-2.0} s={0.85} />

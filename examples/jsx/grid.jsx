@@ -2,9 +2,7 @@
 import './grid.css';
 
 const Bead = ({ x, z, r = 0.35 }) => (
-  <translate t={[x, r, z]}>
-    <sphere r={r} class="bead" />
-  </translate>
+  <sphere r={r} class="bead" t={[x, r, z]} />
 );
 
 export default (

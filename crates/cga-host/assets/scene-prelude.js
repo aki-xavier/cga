@@ -3,6 +3,8 @@ const h = React.createElement;
 const Fragment = React.Fragment;
 
 const Sphere='sphere',Plane='plane',Cylinder='cylinder',Box='box',Circle='circle',Cone='cone',
+// Translate/Rotate/Scale/Mirror 映射保留：修饰符元素已删除，运行时对它们给
+// 统一的「改用变换 prop」报错——保留别名才报得友好（同 Joint='joint'）。
 Torus='torus',Cyclide='cyclide',Ellipsoid='ellipsoid',Translate='translate',Rotate='rotate',Scale='scale',Mirror='mirror',
 Material='material',Union='union',Difference='difference',Intersection='intersection',
 AmbientLight='ambient_light',DirectionalLight='directional_light',PointLight='point_light',
