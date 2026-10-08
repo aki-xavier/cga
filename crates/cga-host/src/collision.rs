@@ -32,10 +32,18 @@ pub struct ContactHit {
 #[derive(Default)]
 pub struct CollisionScan {
     cache: HashMap<(u64, u64), (Hit, Option<f64>)>,
+    /// D1：Yes 对的接触解缓存（同一指纹键）；接触解比 probe 贵得多，是帧间大头。
+    contact_cache: HashMap<(u64, u64), Option<Vec<Contact>>>,
     /// 上次 scan 的缓存命中数（测试/调优用）。
     pub cache_hits: usize,
     /// 上次 scan 的窄相计算数。
     pub computed: usize,
+    /// 上次 scan_contacts 的接触解缓存命中数。
+    pub contact_cache_hits: usize,
+}
+
+fn fingerprints(objs: &[Object]) -> Vec<u64> {
+    objs.iter().map(|o| fp(&(o.motor(), &o.geometry))).collect()
 }
 
 fn fp<T: std::fmt::Debug>(x: &T) -> u64 {
@@ -58,7 +66,7 @@ impl CollisionScan {
         self.cache_hits = 0;
         self.computed = 0;
         let objs = &scene.objects;
-        let fps: Vec<u64> = objs.iter().map(|o| fp(&(o.motor(), &o.geometry))).collect();
+        let fps = fingerprints(objs);
         let mut out = Vec::new();
         for i in 0..objs.len() {
             for j in i + 1..objs.len() {
@@ -93,21 +101,34 @@ impl CollisionScan {
     }
 
     /// 扫描并对 Yes 对解接触点（C2）。接触解只跑在接触对上；Unknown 对的
-    /// `contacts` 为 None。
+    /// `contacts` 为 None。接触解按同一指纹键帧间缓存（D1）。
     pub fn scan_contacts(&mut self, scene: &Scene) -> Vec<ContactHit> {
+        self.contact_cache_hits = 0;
+        let fps = fingerprints(&scene.objects);
         let hits = self.scan(scene);
         hits.into_iter()
             .map(|h| {
                 let contacts = match h.hit {
                     Hit::Yes => {
-                        let wa = scene.objects[h.a].motor().to_matrix();
-                        let wb = scene.objects[h.b].motor().to_matrix();
-                        cga_collision::contacts(
-                            &scene.objects[h.a].geometry,
-                            wa,
-                            &scene.objects[h.b].geometry,
-                            wb,
-                        )
+                        let key = (fps[h.a], fps[h.b]);
+                        match self.contact_cache.get(&key) {
+                            Some(c) => {
+                                self.contact_cache_hits += 1;
+                                c.clone()
+                            }
+                            None => {
+                                let wa = scene.objects[h.a].motor().to_matrix();
+                                let wb = scene.objects[h.b].motor().to_matrix();
+                                let c = cga_collision::contacts(
+                                    &scene.objects[h.a].geometry,
+                                    wa,
+                                    &scene.objects[h.b].geometry,
+                                    wb,
+                                );
+                                self.contact_cache.insert(key, c.clone());
+                                c
+                            }
+                        }
                     }
                     Hit::No => Some(Vec::new()),
                     Hit::Unknown => None,
@@ -122,18 +143,25 @@ impl CollisionScan {
     }
 }
 
-/// 关节行程干涉扫描（C4）：joint 的 q 从行程低端扫到高端（continuous 扫一整圈），
+/// 关节行程干涉扫描（C4 + D2）：joint 的 q 从行程低端扫到高端（continuous 扫一整圈），
 /// 其连杆（含嵌套子关节的 meshes，刚体随动）对场景其余对象逐一求螺旋 TOI。
 ///
-/// v1 边界：只扫 1-DOF 关节（revolute/continuous/prismatic/helical）；其余关节
-/// **冻结**（齿轮/凸轮耦合的联动扫描另行立项）；多 DOF / fixed / 无 limit 的
-/// revolute → `skipped` 注明原因。
+/// D2 联动：被扫 pair 经 gear 关系（q_b = ratio·q_a + offset）带动的 pair 一并随动，
+/// 各自子树按自己的螺旋走闭式 TOI（兄弟分支型联动精确）。边界（诚实拒绝）：
+/// - 只扫 1-DOF 关节（revolute/continuous/prismatic/helical）；
+/// - cam 联动 → `skipped`（从动 q 非线性，不是螺旋）；
+/// - 嵌套联动（一个随动 pair 在另一个的子树里：复合运动不是单螺旋）→ `skipped`；
+/// - 随动对之间互碰：同轴 → 相对螺旋闭式精确；不同轴 → 间隔 + Lipschitz 速度上界
+///   认证不碰，认证不了进 `unknown`（绝不假装）。
 pub struct JointSweepOutcome {
     pub joint: String,
     /// 最早确切干涉：(对象下标, q*)。`q*` 在行程区间内。
+    /// 随动对互碰时下标是后一个 mesh。
     pub first: Option<(usize, f64)>,
     /// 无法判定的对象（三值诚实）。
     pub unknown: Vec<usize>,
+    /// 随动的 pair 名（gear 联动，不含被扫 pair 本身；D2）。
+    pub coupled: Vec<String>,
     /// 非 None = 未执行（原因）。
     pub skipped: Option<String>,
 }
@@ -151,6 +179,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
             joint: joint_name.to_string(),
             first: None,
             unknown: Vec::new(),
+            coupled: Vec::new(),
             skipped: Some("no such pair".to_string()),
         };
     };
@@ -158,6 +187,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         joint: joint_name.to_string(),
         first: None,
         unknown: Vec::new(),
+        coupled: Vec::new(),
         skipped: Some(reason.to_string()),
     };
     if !j.kind.is_1dof() {
@@ -175,101 +205,330 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         return skip("empty limit range");
     }
 
-    // 关节 frame（运动前）的世界矩阵 = fa_world（F_a 的世界位姿，求解器已给）。
     use crate::scene_build::{joint_motion, mat4_inv};
     use cga_core::mat4_mul;
-    let pitch = j.pitch.unwrap_or(0.0);
-    let mq = joint_motion(&j.kind, j.axis, &j.q, pitch);
-    let f = j.fa_world;
-    let o = [f[3], f[7], f[11]];
-    let axis_w = {
-        let a = [
-            f[0] * j.axis[0] + f[1] * j.axis[1] + f[2] * j.axis[2],
-            f[4] * j.axis[0] + f[5] * j.axis[1] + f[6] * j.axis[2],
-            f[8] * j.axis[0] + f[9] * j.axis[1] + f[10] * j.axis[2],
-        ];
-        let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-        if n < 1e-12 {
-            return skip("degenerate pair axis");
-        }
-        [a[0] / n, a[1] / n, a[2] / n]
-    };
+    let rate_x = hi - lo;
 
-    // q(t) = lo + t·(hi−lo) 的物理螺旋速度（sweep_toi 要物理量纲）。
-    let rate = hi - lo;
-    let (w, v) = match j.kind {
-        crate::scene_build::JointKind::Prismatic => ([0.0; 3], v3scale(axis_w, rate)),
-        _ => {
-            let w = v3scale(axis_w, rate);
-            // ṗ = ω×(p−o) ⇒ v = o×ω；helical 再加节距平移 pitch·rate 沿轴。
-            let mut v = v3cross(o, w);
-            if j.kind == crate::scene_build::JointKind::Helical {
-                v = v3add(v, v3scale(axis_w, pitch * rate));
+    // ---- D2: gear 联动集合（q_b = ratio·q_a + offset → dq_b = ratio·dq_a 的 BFS）----
+    let x_idx = kin
+        .pairs
+        .iter()
+        .position(|p| p.name.as_deref() == Some(joint_name))
+        .unwrap();
+    let mut deltas: Vec<(usize, f64)> = vec![(x_idx, 1.0)]; // (pair 下标, dq_p/dq_x)
+    let mut qi = 0;
+    while qi < deltas.len() {
+        let (pi, di) = deltas[qi];
+        qi += 1;
+        let pname = kin.pairs[pi].name.clone().unwrap_or_default();
+        for g in &kin.gears {
+            let (partner, d) = if g.a == pname {
+                (g.b.clone(), di * g.ratio)
+            } else if g.b == pname {
+                if g.ratio.abs() < 1e-12 {
+                    return skip("gear ratio=0：被扫 pair 被锁死在 offset");
+                }
+                (g.a.clone(), di / g.ratio)
+            } else {
+                continue;
+            };
+            let Some(pj) = kin
+                .pairs
+                .iter()
+                .position(|p| p.name.as_deref() == Some(partner.as_str()))
+            else {
+                continue;
+            };
+            if let Some(&(_, d0)) = deltas.iter().find(|&&(k, _)| k == pj) {
+                if (d0 - d).abs() > 1e-9 {
+                    return skip("gear 环路比率冲突");
+                }
+                continue;
             }
-            (w, v)
+            deltas.push((pj, d));
         }
+    }
+    // |Δ|≈0 的从动端锁在 offset，不动（ratio=0 的正向情形）
+    deltas.retain(|&(_, d)| d.abs() > 1e-12);
+    for &(pi, _) in &deltas {
+        if !kin.pairs[pi].kind.is_1dof() {
+            return skip("gear 联动的 pair 不是 1-DOF");
+        }
+    }
+    // cam 边界：cam 的 a/b 是 LINK 名；关联 link 落在任一随动子树里 → 从动 q
+    // 非线性（接触解），不是螺旋 → 拒绝
+    let subtree_links = |root: &str| -> Vec<String> {
+        let mut links: Vec<String> = vec![root.to_string()];
+        let mut i = 0;
+        while i < links.len() {
+            let name = links[i].clone();
+            for p in kin.pairs.iter().filter(|p| p.tree_up == name) {
+                links.push(p.tree_down.clone());
+            }
+            i += 1;
+        }
+        links
     };
-    let xi = [w[0], w[1], w[2], v[0], v[1], v[2]];
-
-    // 运动集合：tree_down 子树的全部连杆的 meshes（刚体随动）。
-    let mut member_links: Vec<&str> = vec![j.tree_down.as_str()];
-    let mut i = 0;
-    while i < member_links.len() {
-        let name = member_links[i];
-        for p in kin.pairs.iter().filter(|p| p.tree_up == name) {
-            member_links.push(p.tree_down.as_str());
-        }
-        i += 1;
-    }
-    let mut members: Vec<usize> = Vec::new();
-    for l in kin.links.iter() {
-        if member_links.contains(&l.name.as_str()) {
-            members.extend_from_slice(&l.meshes);
+    for c in &kin.cams {
+        for &(pi, _) in &deltas {
+            let links = subtree_links(&kin.pairs[pi].tree_down);
+            if links.contains(&c.a) || links.contains(&c.b) {
+                return skip("cam 联动的行程扫描不支持（从动 q 非线性）");
+            }
         }
     }
+    // 嵌套检查：任一随动 pair 在另一个的子树里 → 复合运动非单螺旋，拒绝
+    let moving_names: Vec<String> = deltas
+        .iter()
+        .filter_map(|&(pi, _)| kin.pairs[pi].name.clone())
+        .collect();
+    let parent_pair =
+        |link: &str| -> Option<usize> { kin.pairs.iter().position(|p| p.tree_down == link) };
+    let is_ancestor_pair = |anc: usize, desc: usize| -> bool {
+        let mut cur = kin.pairs[desc].tree_up.clone();
+        for _ in 0..1000 {
+            let Some(pp) = parent_pair(&cur) else {
+                return false;
+            };
+            if pp == anc {
+                return true;
+            }
+            cur = kin.pairs[pp].tree_up.clone();
+        }
+        false
+    };
+    for a in 0..deltas.len() {
+        for b in 0..deltas.len() {
+            if a != b && is_ancestor_pair(deltas[a].0, deltas[b].0) {
+                return skip("嵌套 gear 联动：复合运动不是单螺旋，无法闭式 TOI");
+            }
+        }
+    }
 
-    // 各 mesh 从当前姿态退到 q=lo：wa_lo = (F·M(lo)·M(q)⁻¹·F⁻¹)·wa_cur。
-    let m_lo = joint_motion(&j.kind, j.axis, &[lo], pitch);
-    let delta_lo = mat4_mul(f, mat4_mul(mat4_mul(m_lo, mat4_inv(mq)), mat4_inv(f)));
+    // ---- 每个随动 pair：世界螺旋 + 退位矩阵 + 子树 meshes ----
+    struct Moving {
+        o: [f64; 3],      // 轴上一点（世界，当前姿态）
+        dir: [f64; 3],    // 单位轴（世界）
+        xi: [f64; 6],     // 物理螺旋 dq/dt（t∈[0,1] 映射 q_x = lo + t·rate_x）
+        delta: [f64; 16], // 当前姿态 → q(t=0) 的退位
+        meshes: Vec<usize>,
+    }
+    let subtree_meshes = |root: &str| -> Vec<usize> {
+        let mut links: Vec<&str> = vec![root];
+        let mut i = 0;
+        while i < links.len() {
+            let name = links[i];
+            for p in kin.pairs.iter().filter(|p| p.tree_up == name) {
+                links.push(p.tree_down.as_str());
+            }
+            i += 1;
+        }
+        let mut out = Vec::new();
+        for l in kin.links.iter() {
+            if links.contains(&l.name.as_str()) {
+                out.extend_from_slice(&l.meshes);
+            }
+        }
+        out
+    };
+    let mut movings: Vec<Moving> = Vec::new();
+    for &(pi, dp) in &deltas {
+        let p = &kin.pairs[pi];
+        let pitch = p.pitch.unwrap_or(0.0);
+        let f = p.fa_world;
+        let o = [f[3], f[7], f[11]];
+        let dir = {
+            let a = [
+                f[0] * p.axis[0] + f[1] * p.axis[1] + f[2] * p.axis[2],
+                f[4] * p.axis[0] + f[5] * p.axis[1] + f[6] * p.axis[2],
+                f[8] * p.axis[0] + f[9] * p.axis[1] + f[10] * p.axis[2],
+            ];
+            let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            if n < 1e-12 {
+                return skip("degenerate pair axis");
+            }
+            [a[0] / n, a[1] / n, a[2] / n]
+        };
+        let rate_p = dp * rate_x;
+        let (w, v) = match p.kind {
+            crate::scene_build::JointKind::Prismatic => ([0.0; 3], v3scale(dir, rate_p)),
+            _ => {
+                let w = v3scale(dir, rate_p);
+                // ṗ = ω×(p−o) ⇒ v = o×ω；helical 再加节距平移 pitch·rate 沿轴。
+                let mut v = v3cross(o, w);
+                if p.kind == crate::scene_build::JointKind::Helical {
+                    v = v3add(v, v3scale(dir, pitch * rate_p));
+                }
+                (w, v)
+            }
+        };
+        // q_p(t=0) = q_p_cur + Δp·(lo − q_x_cur)
+        let q_p0 = p.q.first().copied().unwrap_or(0.0) + dp * (lo - q_cur);
+        let mq = joint_motion(&p.kind, p.axis, &p.q, pitch);
+        let m0 = joint_motion(&p.kind, p.axis, &[q_p0], pitch);
+        let delta = mat4_mul(f, mat4_mul(mat4_mul(m0, mat4_inv(mq)), mat4_inv(f)));
+        movings.push(Moving {
+            o,
+            dir,
+            xi: [w[0], w[1], w[2], v[0], v[1], v[2]],
+            delta,
+            meshes: subtree_meshes(&p.tree_down),
+        });
+    }
+
+    let mut members: Vec<usize> = movings
+        .iter()
+        .flat_map(|m| m.meshes.iter().copied())
+        .collect();
+    members.sort_unstable();
+    members.dedup();
+
     let mut out = JointSweepOutcome {
         joint: joint_name.to_string(),
         first: None,
         unknown: Vec::new(),
+        coupled: moving_names[1..].to_vec(),
         skipped: None,
     };
+    let mut note = |out: &mut JointSweepOutcome, idx: usize, t: f64| {
+        let q = lo + t * rate_x;
+        if out.first.is_none_or(|(_, bq)| q < bq) {
+            out.first = Some((idx, q));
+        }
+    };
     let scene = &run.scene;
-    for &mi in &members {
-        let obj = &scene.objects[mi];
-        let wa = mat4_mul(delta_lo, obj.motor().to_matrix());
-        for (k, other) in scene.objects.iter().enumerate() {
-            if members.contains(&k) {
-                continue; // 同一运动集合：刚体随动，不算干涉
-            }
-            let (gi, gk) = (obj.group, other.group);
-            if gi != 0 && gi == gk {
-                continue; // 同组免检
-            }
-            let (h, t) = cga_collision::sweep_toi(
-                xi,
-                &obj.geometry,
-                wa,
-                &other.geometry,
-                other.motor().to_matrix(),
-                1.0,
-            );
-            match h {
-                Hit::Yes => {
-                    let q = lo + t.unwrap_or(0.0) * rate;
-                    if out.first.is_none_or(|(_, bq)| q < bq) {
-                        out.first = Some((k, q));
-                    }
+
+    // ---- 随动 vs 静止：每个 mesh 按自己驱动 pair 的螺旋走闭式 TOI ----
+    for mv in &movings {
+        for &mi in &mv.meshes {
+            let obj = &scene.objects[mi];
+            let wa = mat4_mul(mv.delta, obj.motor().to_matrix());
+            for (k, other) in scene.objects.iter().enumerate() {
+                if members.contains(&k) {
+                    continue; // 运动集合内部另行处理（见下）
                 }
-                Hit::Unknown => out.unknown.push(k),
-                Hit::No => {}
+                let (gi, gk) = (obj.group, other.group);
+                if gi != 0 && gi == gk {
+                    continue; // 同组免检
+                }
+                let (h, t) = cga_collision::sweep_toi(
+                    mv.xi,
+                    &obj.geometry,
+                    wa,
+                    &other.geometry,
+                    other.motor().to_matrix(),
+                    1.0,
+                );
+                match h {
+                    Hit::Yes => note(&mut out, k, t.unwrap_or(0.0)),
+                    Hit::Unknown => out.unknown.push(k),
+                    Hit::No => {}
+                }
             }
         }
     }
+
+    // ---- 随动 vs 随动：同轴 → 相对螺旋闭式；不同轴 → 认证不碰或 Unknown ----
+    for a in 0..movings.len() {
+        for b in a + 1..movings.len() {
+            let (ma, mb) = (&movings[a], &movings[b]);
+            let coaxial = {
+                let dp = ma.dir[0] * mb.dir[0] + ma.dir[1] * mb.dir[1] + ma.dir[2] * mb.dir[2];
+                let oo = [mb.o[0] - ma.o[0], mb.o[1] - ma.o[1], mb.o[2] - ma.o[2]];
+                let cr = v3cross(oo, ma.dir);
+                dp.abs() > 1.0 - 1e-9 && cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2] < 1e-12
+            };
+            let xi_rel = [
+                ma.xi[0] - mb.xi[0],
+                ma.xi[1] - mb.xi[1],
+                ma.xi[2] - mb.xi[2],
+                ma.xi[3] - mb.xi[3],
+                ma.xi[4] - mb.xi[4],
+                ma.xi[5] - mb.xi[5],
+            ];
+            for &mi in &ma.meshes {
+                for &mj in &mb.meshes {
+                    let (oa, ob) = (&scene.objects[mi], &scene.objects[mj]);
+                    let (gi, gj) = (oa.group, ob.group);
+                    if gi != 0 && gi == gj {
+                        continue;
+                    }
+                    let wa = mat4_mul(ma.delta, oa.motor().to_matrix());
+                    let wb = mat4_mul(mb.delta, ob.motor().to_matrix());
+                    if coaxial {
+                        let (h, t) = cga_collision::sweep_toi(
+                            xi_rel,
+                            &oa.geometry,
+                            wa,
+                            &ob.geometry,
+                            wb,
+                            1.0,
+                        );
+                        match h {
+                            Hit::Yes => note(&mut out, mj, t.unwrap_or(0.0)),
+                            Hit::Unknown => {
+                                out.unknown.push(mi);
+                                out.unknown.push(mj);
+                            }
+                            Hit::No => {}
+                        }
+                    } else {
+                        // 保守认证不碰：t=0 的间隔 > 全程相对接近速度上界
+                        match probe(&oa.geometry, wa, &ob.geometry, wb) {
+                            (Hit::Yes, _) => note(&mut out, mj, 0.0),
+                            (Hit::No, Some(d0)) => {
+                                let sa = speed_bound(ma.o, ma.xi, oa, wa);
+                                let sb = speed_bound(mb.o, mb.xi, ob, wb);
+                                if !(d0 > sa + sb) {
+                                    out.unknown.push(mi);
+                                    out.unknown.push(mj);
+                                }
+                            }
+                            _ => {
+                                out.unknown.push(mi);
+                                out.unknown.push(mj);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.unknown.sort_unstable();
+    out.unknown.dedup();
     out
+}
+
+/// 螺旋运动下物体点的全程速度上界（保守认证用）：|v| + |ω|·(轴到中心距 + 局部包围半径)。
+/// 无局部包围盒 → ∞（认证不了）。
+fn speed_bound(mv_o: [f64; 3], mv_xi: [f64; 6], obj: &Object, w: [f64; 16]) -> f64 {
+    let Some([bmin, bmax]) = cga_mesh::BakeExt::bounds(&obj.geometry.identity_params()) else {
+        return f64::INFINITY;
+    };
+    let c_local = [
+        (bmin[0] + bmax[0]) / 2.0,
+        (bmin[1] + bmax[1]) / 2.0,
+        (bmin[2] + bmax[2]) / 2.0,
+    ];
+    let r = ((0..3)
+        .map(|i| (bmax[i] - bmin[i]) * (bmax[i] - bmin[i]))
+        .sum::<f64>()
+        .sqrt())
+        / 2.0;
+    let c_w = cga_core::transform_point(w, c_local);
+    let oc = [c_w[0] - mv_o[0], c_w[1] - mv_o[1], c_w[2] - mv_o[2]];
+    let om = [mv_xi[0], mv_xi[1], mv_xi[2]];
+    let vv = [mv_xi[3], mv_xi[4], mv_xi[5]];
+    let om_n = (om[0] * om[0] + om[1] * om[1] + om[2] * om[2]).sqrt();
+    let vv_n = (vv[0] * vv[0] + vv[1] * vv[1] + vv[2] * vv[2]).sqrt();
+    // 轴到点距 = |oc × dir|，dir = ω/|ω|（纯平移 |ω|=0 时无转动项）
+    let d_axis = if om_n > 1e-12 {
+        let cr = v3cross(oc, [om[0] / om_n, om[1] / om_n, om[2] / om_n]);
+        (cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]).sqrt()
+    } else {
+        0.0
+    };
+    vv_n + om_n * (d_axis + r)
 }
 
 fn v3scale(a: [f64; 3], s: f64) -> [f64; 3] {
@@ -690,6 +949,176 @@ export default (
             0x9e5e_200a_aa7e_b143,
             "接触标记渲染金标不符（{} 字节）",
             png.len()
+        );
+    }
+
+    #[test]
+    fn scan_contacts_cache_across_scans() {
+        // D1：Yes 对的接触解按同一指纹键缓存——第二帧零接触解、结果逐位一致。
+        let mut sc = Scene::new(None);
+        sc.add_object(sphere_obj(0.0, 1.0, 0));
+        sc.add_object(sphere_obj(1.5, 1.0, 0)); // 与 0 相交（Yes）
+        sc.add_object(sphere_obj(9.0, 1.0, 0)); // 远离（No）
+        let mut scan = CollisionScan::new();
+        let first = scan.scan_contacts(&sc);
+        assert_eq!(scan.contact_cache_hits, 0);
+        assert!(first[0].contacts.as_ref().is_some_and(|c| !c.is_empty()));
+        let second = scan.scan_contacts(&sc);
+        assert_eq!(scan.computed, 0, "probe 全缓存命中");
+        assert_eq!(scan.contact_cache_hits, 1, "接触解缓存命中");
+        assert_eq!(first, second, "缓存的接触解与重算逐位一致");
+        // 动相交对的一个：接触解重算
+        sc.objects[1].position = [1.6, 0.0, 0.0];
+        let third = scan.scan_contacts(&sc);
+        assert_eq!(scan.contact_cache_hits, 0);
+        assert_ne!(first[0].contacts, third[0].contacts, "位姿变了接触点必须变");
+    }
+
+    #[test]
+    fn sweep_joint_gear_coupled_static() {
+        // D2：平行轴齿轮联动（ratio=-1，反向）。A 臂球 r=0.1 在半径 1（绕原点 z）；
+        // B 臂绕 (2.5,0,0) 的 z 轴，球在半径 1。立柱球 r=0.1 在 (2.5,-1,0)。
+        // A 扫 [0,2]：B 反向转，球到 (2.5+cos q, -sin q)；触柱 ⇒ 2−2sin q = 0.04
+        // ⇒ q* = asin(0.98)。A 自己的球够不到立柱（距原点 √7.25 > 1.2）。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <translate t={[2.5, -1.0, 0]}><sphere r={0.1} /></translate>
+    <link name="base" />
+    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armB"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,2.0]} />
+    <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[2.5,0,0]} q={0} />
+    <gear a="A" b="B" ratio={-1} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        let out = sweep_joint(&run, "A");
+        assert!(out.skipped.is_none(), "{:?}", out.skipped);
+        assert_eq!(out.coupled, vec!["B".to_string()], "B 被 gear 带动");
+        let (idx, q) = out.first.expect("B 臂应撞柱");
+        assert_eq!(idx, 0, "撞到的是立柱（对象 0）");
+        let want = 0.98f64.asin();
+        assert!((q - want).abs() < 1e-9, "q={q} want={want}");
+        // 随动对互碰：两球圆心最小距 0.5（半径 0.2 碰不到），但保守界
+        // （速度 2.2+2.2 > 间隔 0.3）认证不了 → 诚实进 unknown
+        assert_eq!(out.unknown.len(), 2, "{:?}", out.unknown);
+    }
+
+    #[test]
+    fn sweep_joint_gear_coaxial_mutual() {
+        // D2：同轴联动互碰闭式。两臂都绕原点 z（同轴），ratio=-1：A 球在角 q，
+        // B 球在角 π−q（local (-1,0,0)）。间距 = 2cos q，触 ⇒ q* = acos(0.1)。
+        // 相对运动是同轴转动（相对螺旋）→ 精确 TOI，不进 unknown。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <link name="base" />
+    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armB"><translate t={[-1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,1.6]} />
+    <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[0,0,0]} q={0} />
+    <gear a="A" b="B" ratio={-1} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        let out = sweep_joint(&run, "A");
+        assert!(out.skipped.is_none(), "{:?}", out.skipped);
+        let (_idx, q) = out.first.expect("两臂球应互碰");
+        let want = 0.1f64.acos();
+        assert!((q - want).abs() < 1e-9, "q={q} want={want}");
+        assert!(out.unknown.is_empty(), "同轴互碰是闭式: {:?}", out.unknown);
+    }
+
+    #[test]
+    fn sweep_joint_gear_nested_skipped() {
+        // D2 边界：B 在 A 的子树里且 gear 联动 → 复合运动非单螺旋 → skipped
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <link name="base" />
+    <link name="upper" />
+    <link name="fore"><sphere r={0.2} /></link>
+    <pair kind="revolute" name="A" a="base" b="upper" axis={[0,0,1]} at={[0,0,0]} limit={[0,1.0]} />
+    <pair kind="revolute" name="B" a="upper" b="fore" axis={[0,0,1]} at={[1,0,0]} />
+    <gear a="A" b="B" ratio={-1} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        let out = sweep_joint(&run, "A");
+        assert_eq!(
+            out.skipped.as_deref(),
+            Some("嵌套 gear 联动：复合运动不是单螺旋，无法闭式 TOI"),
+            "{:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn sweep_joint_cam_coupled_skipped() {
+        // D2 边界：cam 关联 link 在随动子树里 → skipped（从动 q 非线性）
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <link name="base" />
+    <link name="cam_driver_link"><cylinder r={0.4} h={0.2} /></link>
+    <link name="cam_follower_link"><sphere r={0.12} /></link>
+    <pair kind="revolute" name="cam_driver" a="base" b="cam_driver_link" axis={[0,0,1]} at={[0,3,0]} q={0.3} limit={[0,1.0]} />
+    <pair kind="prismatic" name="cam_follower" a="base" b="cam_follower_link" axis={[1,0,0]} at={[0.9,3,0]} limit={[-0.4,-0.1]} />
+    <cam a="cam_driver_link" b="cam_follower_link"
+         aProfile={{kind:"circle", c:[0.12,0,0], n:[0,0,1], r:0.4}}
+         bProfile={{kind:"circle", c:[0,0,0], n:[0,0,1], r:0.12}} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        let out = sweep_joint(&run, "cam_driver");
+        assert_eq!(
+            out.skipped.as_deref(),
+            Some("cam 联动的行程扫描不支持（从动 q 非线性）"),
+            "{:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn sweep_joint_gear_certified_miss() {
+        // D2：相距 10 的两臂联动，小行程 [0,0.5]——间隔 9.8 > 速度上界和 1.1
+        // → 认证不碰：first=None 且 unknown 为空（不是 Unknown 兜底）。
+        let src = r#"
+export default (
+  <scene>
+    <camera />
+    <link name="base" />
+    <link name="armA"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <link name="armB"><translate t={[1, 0, 0]}><sphere r={0.1} /></translate></link>
+    <pair kind="revolute" name="A" a="base" b="armA" axis={[0,0,1]} at={[0,0,0]} q={0} limit={[0,0.5]} />
+    <pair kind="revolute" name="B" a="base" b="armB" axis={[0,0,1]} at={[10,0,0]} q={0} />
+    <gear a="A" b="B" ratio={-1} />
+    <anchor link="base" />
+  </scene>
+);
+"#;
+        let run = run_of(src);
+        let out = sweep_joint(&run, "A");
+        assert!(out.skipped.is_none(), "{:?}", out.skipped);
+        assert_eq!(out.coupled, vec!["B".to_string()]);
+        assert_eq!(out.first, None);
+        assert!(
+            out.unknown.is_empty(),
+            "认证不碰不该进 unknown: {:?}",
+            out.unknown
         );
     }
 }

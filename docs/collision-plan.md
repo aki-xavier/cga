@@ -279,3 +279,28 @@ const gap = clearance("gripper", "part");     // → 分离度或 null
 **审计结论**：布尔接触/重叠判定、相离距离、穿入深度全部从定义可证精确
 （盒–盒穿入在审计后升级为 Minkowski 差 zonotope 精确 MTV；平面–平面相交
 的 0 是表面距离语义——两半空间 MTV 无定义）。
+
+## 8. D1+D2 实施记录（2026-10-08）
+
+- **D1 接触解帧间缓存**：`CollisionScan.contact_cache` 与 probe 同一套指纹键
+  （几何+世界变换的 Debug 散列）；第二帧起 Yes 对的接触解零重算。
+  测试：两次 `scan_contacts` 逐位一致、缓存命中计数、动一个对象只重算相关对。
+- **D2 齿轮联动行程扫描**（`sweep_joint` 扩展）：
+  - 联动集合 = 从被扫 pair 出发沿 gear 关系 BFS（`dq_b = ratio·dq_a`，反向除
+    ratio；ratio=0 的从动端锁在 offset 不动，被扫端锁死则 skipped；环路比率
+    冲突 skipped）。`JointSweepOutcome.coupled` 报告随动 pair 名。
+  - 每个随动 pair 的子树按**自己的世界螺旋**（速率 = Δ·rate_x）走闭式 TOI，
+    退位矩阵把子树从当前姿态退回 q_p(t=0) = q_p_cur + Δ·(lo − q_x_cur)。
+    嵌套检查保证随动子树互不相交（兄弟分支型联动）→ 每个 mesh 恰好一个驱动
+    pair，单螺旋精确。
+  - 随动对互碰：**同轴**（轴平行且轴心连线共线）→ 相对 twist 差仍是同轴螺旋，
+    闭式精确；**不同轴** → probe 取 t=0 间隔，与全程相对接近速度上界
+    （|v|+|ω|·(轴距+局部包围半径)，无界几何 → ∞）比较：严格大于 = 认证不碰，
+    否则进 `unknown`；t=0 已接触报 q=lo。三值语义保持：绝不假装。
+  - 诚实边界（skipped 注明原因）：cam 联动（cam 的 a/b 是 link 名，关联 link
+    落在任一随动子树里即拒——从动 q 是接触解，非线性，不是螺旋）；嵌套 gear
+    联动（一个随动 pair 在另一个的子树里——复合运动 exp(xi₁t)·exp(xi₂t) 不是
+    单螺旋，闭式 TOI 不适用）。
+  - 闭式验证：反向联动臂撞柱 q*=asin(0.98)（1e-9）；同轴互碰 q*=acos(0.1)
+    （1e-9，相对螺旋路径）；认证不碰（间隔 9.8 > 速度界 1.1）first=None 且
+    unknown 为空；保守界认证不了时 unknown 恰好含随动对两球。
