@@ -94,12 +94,13 @@ fn tool_defs() -> Value {
         },
         {
             "name": "scene_render",
-            "description": "渲染当前场景，返回 PNG 图像。用于目视自查：建模后渲染检查是标准闭环。",
+            "description": "渲染当前场景，返回 PNG 图像。用于目视自查：建模后渲染检查是标准闭环。channel 参数切诊断通道（headless 的视口：对象 id 调色板 / 法线 / 深度）。",
             "inputSchema": schema(json!({
                 "w": {"type": "integer", "default": 640},
                 "h": {"type": "integer", "default": 480},
                 "aa": {"type": "integer", "default": 2, "description": "每像素采样数（抗锯齿）"},
                 "opaque": {"type": "boolean", "default": false, "description": "忽略透明度（无反射/折射）"},
+                "channel": {"type": "string", "enum": ["id", "normals", "depth"], "description": "诊断通道（给出时忽略 aa/opaque）"},
             }), &[]),
         },
         {
@@ -244,6 +245,20 @@ impl Server {
         let w = args.get("w").and_then(Value::as_i64).unwrap_or(640) as i32;
         let h = args.get("h").and_then(Value::as_i64).unwrap_or(480) as i32;
         let aa = args.get("aa").and_then(Value::as_i64).unwrap_or(2) as i32;
+        // 诊断通道（U3）：id / normals / depth——headless 引擎的"视口"。
+        if let Some(ch) = args.get("channel").and_then(Value::as_str) {
+            let channel = match ch {
+                "id" => cga_gpu::DiagChannel::ObjectId,
+                "normals" => cga_gpu::DiagChannel::Normal,
+                "depth" => cga_gpu::DiagChannel::Depth,
+                _ => return Err(format!("未知 channel {ch}（可选 id / normals / depth）")),
+            };
+            let img = self.sess()?.render_diagnostic(w, h, channel)?;
+            return Ok(tool_ok(vec![
+                json!({"type": "image", "data": b64(&img.png), "mimeType": "image/png"}),
+                text_block(format!("diagnostic {w}x{h} channel={ch}")),
+            ]));
+        }
         let mode = if args.get("opaque").and_then(Value::as_bool).unwrap_or(false) {
             RenderMode::IgnoreOpacity
         } else {

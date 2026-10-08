@@ -4079,6 +4079,25 @@ impl SceneSession {
             stats,
         ))
     }
+
+    /// 诊断渲染（U3，docs/ue58-inspirations.md §3.U3）：headless 引擎的"视口"——
+    /// 对象 id 调色板 / 相机系法线 / 深度三通道之一出图。主光线求交副产品，
+    /// 逐位确定（同输入同输出，GPU 侧测试看守）。
+    pub fn render_diagnostic(
+        &mut self,
+        w: i32,
+        h: i32,
+        channel: cga_gpu::DiagChannel,
+    ) -> Result<crate::HeadlessImage, String> {
+        self.rebuild()?;
+        let run = self.run();
+        let img = cga_gpu::render_diagnostic(&run.scene, &run.camera, w, h, channel);
+        Ok(crate::HeadlessImage {
+            width: w,
+            height: h,
+            png: cga_gpu::frame_to_png_bytes(&img),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -4499,6 +4518,35 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         assert_eq!(before, after, "失败后场景应保持");
         // 未知 link → Err
         assert!(s.drag_pose("nope", target).is_err());
+    }
+
+    #[test]
+    fn session_render_diagnostic_channels() {
+        // U3：三通道 plumbing + 逐位确定 + 对象 id 图恰好 4 色（背景/盒/两球）。
+        // 64×36 = 16:9，与默认相机 aspect 一致（否则 l2 球在画幅外）。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let mut pngs = Vec::new();
+        for ch in [
+            cga_gpu::DiagChannel::ObjectId,
+            cga_gpu::DiagChannel::Normal,
+            cga_gpu::DiagChannel::Depth,
+        ] {
+            let img = s.render_diagnostic(64, 36, ch).expect("diag");
+            assert_eq!(&img.png[..4], b"\x89PNG", "PNG 魔数");
+            let again = s.render_diagnostic(64, 36, ch).expect("diag2");
+            assert_eq!(img.png, again.png, "{ch:?} 应逐位确定");
+            pngs.push(img.png);
+        }
+        assert_ne!(pngs[0], pngs[1], "id 与法线通道应不同");
+        assert_ne!(pngs[1], pngs[2], "法线与深度通道应不同");
+        // 对象 id 图：背景 + 盒 + 两球 = 恰好 4 色
+        let (rgba, w, h) = cga_gpu::decode_png_rgba(&pngs[0]).expect("decode");
+        assert_eq!((w, h), (64, 36));
+        let mut colors = std::collections::HashSet::new();
+        for px in rgba.chunks(4) {
+            colors.insert(px.to_vec());
+        }
+        assert_eq!(colors.len(), 4, "背景+盒+两球应恰好 4 色: {colors:?}");
     }
 
     #[test]

@@ -157,9 +157,31 @@
 
 ### U3 诊断渲染通道（对应 MegaLights 的诊断叙事）
 
+**已实施（2026-10-09）**：`cga_gpu::render_diagnostic` + `DiagChannel`
+（`crates/cga-gpu/src/renderer/renderer.rs`）+ `SceneSession::render_diagnostic`
++ MCP `scene_render` 的 `channel` 参数。
+
 **UE 做法**：MegaLights 转正的关键不止是性能，还有 Light Finder / Ray Visualizer——可观测性让用户敢用高级特性。
 
 **落点**：渲染器每像素已有 `best_idx`，诊断输出是内核副产品，成本接近零：blade id 图、法线图、命中深度图、运动学螺旋轴可视化、碰撞对连线。headless 引擎没有编辑器视口，**诊断图就是视口**。与 E1/E3 把 `lanes()`/`devtools()` 做成可观测的思路一致。
+
+**实施记录**：
+
+- **三通道**（V1）：`ObjectId`（对象下标 → golden-ratio hue 确定性调色板）、
+  `Normal`（相机系法线朝视线翻转一致 → RGB = n·0.5+0.5）、`Depth`（灰度
+  1/(1+t)，无每帧归一化，跨帧可比）；未命中像素一律黑。实现 = 主光线逐对象
+  `geom_intersect` 合并（与渲染内核同一条求交调用，无剔除/BVH/次级光线），
+  输出与 `render()` 同约定（[h,w,4] f32 0..255），**逐位确定**。
+- **接线**：`SceneSession::render_diagnostic`；MCP `scene_render` 加
+  `channel: id|normals|depth`（未知值显式 Err）。
+- **验收**：GPU 侧 4 测试（id 调色板逐像素断言 + 未命中黑；球心法线 +
+  平面法线色处处相等；深度灰度与同像素 `pick` 的 t 交叉验证；逐位确定 +
+  三通道两两不同）+ 会话层 1 测试（PNG 魔数/逐位确定/对象 id 图恰好 4 色）
+  + MCP 端到端（channel=id 出图 + 未知 channel 报 Err）。
+- **未做（有消费者再立项）**：螺旋轴可视化与碰撞对连线——那是 3D 叠加层
+  （投影线绘制），不是每像素副产品，形态不同。
+
+**诊断叙事原文**：渲染器每像素已有 `best_idx`，诊断输出是内核副产品，成本接近零：blade id 图、法线图、命中深度图、运动学螺旋轴可视化、碰撞对连线。headless 引擎没有编辑器视口，**诊断图就是视口**。与 E1/E3 把 `lanes()`/`devtools()` 做成可观测的思路一致。
 
 ### U4 渲染侧宽相 + 实例批处理（对应 Collections 的保真阶梯）
 

@@ -720,6 +720,175 @@ mod tests {
         assert!((h.normal[1] - 1.0).abs() < 1e-3, "法线 +y: {:?}", h.normal);
     }
 
+    // ---- 诊断通道（U3，docs/ue58-inspirations.md §3.U3）----------------------
+
+    fn diag_two_spheres() -> (Scene, PerspectiveCamera) {
+        // 与 test_pick_nearest_and_miss 同场景：球0 r=0.6 在原点，球1 r=0.5 在 (1.5,0,−1)。
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.6)),
+            material: std_red_material(),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(0.5)),
+            material: std_red_material(),
+            position: [1.5, 0.0, -1.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        (sc, cam)
+    }
+
+    fn diag_px(img: &Array, x: usize, y: usize, w: usize) -> [f32; 3] {
+        // 输出约定 [h, w, 4] f32 0..255（同 render()）：读出并归一到 0..1。
+        let s = img.as_slice::<f32>();
+        let i = 4 * (y * w + x);
+        [s[i] / 255.0, s[i + 1] / 255.0, s[i + 2] / 255.0]
+    }
+
+    #[test]
+    fn test_diag_object_id_and_miss() {
+        // 对象下标 → 调色板：中心 = 球0 的色，右侧 = 球1 的色，角落 = 黑（未命中）。
+        let (sc, cam) = diag_two_spheres();
+        let img = render_diagnostic(&sc, &cam, 96, 72, DiagChannel::ObjectId);
+        img.eval().unwrap();
+        let center = diag_px(&img, 47, 35, 96);
+        let want0 = diag_palette(0);
+        for i in 0..3 {
+            assert!(
+                (center[i] - want0[i]).abs() < 1e-6,
+                "中心应为球0色: {center:?}"
+            );
+        }
+        // 右侧球（与 pick 测试同一像素公式）
+        let fx = 72.0 / (2.0 * (45.0f64.to_radians() / 2.0).tan()) * (96.0 / 72.0);
+        let px2 = (47.5 + 1.5 / 6.0 * fx) as usize;
+        let second = diag_px(&img, px2, 35, 96);
+        let want1 = diag_palette(1);
+        for i in 0..3 {
+            assert!((second[i] - want1[i]).abs() < 1e-6, "应为球1色: {second:?}");
+        }
+        assert_ne!(want0, want1, "相邻下标颜色应不同");
+        assert_eq!(diag_px(&img, 0, 0, 96), [0.0; 3], "角落未命中应为黑");
+    }
+
+    #[test]
+    fn test_diag_normal_sphere_center_and_plane_constancy() {
+        // 球心像素：法线≈正对相机（球心投影在 (47.5,35.5)，本像素有亚像素倾斜
+        // ~0.02）→ 相机系 ≈(0,0,−1) → RGB ≈ (0.5, 0.5, 0)。
+        let (sc, cam) = diag_two_spheres();
+        let img = render_diagnostic(&sc, &cam, 96, 72, DiagChannel::Normal);
+        img.eval().unwrap();
+        let c = diag_px(&img, 47, 35, 96);
+        assert!((c[0] - 0.5).abs() < 0.03, "{c:?}");
+        assert!((c[1] - 0.5).abs() < 0.03, "{c:?}");
+        assert!(c[2] < 0.005, "正对相机的法线 z 应翻转到 ≈−1 → ≈0: {c:?}");
+        assert_eq!(diag_px(&img, 0, 0, 96), [0.0; 3], "未命中应为黑");
+
+        // 平面：所有命中像素法线一致 → 颜色处处相等（常数断言）。
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+            material: std_red_material(),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 2.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        let img = render_diagnostic(&sc, &cam, 96, 72, DiagChannel::Normal);
+        img.eval().unwrap();
+        let a = diag_px(&img, 47, 60, 96);
+        let b = diag_px(&img, 20, 65, 96);
+        assert!(a.iter().any(|v| *v > 0.0), "平面处应命中: {a:?}");
+        for i in 0..3 {
+            assert!(
+                (a[i] - b[i]).abs() < 1e-6,
+                "平面法线色应处处相等: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_diag_depth_matches_pick_t() {
+        // 深度灰度 = 1/(1+t)，t 与同像素 pick 一致（交叉验证既有已验证 API）。
+        let (sc, cam) = diag_two_spheres();
+        let img = render_diagnostic(&sc, &cam, 96, 72, DiagChannel::Depth);
+        img.eval().unwrap();
+        let hit = pick(&sc, &cam, 47.5, 35.5, 96, 72).expect("hit");
+        let g = diag_px(&img, 47, 35, 96)[0];
+        let want = 1.0 / (1.0 + hit.t as f32);
+        assert!((g - want).abs() < 1e-3, "g={g} vs 1/(1+t)={want}");
+        // 未命中 = 黑；深度通道是灰度（三通道相等）
+        assert_eq!(diag_px(&img, 0, 0, 96), [0.0; 3]);
+        let px3 = diag_px(&img, 47, 35, 96);
+        assert_eq!(px3[0], px3[1]);
+        assert_eq!(px3[1], px3[2]);
+    }
+
+    #[test]
+    fn test_diag_bitwise_deterministic() {
+        // 同输入同输出：同一通道渲两次，PNG 逐位一致；三通道内容两两不同。
+        let (sc, cam) = diag_two_spheres();
+        for ch in [
+            DiagChannel::ObjectId,
+            DiagChannel::Normal,
+            DiagChannel::Depth,
+        ] {
+            let a = crate::image_io::frame_to_png_bytes(&render_diagnostic(&sc, &cam, 96, 72, ch));
+            let b = crate::image_io::frame_to_png_bytes(&render_diagnostic(&sc, &cam, 96, 72, ch));
+            assert_eq!(a, b, "{ch:?} 应逐位确定");
+        }
+        let id = crate::image_io::frame_to_png_bytes(&render_diagnostic(
+            &sc,
+            &cam,
+            96,
+            72,
+            DiagChannel::ObjectId,
+        ));
+        let nm = crate::image_io::frame_to_png_bytes(&render_diagnostic(
+            &sc,
+            &cam,
+            96,
+            72,
+            DiagChannel::Normal,
+        ));
+        let dp = crate::image_io::frame_to_png_bytes(&render_diagnostic(
+            &sc,
+            &cam,
+            96,
+            72,
+            DiagChannel::Depth,
+        ));
+        assert_ne!(id, nm);
+        assert_ne!(nm, dp);
+        assert_ne!(id, dp);
+    }
+
     // ---- BVH 求交内核 ------------------------------------------------------
 
     /// 混合场景：40 个受支持对象（球/盒/柱/锥/椭球 8×5 网格）+ 地面平面
@@ -734,10 +903,7 @@ mod tests {
                 let rot = (x * 0.7 + z * 0.3).rem_euclid(1.5);
                 let (geom, name): (Geometry, &str) = match (i + j) % 5 {
                     0 => (Geometry::SphereGeometry(SphereGeometry::new(0.55)), "s"),
-                    1 => (
-                        Geometry::BoxGeometry(BoxGeometry::new(0.5, 0.5, 0.5)),
-                        "b",
-                    ),
+                    1 => (Geometry::BoxGeometry(BoxGeometry::new(0.5, 0.5, 0.5)), "b"),
                     2 => (
                         Geometry::CylinderGeometry(CylinderGeometry::new(0.4, 1.1)),
                         "c",
@@ -783,8 +949,16 @@ mod tests {
             rotation_angle: 0.0,
             motor: None,
         }));
-        sc.add_light(Light::directional(Color::from_hex(0xFFFFFF), 0.7, [0.5, 1.0, 0.5]));
-        sc.add_light(Light::point(Color::from_hex(0xFFFFFF), 0.4, [3.0, 5.0, 4.0]));
+        sc.add_light(Light::directional(
+            Color::from_hex(0xFFFFFF),
+            0.7,
+            [0.5, 1.0, 0.5],
+        ));
+        sc.add_light(Light::point(
+            Color::from_hex(0xFFFFFF),
+            0.4,
+            [3.0, 5.0, 4.0],
+        ));
         sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.3));
         sc
     }
@@ -820,9 +994,14 @@ mod tests {
 
         // 整帧对比：内核路径 vs 旧路径（f32 算序差异 → 容差比较；
         // 旧路径本身也被画廊金标钉着，这里是"新引擎不劣于旧引擎"的断言）
-        let img_bvh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| data_f32(&r.render(sc.clone(), cam))));
+        let img_bvh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            data_f32(&r.render(sc.clone(), cam))
+        }));
         if img_bvh.is_err() {
-            println!("LAST_MLX_ERROR: {}", cga_fastmetal::take_last_error_string());
+            println!(
+                "LAST_MLX_ERROR: {}",
+                cga_fastmetal::take_last_error_string()
+            );
             panic!("bvh render failed");
         }
         let img_bvh = img_bvh.unwrap();

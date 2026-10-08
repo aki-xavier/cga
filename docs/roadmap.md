@@ -3,7 +3,7 @@
 
 状态：**当前（2026-10-08）**。本文档是方向的依赖关系与排序；每个方向落地时各自单独立项（参照 `css-conformance.md` / `collision-plan.md` / `kinematics-graph.md` 的做法：计划文档 → 阶段 → 验收）。
 
-## 1. 已建成（全部推送，327 测试全绿）
+## 1. 已建成（全部推送，332 测试全绿）
 
 - **渲染器**：解析光线追踪（全图元 + CSG + 仿射 + 认证数值回退）、帧间像素级增量渲染（与全帧逐位一致）。
 - **JSX+CSS 宿主**：真 React 19（hooks/context/memo/key/事件派发/宿主输入）、CSS 真匹配真级联（含错误契约）、帧间子树复用、分组（`Object::group`）、碰撞查询惰性求值。
@@ -61,6 +61,12 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
   mass/mobility/report/close），渲染回 PNG image content，cga 的 Err 以
   `isError` + 原文透传。验收：子进程端到端 2 测试（握手/工具名单/闭式拖拽
   收回 q*/PNG 魔数/认证碰撞分离度/闭式质量/五条错误路径）。
+- **诊断渲染通道（U3，2026-10-09）**：`cga_gpu::render_diagnostic` +
+  `DiagChannel`（ObjectId 调色板 / Normal 相机系法线 / Depth 灰度 1/(1+t)），
+  主光线副产品逐位确定；`SceneSession::render_diagnostic` + MCP `channel`
+  参数。验收：GPU 4 测试（调色板逐像素/平面法线常数/深度 vs pick t 交叉/
+  逐位确定）+ 会话 1（id 图恰好 4 色）+ MCP 端到端。螺旋轴/碰撞线叠加层
+  形态不同，有消费者再立项。
 
 <details><summary>原始计划（留档）</summary>
 

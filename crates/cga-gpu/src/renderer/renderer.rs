@@ -388,6 +388,107 @@ pub fn pick(
     best
 }
 
+// ---- 诊断通道（U3，docs/ue58-inspirations.md §3.U3）-------------------------
+// headless 引擎的"视口"：全部是主光线求交的副产品——无着色、无次级光线、
+// 无剔除、无 BVH，同输入同输出逐位确定。
+
+/// 诊断通道。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagChannel {
+    /// 对象下标 → 确定性调色板（golden-ratio hue；未命中 = 黑）。
+    ObjectId,
+    /// 相机系法线（朝视线翻转一致，与着色同规则）→ RGB = n·0.5+0.5（未命中 = 黑）。
+    Normal,
+    /// 相机深度 t → 灰度 1/(1+t)：近白远黑，未命中 = 黑（无每帧归一化，跨帧可比）。
+    Depth,
+}
+
+/// 确定性调色板：golden-ratio 步进的 hue（相邻下标颜色尽量远），s=0.75、v=0.95。
+/// pub(crate)：测试要断言"某对象下标色 = 调色板输出"。
+pub(crate) fn diag_palette(idx: i32) -> [f32; 3] {
+    let h = (f64::from(idx) * 0.618_033_988_749_894_9).fract() * 6.0;
+    let (s, v) = (0.75, 0.95);
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [(r + m) as f32, (g + m) as f32, (b + m) as f32]
+}
+
+/// 诊断渲染：主光线逐对象 `geom_intersect` 合并（与渲染内核同一条求交调用，
+/// 无剔除/BVH/次级光线），按通道出图。输出与 `Renderer::render` 同约定：
+/// [h, w, 4] f32，0..255（alpha 恒 255），可直接 `frame_to_png_bytes`。
+/// 未命中像素为黑。
+pub fn render_diagnostic(
+    scene: &Scene,
+    camera: &PerspectiveCamera,
+    width: i32,
+    height: i32,
+    channel: DiagChannel,
+) -> Array {
+    let mut r = Renderer::new(width, height, 1, 1);
+    let prep = r.prep(scene, camera);
+    let n_rays = prep.o.shape()[0];
+    let mut best_t = ck(ops::full::<f32>(&[n_rays], &fs(f64::INFINITY)));
+    let mut best_n = ck(ops::zeros::<f32>(&[n_rays, 3]));
+    let mut best_idx = ck(ops::zeros::<i32>(&[n_rays]));
+    for (i, params) in prep.params_list.iter().enumerate() {
+        let (t, n_i, mask) = geom_intersect(params, &prep.o, &prep.rays);
+        let nearer = ck(mask.logical_and(ck(t.lt(&best_t))));
+        best_t = ck(ops::select(&nearer, &t, &best_t));
+        best_n = ck(ops::select(ck(nearer.expand_dims(1)), &n_i, &best_n));
+        best_idx = ck(ops::select(
+            &nearer,
+            ck(ops::full::<i32>(&[n_rays], &Array::from_int(i as i32))),
+            &best_idx,
+        ));
+    }
+    best_t.eval().unwrap();
+    best_n.eval().unwrap();
+    best_idx.eval().unwrap();
+    prep.rays.eval().unwrap();
+    let (ts, ns, idxs, ds) = (
+        best_t.as_slice::<f32>(),
+        best_n.as_slice::<f32>(),
+        best_idx.as_slice::<i32>(),
+        prep.rays.as_slice::<f32>(),
+    );
+    let mut px = vec![0.0f32; (n_rays * 4) as usize];
+    for i in 0..n_rays as usize {
+        px[4 * i + 3] = 255.0; // alpha 恒 255（命中/未命中一致）
+        if !ts[i].is_finite() {
+            continue; // 未命中 = 黑
+        }
+        let rgb = match channel {
+            DiagChannel::ObjectId => diag_palette(idxs[i]),
+            DiagChannel::Normal => {
+                let mut n = [ns[3 * i], ns[3 * i + 1], ns[3 * i + 2]];
+                let dd = [ds[3 * i], ds[3 * i + 1], ds[3 * i + 2]];
+                // 朝视线翻转一致（与着色路径同规则：n·d > 0 时翻转）
+                if n[0] * dd[0] + n[1] * dd[1] + n[2] * dd[2] > 0.0 {
+                    n = [-n[0], -n[1], -n[2]];
+                }
+                [n[0] * 0.5 + 0.5, n[1] * 0.5 + 0.5, n[2] * 0.5 + 0.5]
+            }
+            DiagChannel::Depth => {
+                let g = 1.0 / (1.0 + ts[i].max(0.0));
+                [g, g, g]
+            }
+        };
+        for c in 0..3 {
+            px[4 * i + c] = rgb[c] * 255.0;
+        }
+    }
+    Array::from_slice(&px, &[height, width, 4])
+}
+
 /// 增量渲染统计。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IncrementalStats {
@@ -977,7 +1078,9 @@ impl Renderer {
                 };
                 b.trace_shadow(&p_s, &ld, &far_n)
             });
-            let mut v = kernel_vis.clone().unwrap_or_else(|| ck(ops::ones::<f32>(&[n_rays])));
+            let mut v = kernel_vis
+                .clone()
+                .unwrap_or_else(|| ck(ops::ones::<f32>(&[n_rays])));
             for (j, obj) in objs.iter().enumerate() {
                 if kernel_vis.is_some() {
                     if let Some(b) = bvh {
