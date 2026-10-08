@@ -130,11 +130,30 @@
 
 ### U2 MCP 工具层（LLM-native 几何后端）
 
+**已实施（2026-10-09）**：`crates/cga-examples/src/bin/cga_mcp.rs`（stdio MCP
+服务器）+ `crates/cga-examples/tests/mcp_stdio.rs`（子进程端到端 2 测试）。
+
 **UE 做法**：实验性 MCP 插件把引擎核心系统暴露给任意 LLM；官方演示 LLM 摆场景、对齐参考图调光。UE 的场景状态是二进制资产，LLM 读写隔一层编辑器插件。
 
 **本项目的适配性高于 UE**：场景即纯文本（JSX+CSS，LLM 原生可读写）；全部操作是无头宿主函数；**每个动作有可验证反馈**——金标图、解析断言、`probe` 三值判定、`mass`/`mobility` 报告。这正是 LLM 闭环需要的"动作 → 机器可检查的结果 → 纠错"，也是 LLM 生成 3D 内容当前最大的痛点。
 
-**落点**：把 `render_jsx` / `pick` / `scan_contacts` / `mass_properties` / `mobility` 包成 MCP 工具。本项目"不确定就报 Unknown、不支持就报错带原文"的纪律恰好是 LLM 后端最需要的品质：绝不假装精确。
+**实施记录**：
+
+- **协议**：stdio，一行一个 JSON-RPC 消息；协议子集手写（initialize / ping /
+  tools/list / tools/call），不引 MCP SDK（协议面小，零新框架依赖；serde_json
+  是既有依赖）。cga 的 Err → `isError: true` + **错误原文透传**（不假装成功）。
+- **工具 10 个**：`scene_open`（JSX+CSS 源码直接传入，返回摘要+活动度）/
+  `scene_close` / `scene_report` / `scene_render`（PNG image content + 增量
+  统计）/ `scene_pick` / `scene_drag` / `scene_drag_pose` / `scene_collisions`
+  （三值判定 + 缓存统计）/ `scene_mass` / `scene_mobility`。
+- **验收**（子进程逐行 JSON-RPC）：握手 + 10 工具名单 + 未 open 的指导性
+  错误 + 闭式拖拽收回 q* + PNG 回图（base64 魔数断言）+ 认证碰撞（球穿盒
+  Yes 且分离度 −0.05/−0.07 解析断言）+ 闭式质量（1e-6）+ 坏 JSX/未知工具/
+  未知方法/缺参数/不可达拖拽五条错误路径（错误原文透出、场景不变）。
+- 边界（记录在案）：单会话（多会话/命名会话有消费者再做）；`scene_open`
+  失败时旧会话保持；asset_root 固定 "."（内联源码不需要磁盘解析）。
+
+**落点（原文）**：把 `render_jsx` / `pick` / `scan_contacts` / `mass_properties` / `mobility` 包成 MCP 工具。本项目"不确定就报 Unknown、不支持就报错带原文"的纪律恰好是 LLM 后端最需要的品质：绝不假装精确。
 
 ### U3 诊断渲染通道（对应 MegaLights 的诊断叙事）
 

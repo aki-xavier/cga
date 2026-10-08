@@ -3,7 +3,7 @@
 
 状态：**当前（2026-10-08）**。本文档是方向的依赖关系与排序；每个方向落地时各自单独立项（参照 `css-conformance.md` / `collision-plan.md` / `kinematics-graph.md` 的做法：计划文档 → 阶段 → 验收）。
 
-## 1. 已建成（全部推送，325 测试全绿）
+## 1. 已建成（全部推送，327 测试全绿）
 
 - **渲染器**：解析光线追踪（全图元 + CSG + 仿射 + 认证数值回退）、帧间像素级增量渲染（与全帧逐位一致）。
 - **JSX+CSS 宿主**：真 React 19（hooks/context/memo/key/事件派发/宿主输入）、CSS 真匹配真级联（含错误契约）、帧间子树复用、分组（`Object::group`）、碰撞查询惰性求值。
@@ -55,6 +55,12 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
   雅可比用 SO(3) 左雅可比逆**闭式**（任意残差处精确，FD 对拍含非零残差构型）；
   target 旋转不正规显式 Err。ga-pid 对照分析与 Plant 后端差距记录在
   `docs/ue58-inspirations.md` §3.U1 后续边界。
+- **MCP 工具层（U2，docs/ue58-inspirations.md，2026-10-09）**：
+  `cga-examples --bin cga_mcp`——stdio MCP 服务器（手写 JSON-RPC 子集，零新
+  框架依赖），10 个场景工具（open/render/pick/drag/drag_pose/collisions/
+  mass/mobility/report/close），渲染回 PNG image content，cga 的 Err 以
+  `isError` + 原文透传。验收：子进程端到端 2 测试（握手/工具名单/闭式拖拽
+  收回 q*/PNG 魔数/认证碰撞分离度/闭式质量/五条错误路径）。
 
 <details><summary>原始计划（留档）</summary>
 
