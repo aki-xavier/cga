@@ -18,8 +18,13 @@ fn main() {
     std::fs::write(format!("{out}/demo_lang.png"), &img.png).unwrap();
 
     let run = run_jsx(&text, None, ".").expect("run");
-    let report =
-        cga_host::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+    let report = cga_host::scene_report::scene_report(
+        &run.scene,
+        &run.camera,
+        &run.tags,
+        &run.kinematics,
+        &run.mass_props,
+    );
     std::fs::write(format!("{out}/report.txt"), &report).unwrap();
 
     println!(

@@ -293,6 +293,7 @@ pub fn scene_report(
     camera: &PerspectiveCamera,
     tags: &TagRegistry,
     kin: &Kinematics,
+    mass_props: &[Option<cga_mesh::MassProps>],
 ) -> String {
     let mut out = String::new();
     out.push_str("scene version=1\n");
@@ -314,6 +315,13 @@ pub fn scene_report(
     for (i, m) in scene.objects.iter().enumerate() {
         out.push_str(&fmt_object(i, m));
         out.push('\n');
+        if let Some(Some(mp)) = mass_props.get(i) {
+            out.push_str(&format!(
+                "mass {i} m={} cog={}\n",
+                fmt_num(mp.mass),
+                fmt_vec3(mp.cog)
+            ));
+        }
         let params = geom_to_camera(&m.geometry, &m.motor());
         match cga_gpu::geometry_ops::geom_bounds(&params) {
             Some(b) => {
@@ -425,6 +433,10 @@ pub fn scene_report(
             kin.closures.len()
         ));
     }
+    let total_mass: f64 = mass_props.iter().flatten().map(|m| m.mass).sum();
+    if total_mass > 0.0 {
+        summary.push_str(&format!(" total_mass={}", fmt_num(total_mass)));
+    }
     if any_bounds {
         summary.push_str(&format!(
             " bbox_lo={} bbox_hi={}",
@@ -462,7 +474,13 @@ emissive=0x000000, opacity=1, ior=1.5, absorption=0)";
 
     fn rep(jsx: &str) -> String {
         let run = crate::jsx::run_jsx(jsx, None, "").expect("run");
-        scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics)
+        scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            &run.kinematics,
+            &run.mass_props,
+        )
     }
 
     fn assert_has(rep: &str, line: &str) {
@@ -676,7 +694,13 @@ emissive=0x00FF00, opacity=0.5, ior=1.8, absorption=0.1) sphere(r=1);",
             rotation_angle: 0.0,
             motor: None,
         }));
-        let rep = scene_report(&sc, &cam(), &TagRegistry::new(), &Kinematics::default());
+        let rep = scene_report(
+            &sc,
+            &cam(),
+            &TagRegistry::new(),
+            &Kinematics::default(),
+            &[],
+        );
         assert_has(
             &rep,
             &format!(

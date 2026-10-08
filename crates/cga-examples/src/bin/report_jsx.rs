@@ -64,7 +64,8 @@ fn main() {
                 &run.scene,
                 &run.camera,
                 &run.tags,
-                &run.kinematics
+                &run.kinematics,
+                &run.mass_props
             )
         ),
         Err(e) => {

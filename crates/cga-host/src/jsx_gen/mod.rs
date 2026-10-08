@@ -266,7 +266,13 @@ mod tests {
             .find(|p| p.name.as_deref() == Some("prismatic"))
             .unwrap();
         assert!((pri.q[0] - 0.3).abs() < 1e-12, "gear 推导: {}", pri.q[0]);
-        let rep = crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, k);
+        let rep = crate::scene_report::scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            k,
+            &run.mass_props,
+        );
         for t in all {
             assert!(rep.contains(&format!("type={t}")), "报告缺少 type={t}");
         }

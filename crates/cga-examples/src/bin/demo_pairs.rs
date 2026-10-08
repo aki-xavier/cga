@@ -10,8 +10,13 @@ fn main() {
     std::fs::write(format!("{out}/pairs.jsx"), &text).unwrap();
 
     let run = run_jsx(&text, None, ".").expect("run");
-    let report =
-        cga_host::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+    let report = cga_host::scene_report::scene_report(
+        &run.scene,
+        &run.camera,
+        &run.tags,
+        &run.kinematics,
+        &run.mass_props,
+    );
     std::fs::write(format!("{out}/pairs.txt"), &report).unwrap();
 
     let img = render_jsx_png(&text, None, ".", 640, 480, 2).expect("headless render");

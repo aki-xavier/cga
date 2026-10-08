@@ -1516,6 +1516,10 @@ struct Builder<'p> {
     cur_link: Option<usize>,
     /// 与 scene.objects 平行：每个对象来自的 React 宿主实例 id（拾取 → 事件派发）。
     object_instances: Vec<Option<i64>>,
+    /// 与 scene.objects 平行：质量属性（`density` prop 链上的对象才有）。
+    mass_props: Vec<Option<cga_mesh::MassProps>>,
+    /// 密度继承通道（prop `density` 沿子树下传）。
+    density_stack: Vec<f64>,
     tags: TagRegistry,
     pending_tags: Vec<(String, [f64; 16])>,
     rules: Vec<StyleRule>,
@@ -1526,6 +1530,8 @@ struct Builder<'p> {
     prev_objects: Option<&'p [Object]>,
     /// 上一帧的对象→实例映射（复用区间随同克隆）。
     prev_object_instances: Option<&'p [Option<i64>]>,
+    /// 上一帧的质量属性（复用区间随同克隆）。
+    prev_mass_props: Option<&'p [Option<cga_mesh::MassProps>]>,
     /// 本帧每个节点的产出区间（构建结束后写回缓存树，供下一帧复用）。
     ranges: HashMap<*const El, std::ops::Range<usize>>,
     reused_subtrees: usize,
@@ -1739,6 +1745,12 @@ impl<'p> Builder<'p> {
             cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
         };
         let group = self.group_stack.last().copied().unwrap_or(0);
+        // 质量属性（C1）：density 链上的对象才有；CSG/仿射走网格积分（比发射慢，
+        // 只在带 density 时付出）。在对象构造前算（g2 随后被移走）。
+        let mp = self
+            .density_stack
+            .last()
+            .and_then(|&d| cga_mesh::mass_properties(&g2, world, d));
         scene.add_object(
             Object::new(ObjectParams {
                 geometry: g2,
@@ -1751,6 +1763,7 @@ impl<'p> Builder<'p> {
             .with_group(group),
         );
         self.object_instances.push(src);
+        self.mass_props.push(mp);
         let idx = scene.objects.len() - 1;
         if let Some(li) = self.cur_link {
             self.kin.links[li].meshes.push(idx);
@@ -1835,6 +1848,11 @@ impl<'p> Builder<'p> {
         if let Some(g) = gid {
             self.group_stack.push(g);
         }
+        // 密度 prop（C1）：沿子树下传，emit 时计算质量属性。
+        let density = p_num(el, "density")?;
+        if let Some(dv) = density {
+            self.density_stack.push(dv);
+        }
         // tag prop：与 <tag name> 元素同语义，注册框架取本元素的 frame
         // （自身变换 prop 之后）。<link> 的 tag prop 由 link_el 处理。
         let tag = if el.tag == "link" {
@@ -1847,6 +1865,9 @@ impl<'p> Builder<'p> {
             self.pending_tags.push((name, ctx));
         }
         let r = self.walk_inner(el, stack, ctx, &style, scene, cam);
+        if density.is_some() {
+            self.density_stack.pop();
+        }
         if has_tag {
             self.pending_tags.pop();
         }
@@ -2185,6 +2206,7 @@ impl<'p> Builder<'p> {
                 || k == "scale"
                 || k == "mirror"
                 || k == "tag"
+                || k == "density"
             {
                 continue;
             }
@@ -3214,6 +3236,7 @@ pub struct BuildCache {
     tree: El,
     objects: Vec<Object>,
     object_instances: Vec<Option<i64>>,
+    mass_props: Vec<Option<cga_mesh::MassProps>>,
     groups: Vec<String>,
 }
 
@@ -3302,7 +3325,10 @@ fn build_scene_run_cached(
         group_stack: Vec::new(),
         prev_objects: cache.map(|c| c.objects.as_slice()),
         prev_object_instances: cache.map(|c| c.object_instances.as_slice()),
+        prev_mass_props: cache.map(|c| c.mass_props.as_slice()),
         object_instances: Vec::new(),
+        mass_props: Vec::new(),
+        density_stack: Vec::new(),
         ranges: HashMap::new(),
         reused_subtrees: 0,
         reused_objects: 0,
@@ -3348,6 +3374,7 @@ fn build_scene_run_cached(
             kinematics: kin,
             groups: b.groups,
             object_instances: b.object_instances,
+            mass_props: b.mass_props,
         },
         root,
         stats,
@@ -3551,6 +3578,7 @@ impl SceneSession {
             tree,
             objects: run.scene.objects.clone(),
             object_instances: run.object_instances.clone(),
+            mass_props: run.mass_props.clone(),
             groups: run.groups.clone(),
         });
         self.stats = stats;
@@ -4952,6 +4980,103 @@ export default (
         assert_eq!(hx(&run.scene.objects[1].material.color), 0x223344);
     }
 
+    /// ---- C：物理属性 + 静力学 ----
+
+    #[test]
+    fn test_mass_density_prop_and_report() {
+        // density prop 沿子树下传；质量属性闭式；报告有 mass 行与 total_mass。
+        let src = r#"export default (
+  <scene>
+    <group density={2.0}>
+      <sphere r={1} />
+    </group>
+    <box s={[1, 1, 1]} density={0.5} />
+    <plane n={[0, 1, 0]} d={0} />
+  </scene>
+);"#;
+        let run = run_jsx(src, None, "").expect("run");
+        let mp = &run.mass_props;
+        assert!(mp[0].is_some(), "球有质量属性");
+        assert!(mp[1].is_some(), "盒有质量属性");
+        assert!(mp[2].is_none(), "平面无有限体积 → None（诚实跳过）");
+        let m0 = mp[0].unwrap();
+        let want0 = 2.0 * 4.0 / 3.0 * std::f64::consts::PI; // ρ·4/3πr³
+        assert!((m0.mass - want0).abs() < 1e-9, "{} vs {want0}", m0.mass);
+        let m1 = mp[1].unwrap();
+        assert!((m1.mass - 0.5).abs() < 1e-9, "{} vs 0.5", m1.mass);
+        let rep = crate::scene_report::scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            &run.kinematics,
+            &run.mass_props,
+        );
+        assert!(rep.contains("mass 0 m="), "{rep}");
+        assert!(rep.contains("total_mass="), "{rep}");
+    }
+
+    #[test]
+    fn test_settle_pendulum_and_double() {
+        // 单摆：臂沿 +x，末端球，重力 −y → 平衡 q* = −π/2（竖直下垂，闭式）。
+        let pend = |extra: &str| {
+            let src = format!(
+                r#"export default (
+  <scene>
+    <link name="base" />
+    <link name="arm" density={{1.0}}><translate t={{[1, 0, 0]}}><sphere r={{0.2}} /></translate></link>
+    {extra}
+    <anchor link="base" />
+  </scene>
+);"#
+            );
+            run_jsx(&src, None, "").expect(&src)
+        };
+        let run =
+            pend(r#"<pair kind="revolute" name="j" a="base" b="arm" axis={[0,0,1]} q={0} />"#);
+        let masses = crate::scene_build::link_masses(&run);
+        assert_eq!(masses.len(), 1);
+        let out = crate::scene_build::settle(
+            &run.kinematics,
+            &masses,
+            [0.0, -9.8, 0.0],
+            &["j".to_string()],
+            None,
+        )
+        .expect("settle");
+        assert!(
+            (out[0].1 + std::f64::consts::FRAC_PI_2).abs() < 1e-5,
+            "{out:?}"
+        );
+
+        // 双摆：两臂都竖直下垂——q1 = −π/2，q2 = 0（相对）。
+        let src2 = r#"export default (
+  <scene>
+    <link name="base" />
+    <link name="arm1" density={1.0}><translate t={[1, 0, 0]}><sphere r={0.2} /></translate></link>
+    <link name="arm2" density={1.0}><translate t={[1, 0, 0]}><sphere r={0.2} /></translate></link>
+    <pair kind="revolute" name="j1" a="base" b="arm1" axis={[0,0,1]} q={0} />
+    <pair kind="revolute" name="j2" a="arm1" b="arm2" axis={[0,0,1]} at={[1,0,0]} q={0.3} />
+    <anchor link="base" />
+  </scene>
+);"#;
+        let run2 = run_jsx(src2, None, "").expect("run");
+        let masses2 = crate::scene_build::link_masses(&run2);
+        let out2 = crate::scene_build::settle(
+            &run2.kinematics,
+            &masses2,
+            [0.0, -9.8, 0.0],
+            &["j1".to_string(), "j2".to_string()],
+            Some(&[-1.4, 0.1]),
+        )
+        .expect("settle");
+        let get = |n: &str| out2.iter().find(|(s, _)| s == n).unwrap().1;
+        assert!(
+            (get("j1") + std::f64::consts::FRAC_PI_2).abs() < 1e-5,
+            "{out2:?}"
+        );
+        assert!(get("j2").abs() < 1e-5, "{out2:?}");
+    }
+
     /// ---- B：速度级运动学（twist/雅可比/活动度/奇异性） ----
 
     /// 每种副类型一个场景：base → l，副 at=[1,0,0]，带给定 q。
@@ -4991,8 +5116,7 @@ export default (
             let run = twist_run(kind, extra, q);
             let k = &run.kinematics;
             let p0 = link_point_world(&run, [1.0, 0.0, 0.0]);
-            // API：q̇=1 的点速度
-            let qd: HashMap<String, f64> = [("j".to_string(), 1.0)].into_iter().collect();
+            // API：q̇=1 的点速度（FD 是裁判）
             // 多 DOF 副逐分量对拍
             let cols = crate::scene_build::jacobian(k, "l").expect("jacobian");
             assert_eq!(cols.len(), k.pairs[0].q.len(), "{kind}: 列数=q 维数");
@@ -5157,8 +5281,13 @@ export default (
             "{tip:?}"
         );
         // 报告含 closure 行
-        let rep =
-            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+        let rep = crate::scene_report::scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            &run.kinematics,
+            &run.mass_props,
+        );
         assert!(rep.contains("closure 0 a=\"rocker\" b=\"base\""), "{rep}");
         // 确定性：同场景两次构建同解
         let run2 = run_jsx(src, None, "").expect("run2");
@@ -5239,8 +5368,13 @@ export default (
         assert_eq!(k.links[2].meshes, vec![1], "link lb 拥有 mesh 1");
         assert_eq!(k.pairs[0].tree_up, "base");
         assert_eq!(k.pairs[1].tree_up, "la");
-        let rep =
-            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+        let rep = crate::scene_report::scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            &run.kinematics,
+            &run.mass_props,
+        );
         assert!(rep.contains("pair 0 \"a\" type=revolute"), "{rep}");
         assert!(rep.contains("gear 0 a=\"a\" b=\"b\" ratio=-0.5"), "{rep}");
         assert!(rep.contains("anchor \"base\""), "{rep}");
@@ -5300,8 +5434,13 @@ export default <sphere r={0.1} />;"#,
         )
         .expect("run");
         assert!((run.kinematics.pairs[0].q[0] - 0.7).abs() < 1e-12);
-        let rep =
-            crate::scene_report::scene_report(&run.scene, &run.camera, &run.tags, &run.kinematics);
+        let rep = crate::scene_report::scene_report(
+            &run.scene,
+            &run.camera,
+            &run.tags,
+            &run.kinematics,
+            &run.mass_props,
+        );
         assert!(rep.contains("pose j=0.7"), "{rep}");
 
         // 变量级覆盖：P 约定。

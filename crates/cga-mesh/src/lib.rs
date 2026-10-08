@@ -8,3 +8,6 @@ pub use bake::*;
 
 pub mod stl;
 pub use stl::*;
+
+pub mod mass;
+pub use mass::*;

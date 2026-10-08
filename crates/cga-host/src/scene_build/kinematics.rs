@@ -1390,3 +1390,220 @@ pub fn mobility(kin: &Kinematics) -> MobilityReport {
         dof: gross as i64 - (author_pins + kin.gears.len() + kin.cams.len() + closure_pins) as i64,
     }
 }
+
+// ---- 准静态平衡（docs/roadmap.md §3.C，C2）---------------------------------
+// 重力势能 U = −Σ_links m·g·cog；平衡 ⇔ 每个自由 q 上 ∂U/∂q = 0。
+// ∂cog/∂q_j = 该副螺旋列在该点的线速度（雅可比的物理用法）。LM 复用 G5 的实现，
+// 无时间积分——这是静力学不是动力学。
+
+/// 连杆质量：`(link 名, 质量, 连杆局部系质心)`。
+pub type LinkMass = (String, f64, [f64; 3]);
+
+/// 在给定 q 覆盖下重算全部连杆位姿（生成树前向传播，与 solve_graph 同规则）。
+fn propagate_with_q(kin: &Kinematics, q_override: &HashMap<String, f64>) -> Vec<[f64; 16]> {
+    let anchor = kin.anchor.clone().unwrap_or_default();
+    let mut world: HashMap<String, [f64; 16]> = HashMap::new();
+    world.insert(anchor.clone(), mat4_identity());
+    // BFS 顺序：反复扫 pair，上游已知就算下游（小图，清晰度优先）
+    let mut pending: Vec<&PairDef> = kin.pairs.iter().collect();
+    let mut guard = 0;
+    while !pending.is_empty() && guard < 1000 {
+        guard += 1;
+        pending.retain(|p| {
+            let (up, down) = (p.tree_up.as_str(), p.tree_down.as_str());
+            let Some(&wu) = world.get(up) else {
+                return true;
+            };
+            let q = q_override
+                .get(p.name.as_deref().unwrap_or(""))
+                .copied()
+                .map(|x| vec![x])
+                .unwrap_or_else(|| p.q.clone());
+            let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
+            let m = joint_motion(&p.kind, p.axis, &q, p.pitch.unwrap_or(0.0));
+            world.insert(down.to_string(), mat4_mul(wu, mat4_mul(fa, m)));
+            false
+        });
+    }
+    kin.links
+        .iter()
+        .map(|l| world.get(&l.name).copied().unwrap_or_else(mat4_identity))
+        .collect()
+}
+
+/// 重力下的准静态平衡：自由 q（1-DOF pair 名）上重力势能最小。
+/// 势能 U = −Σ m·g·cog；求解 = 带阻尼牛顿（FD 梯度 + FD Hessian + 步长截断），
+/// 步接受以 U 下降为准——不是平衡方程的迭代，这是静力学不是动力学。
+/// `free` 为空 = 所有未给定的 1-DOF pair。返回平衡 q（按 `free` 序）。
+/// 不收敛 → Err（不许给错姿态）。
+pub fn settle(
+    kin: &Kinematics,
+    masses: &[LinkMass],
+    gravity: [f64; 3],
+    free: &[String],
+    guess: Option<&[f64]>,
+) -> Result<Vec<(String, f64)>, String> {
+    let free_names: Vec<String> = if free.is_empty() {
+        kin.pairs
+            .iter()
+            .filter(|p| p.kind.is_1dof() && !p.given)
+            .filter_map(|p| p.name.clone())
+            .collect()
+    } else {
+        free.to_vec()
+    };
+    if free_names.is_empty() {
+        return Ok(Vec::new());
+    }
+    for n in &free_names {
+        let Some(p) = kin
+            .pairs
+            .iter()
+            .find(|p| p.name.as_deref() == Some(n.as_str()))
+        else {
+            return Err(format!("JSX: settle 引用未知 pair {n}"));
+        };
+        if !p.kind.is_1dof() {
+            return Err(format!(
+                "JSX: settle 需要 1-DOF pair，{} 是 {}",
+                n,
+                p.kind.name()
+            ));
+        }
+    }
+    // U(x) = −Σ m·g·cog(x)
+    let potential = |x: &[f64]| -> f64 {
+        let qov: HashMap<String, f64> = free_names.iter().cloned().zip(x.iter().copied()).collect();
+        let worlds = propagate_with_q(kin, &qov);
+        let mut u = 0.0;
+        for (li, l) in kin.links.iter().enumerate() {
+            let Some((_, m, cog_l)) = masses.iter().find(|(ln, _, _)| ln == &l.name) else {
+                continue;
+            };
+            let cog_w = cga_core::transform_point(worlds[li], *cog_l);
+            u -= m * (gravity[0] * cog_w[0] + gravity[1] * cog_w[1] + gravity[2] * cog_w[2]);
+        }
+        u
+    };
+    let mut x: Vec<f64> = match guess {
+        Some(g) if g.len() == free_names.len() => g.to_vec(),
+        _ => free_names
+            .iter()
+            .map(|n| {
+                kin.pairs
+                    .iter()
+                    .find(|p| p.name.as_deref() == Some(n.as_str()))
+                    .map(|p| p.q.first().copied().unwrap_or(0.0))
+                    .unwrap_or(0.0)
+            })
+            .collect(),
+    };
+    newton_minimize(&potential, &mut x).map_err(|e| format!("JSX: settle 未收敛: {e}"))?;
+    Ok(free_names.into_iter().zip(x).collect())
+}
+
+/// 带阻尼与步长截断的牛顿最小化（小规模；FD 梯度 + FD Hessian + 部分主元消元）。
+/// 收敛：|∇U|∞ < 1e-7·(1+|U|)。不收敛 → Err。
+fn newton_minimize(f: &dyn Fn(&[f64]) -> f64, x: &mut [f64]) -> Result<(), String> {
+    let n = x.len();
+    let grad = |x: &[f64]| -> Vec<f64> {
+        let f0 = f(x);
+        (0..n)
+            .map(|k| {
+                let h = 1e-6 * (1.0 + x[k].abs());
+                let mut xp = x.to_vec();
+                xp[k] += h;
+                (f(&xp) - f0) / h
+            })
+            .collect()
+    };
+    let mut u = f(x);
+    for _ in 0..200 {
+        let g = grad(x);
+        let ginf = g.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        if ginf < 1e-7 * (1.0 + u.abs()) {
+            return Ok(());
+        }
+        // FD Hessian（对梯度再差分）
+        let mut h = vec![vec![0.0; n]; n];
+        for k in 0..n {
+            let hh = 1e-4 * (1.0 + x[k].abs());
+            let mut xp = x.to_vec();
+            xp[k] += hh;
+            let gp = grad(&xp);
+            for i in 0..n {
+                h[i][k] = (gp[i] - g[i]) / hh;
+            }
+        }
+        // 对称化（FD 噪声）
+        for i in 0..n {
+            for j in i + 1..n {
+                let s = 0.5 * (h[i][j] + h[j][i]);
+                h[i][j] = s;
+                h[j][i] = s;
+            }
+        }
+        let mut lambda = 1e-6;
+        let mut stepped = false;
+        for _ in 0..50 {
+            let mut aa = h.clone();
+            for u2 in 0..n {
+                aa[u2][u2] += lambda;
+            }
+            let b: Vec<f64> = g.iter().map(|v| -v).collect();
+            if let Some(mut d) = gauss_solve(&aa, &b) {
+                // 步长截断（信任域）：|δ|∞ ≤ 1.0 rad/m
+                let dmax = d.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+                if dmax > 1.0 {
+                    for v in d.iter_mut() {
+                        *v /= dmax;
+                    }
+                }
+                let xn: Vec<f64> = x.iter().zip(d.iter()).map(|(a, b)| a + b).collect();
+                let un = f(&xn);
+                if un < u {
+                    x.copy_from_slice(&xn);
+                    u = un;
+                    stepped = true;
+                    break;
+                }
+            }
+            lambda *= 10.0;
+            if lambda > 1e10 {
+                break;
+            }
+        }
+        if !stepped {
+            return Err(format!("牛顿步停滞（U={u:e}）"));
+        }
+    }
+    Err("牛顿 200 轮未收敛".to_string())
+}
+fn link_idx_of(kin: &Kinematics, name: &str) -> usize {
+    kin.links.iter().position(|l| l.name == name).unwrap_or(0)
+}
+
+/// 由 SceneRun 计算各连杆的（名, 质量, 连杆局部系质心）。无质量的连杆不出现。
+pub fn link_masses(run: &crate::SceneRun) -> Vec<LinkMass> {
+    let mut out = Vec::new();
+    for l in &run.kinematics.links {
+        let mut m_total = 0.0;
+        let mut acc = [0.0; 3];
+        for &mi in &l.meshes {
+            if let Some(Some(mp)) = run.mass_props.get(mi) {
+                m_total += mp.mass;
+                acc = v3_add(acc, v3_scale(mp.cog, mp.mass));
+            }
+        }
+        if m_total > 0.0 {
+            let cog_w = v3_scale(acc, 1.0 / m_total);
+            let inv = mat4_inv(l.world);
+            out.push((
+                l.name.clone(),
+                m_total,
+                cga_core::transform_point(inv, cog_w),
+            ));
+        }
+    }
+    out
+}

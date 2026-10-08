@@ -14,4 +14,7 @@ pub struct SceneRun {
     /// 与 `scene.objects` 平行：每个对象来自的 React 宿主实例 id
     /// （拾取 → 事件派发的映射；合成/复用的克隆对象继承来源的 id）。
     pub object_instances: Vec<Option<i64>>,
+    /// 与 `scene.objects` 平行：质量属性（`density` prop 链上的对象才有；
+    /// 平面/圆片/无限长柱为 None——无有限体积，诚实跳过）。
+    pub mass_props: Vec<Option<cga_mesh::MassProps>>,
 }
