@@ -3,7 +3,7 @@
 
 状态：**当前（2026-10-08）**。本文档是方向的依赖关系与排序；每个方向落地时各自单独立项（参照 `css-conformance.md` / `collision-plan.md` / `kinematics-graph.md` 的做法：计划文档 → 阶段 → 验收）。
 
-## 1. 已建成（全部推送，253 测试全绿）
+## 1. 已建成（全部推送，325 测试全绿）
 
 - **渲染器**：解析光线追踪（全图元 + CSG + 仿射 + 认证数值回退）、帧间像素级增量渲染（与全帧逐位一致）。
 - **JSX+CSS 宿主**：真 React 19（hooks/context/memo/key/事件派发/宿主输入）、CSS 真匹配真级联（含错误契约）、帧间子树复用、分组（`Object::group`）、碰撞查询惰性求值。
@@ -43,6 +43,18 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
   遮挡、未命中、平面拾取。
 - 边界（记录在案）：处理器必须在**宿主元素**上（组件不产生宿主实例——冒泡走
   实例树祖先链，组件上的 onClick 不会落到任何实例；组件要显式转发给宿主子元素）。
+- **抓取驱动（U1，docs/ue58-inspirations.md，2026-10-09）**：`SceneSession::drag`
+  /`drag_pick`——抓住 link 上一点拖到世界目标点，`drag_solve` 用 LM + 路径螺旋
+  列解析雅可比解自由 1-DOF pair 的 q，经 pose 通道写回（`drag_owned` 支持连续
+  拖拽）；V1 边界（cam/gear/闭链/多 DOF/不可达/越限）全部显式 Err 且场景不变。
+  顺带修复反向边螺旋列符号三处（`closure_jacobian`/`jacobian`/`propagate_with_q`，
+  探针 + FD 对拍证实）。验收：闭式断言 13 项 + 会话层逐位一致。
+- **位姿抓取（U1 借清单第 1 件，2026-10-09）**：`drag_pose_solve` /
+  `SceneSession::drag_pose`——link frame 拖到目标位姿；残差 6 行 = 位置差 +
+  rotvec(R_c·R_tᵀ)（对照 control-ga-pid 的 rotvec_between，无对跖退化）；朝向行
+  雅可比用 SO(3) 左雅可比逆**闭式**（任意残差处精确，FD 对拍含非零残差构型）；
+  target 旋转不正规显式 Err。ga-pid 对照分析与 Plant 后端差距记录在
+  `docs/ue58-inspirations.md` §3.U1 后续边界。
 
 <details><summary>原始计划（留档）</summary>
 

@@ -1152,7 +1152,19 @@ pub(crate) fn closure_jacobian(
             mat4_mul(translate4(p.at), rpy4(p.rpy)),
         );
         let s = screws_world_at(fa, &p.kind, p.axis, p.pitch.unwrap_or(0.0), &qs[pi])[c];
-        let (w, v) = ([s[0], s[1], s[2]], [s[3], s[4], s[5]]);
+        // 螺旋列 s 是「b 侧相对 a 侧」的运动。生成树正向边（b 侧下游）下游子树
+        // 随 +s；反向边（a 侧下游）下游子树随 −s。符号只取决于生成树方向，
+        // 与被驱动的是闭合的哪一端无关（反向边 FD 对拍：
+        // closure_jacobian_fd_check_reversed_edges）。
+        let sgn = if is_down(pi, link_idx[p.b.as_str()]) {
+            1.0
+        } else {
+            -1.0
+        };
+        let (w, v) = (
+            [sgn * s[0], sgn * s[1], sgn * s[2]],
+            [sgn * s[3], sgn * s[4], sgn * s[5]],
+        );
         let (da, db) = (is_down(pi, ia), is_down(pi, ib));
         let d_pa = if da {
             v3_add(v3_cross(w, pa), v)
@@ -1441,12 +1453,26 @@ pub fn link_path_pairs(kin: &Kinematics, link: &str) -> Result<Vec<usize>, Strin
 pub type JacobianCol = (Option<String>, usize, [f64; 6]);
 
 /// 连杆末端雅可比：列 = 路径上各副的世界螺旋轴（列序 = 树路径序，多 DOF 副多列）。
+/// 螺旋列是「b 侧相对 a 侧」的运动：正向边（tree_up == a）取 +s，反向边取 −s
+/// （下游是 a 侧）。路径只含树边，方向由 PairDef.tree_up/tree_down 判定。
 pub fn jacobian(kin: &Kinematics, link: &str) -> Result<Vec<JacobianCol>, String> {
     let mut cols = Vec::new();
     for pi in link_path_pairs(kin, link)? {
         let p = &kin.pairs[pi];
+        let sgn = if p.tree_up == p.a { 1.0 } else { -1.0 };
         for (k, s) in pair_screws_world(p).into_iter().enumerate() {
-            cols.push((p.name.clone(), k, s));
+            cols.push((
+                p.name.clone(),
+                k,
+                [
+                    sgn * s[0],
+                    sgn * s[1],
+                    sgn * s[2],
+                    sgn * s[3],
+                    sgn * s[4],
+                    sgn * s[5],
+                ],
+            ));
         }
     }
     Ok(cols)
@@ -1569,7 +1595,8 @@ pub fn mobility(kin: &Kinematics) -> MobilityReport {
 /// 连杆质量：`(link 名, 质量, 连杆局部系质心)`。
 pub type LinkMass = (String, f64, [f64; 3]);
 
-/// 在给定 q 覆盖下重算全部连杆位姿（生成树前向传播，与 solve_graph 同规则）。
+/// 在给定 q 覆盖下重算全部连杆位姿（生成树前向传播，与 solve_graph 同规则：
+/// 正向边 world(B)=world(A)∘F_a∘M(q)，反向边取逆）。
 fn propagate_with_q(kin: &Kinematics, q_override: &HashMap<String, f64>) -> Vec<[f64; 16]> {
     let anchor = kin.anchor.clone().unwrap_or_default();
     let mut world: HashMap<String, [f64; 16]> = HashMap::new();
@@ -1591,7 +1618,13 @@ fn propagate_with_q(kin: &Kinematics, q_override: &HashMap<String, f64>) -> Vec<
                 .unwrap_or_else(|| p.q.clone());
             let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
             let m = joint_motion(&p.kind, p.axis, &q, p.pitch.unwrap_or(0.0));
-            world.insert(down.to_string(), mat4_mul(wu, mat4_mul(fa, m)));
+            let fam = mat4_mul(fa, m);
+            let w = if up == p.a {
+                mat4_mul(wu, fam)
+            } else {
+                mat4_mul(wu, mat4_inv(fam))
+            };
+            world.insert(down.to_string(), w);
             false
         });
     }
@@ -1775,6 +1808,443 @@ pub fn link_masses(run: &crate::SceneRun) -> Vec<LinkMass> {
     out
 }
 
+// ---- 抓取驱动（U1，docs/ue58-inspirations.md §3.U1）-----------------------
+// 抓住 link 上一点拖到世界目标点 = 位置级约束（3 行残差：抓取点 − target），
+// 与闭链同构但残差来自外部目标。自由变量 = anchor→link 树路径上未固定的
+// 1-DOF pair。雅可比 = 路径螺旋列的解析点导数（ṗ = ω×p + v），方向符号规则
+// 与闭链一致：正向边 fa_w = W_up∘F_a、列取 +s；反向边 fa_w = W_up∘M(q)⁻¹、
+// 列取 −s（推导：反向边下游是 a 侧，其运动螺旋 = b 侧相对螺旋的负；
+// FD 对拍见 drag_jacobian_fd_check）。
+
+/// 抓取拖拽的求解结果。
+#[derive(Clone, Debug)]
+pub struct DragSolved {
+    pub link: String,
+    /// 求解后的抓取点世界位置（≈ target）。
+    pub grab: [f64; 3],
+    pub target: [f64; 3],
+    /// 求解到的 pair（名 + q；V1 自由变量都是 1-DOF，裸名）。
+    pub solved: Vec<(String, f64)>,
+    /// 收敛后的残差范数 |grab − target|。
+    pub residual: f64,
+}
+
+/// 拖拽路径传播（pub(crate) 可测）：自由变量 x 下被抓 link 的世界位姿 +
+/// 各路径 pair 的 F_a 世界矩阵（雅可比用）。反向边 F_a 世界 = W_up∘M(q)⁻¹。
+pub(crate) fn drag_path_walk(
+    kin: &Kinematics,
+    path: &[usize],
+    free: &[usize],
+    x: &[f64],
+) -> ([f64; 16], Vec<[f64; 16]>) {
+    let mut world = mat4_identity();
+    let mut fa_ws = Vec::with_capacity(path.len());
+    for &pi in path {
+        let p = &kin.pairs[pi];
+        let mut q = p.q.clone();
+        if let Some(k) = free.iter().position(|&f| f == pi) {
+            q[0] = x[k];
+        }
+        let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
+        let m = joint_motion(&p.kind, p.axis, &q, p.pitch.unwrap_or(0.0));
+        if p.tree_up == p.a {
+            fa_ws.push(mat4_mul(world, fa));
+            world = mat4_mul(world, mat4_mul(fa, m));
+        } else {
+            fa_ws.push(mat4_mul(world, mat4_inv(m)));
+            world = mat4_mul(world, mat4_inv(mat4_mul(fa, m)));
+        }
+    }
+    (world, fa_ws)
+}
+
+/// 抓取点雅可比（解析螺旋列；方向符号规则见模块注释）。返回 3×n（n = free 数）。
+pub(crate) fn drag_jacobian(
+    kin: &Kinematics,
+    path: &[usize],
+    free: &[usize],
+    x: &[f64],
+    grab_local: [f64; 3],
+) -> Vec<Vec<f64>> {
+    let (world, fa_ws) = drag_path_walk(kin, path, free, x);
+    let p_grab = cga_core::transform_point(world, grab_local);
+    let mut j = vec![vec![0.0; free.len()]; 3];
+    for (k, &pi) in free.iter().enumerate() {
+        let p = &kin.pairs[pi];
+        let pos = path
+            .iter()
+            .position(|&u| u == pi)
+            .expect("drag: 自由 pair 必在路径上");
+        let mut q = p.q.clone();
+        q[0] = x[k];
+        let s = screws_world_at(fa_ws[pos], &p.kind, p.axis, p.pitch.unwrap_or(0.0), &q)[0];
+        let sgn = if p.tree_up == p.a { 1.0 } else { -1.0 };
+        let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
+        let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
+        let d = v3_add(v3_cross(w, p_grab), v);
+        for i in 0..3 {
+            j[i][k] = d[i];
+        }
+    }
+    j
+}
+
+/// 拖拽的自由变量选择（抓点/抓位姿共用）：(anchor→link 路径 pair 下标, 自由 pair 下标)。
+/// V1 边界全部在这里拒绝：cam / 闭链相交 / gear / 多 DOF / 无名自由 pair。
+fn drag_free_pairs(
+    kin: &Kinematics,
+    link: &str,
+    extra_free: &std::collections::HashSet<String>,
+) -> Result<(Vec<usize>, Vec<usize>), String> {
+    if !kin.links.iter().any(|l| l.name == link) {
+        return Err(format!("JSX: drag 引用未知 link {link}"));
+    }
+    if !kin.cams.is_empty() {
+        return Err("JSX: drag 暂不支持含 cam 的机构（cam 解出的 q 未在图里标记，拖拽会静默违反接触；联动拖拽另行立项）".to_string());
+    }
+    let path = link_path_pairs(kin, link)?;
+    let path_names: std::collections::HashSet<&str> = path
+        .iter()
+        .filter_map(|&pi| kin.pairs[pi].name.as_deref())
+        .collect();
+    for cl in &kin.closures {
+        for (n, _) in &cl.solved {
+            // 多 DOF 副在 solved 名单里按 name[c] 展开，比较时去分量后缀。
+            let base = n.split('[').next().unwrap_or(n);
+            if path_names.contains(base) {
+                return Err(format!(
+                    "JSX: drag 的路径经过闭链求解的 pair {base}（闭链机构拖拽 = 拖动+闭链联解，另行立项）"
+                ));
+            }
+        }
+    }
+    let geared: std::collections::HashSet<&str> = kin
+        .gears
+        .iter()
+        .flat_map(|g| [g.a.as_str(), g.b.as_str()])
+        .collect();
+    let mut free: Vec<usize> = Vec::new();
+    for &pi in &path {
+        let p = &kin.pairs[pi];
+        let redrag = p.name.as_ref().is_some_and(|n| extra_free.contains(n));
+        if p.given && !redrag {
+            continue;
+        }
+        if p.name.as_deref().is_some_and(|n| geared.contains(n)) {
+            continue;
+        }
+        if !p.kind.is_1dof() {
+            continue;
+        }
+        free.push(pi);
+    }
+    if free.is_empty() {
+        return Err(format!(
+            "JSX: drag 路径上没有可解的自由 1-DOF pair（link {link}；给定/gear/多 DOF 副在拖拽中固定）"
+        ));
+    }
+    if free.iter().any(|&pi| kin.pairs[pi].name.is_none()) {
+        return Err("JSX: drag 需要路径上的自由 pair 有名字（q 要经 pose 写回）".to_string());
+    }
+    Ok((path, free))
+}
+
+/// 抓住 link 上一点（link 局部系 `grab_local`）拖到世界系 `target`：
+/// 解 anchor→link 树路径上自由 1-DOF pair 的 q（LM + 解析雅可比，与闭链同一实现）。
+/// `extra_free`：上轮拖拽经 pose 写回钉住的 pair 名——它们本轮仍是自由变量。
+///
+/// V1 边界（诚实，不静默违反任何约束，全部在 `drag_free_pairs` 拒绝）：
+/// 多 DOF 副保持当前 q；gear 耦合 pair 固定；路径触碰闭链求解 pair → Err；
+/// 含 cam 机构 → Err；不收敛 / 收敛后残差超界 / 解出 q 越限 → Err（不许假装跟随）。
+pub fn drag_solve(
+    kin: &Kinematics,
+    link: &str,
+    grab_local: [f64; 3],
+    target: [f64; 3],
+    extra_free: &std::collections::HashSet<String>,
+) -> Result<DragSolved, String> {
+    let (path, free) = drag_free_pairs(kin, link, extra_free)?;
+    let mut x: Vec<f64> = free.iter().map(|&pi| kin.pairs[pi].q[0]).collect();
+    let resid = |x: &[f64]| -> Vec<f64> {
+        let (world, _) = drag_path_walk(kin, &path, &free, x);
+        let p = cga_core::transform_point(world, grab_local);
+        vec![p[0] - target[0], p[1] - target[1], p[2] - target[2]]
+    };
+    let mut rfn = |x: &[f64]| resid(x);
+    let mut jfn = |x: &[f64]| drag_jacobian(kin, &path, &free, x, grab_local);
+    lm_solve_j(&mut x, &mut rfn, &mut jfn).map_err(|e| format!("JSX: drag {link} 未收敛: {e}"))?;
+    let r = resid(&x);
+    let rnorm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if rnorm > 1e-6 {
+        return Err(format!(
+            "JSX: drag {link} 收敛后残差 {rnorm:e} 仍超界（目标不可达）"
+        ));
+    }
+    let mut solved = Vec::new();
+    for (k, &pi) in free.iter().enumerate() {
+        let p = &kin.pairs[pi];
+        let name = p.name.clone().expect("drag: 上面已查无名");
+        if let Some([lo, hi]) = p.limit {
+            if x[k] < lo || x[k] > hi {
+                return Err(format!(
+                    "JSX: drag 解出的 pair {name} q={} outside limit [{lo}, {hi}]（目标在限位外）",
+                    x[k]
+                ));
+            }
+        }
+        solved.push((name, x[k]));
+    }
+    let (world, _) = drag_path_walk(kin, &path, &free, &x);
+    Ok(DragSolved {
+        link: link.to_string(),
+        grab: cga_core::transform_point(world, grab_local),
+        target,
+        solved,
+        residual: rnorm,
+    })
+}
+
+// ---- 位姿抓取（U1 后续，docs/ue58-inspirations.md §3.U1 借清单第 1 件）------
+// 把 link 的 frame（位姿，不只是点）拖到目标位姿。残差 6 行 = 位置差（3）+
+// rotvec(R_c·R_tᵀ)（3，rotor 对数形式——对照 control-ga-pid 的 rotvec_between；
+// 不用轴叉积，叉积在对跖朝向退化）。雅可比 = 路径螺旋列：位置行 w×p+v、朝向行 w。
+// 雅可比在 r=0 处精确（FD 对拍），远离时是标准几何 IK 一阶模型——LM 接受准则
+// 仍是残差下降，收敛由终检钉死，与闭链同一诚实形态。
+
+/// 位姿拖拽的求解结果。
+#[derive(Clone, Debug)]
+pub struct DragPoseSolved {
+    pub link: String,
+    /// 求解后的 link 位姿（≈ target）。
+    pub pose: [f64; 16],
+    pub target: [f64; 16],
+    /// 求解到的 pair（名 + q；V1 自由变量都是 1-DOF，裸名）。
+    pub solved: Vec<(String, f64)>,
+    /// 收敛后的残差范数（6 行：米 + 弧度混合范数，仅供判收敛用）。
+    pub residual: f64,
+}
+
+/// mat4（行主序）的旋转部分。
+fn mat4_rot(m: &[f64; 16]) -> [[f64; 3]; 3] {
+    [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]]
+}
+
+fn mat3_transpose(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
+}
+
+fn mat3_mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
+}
+
+/// rotvec（轴·角）：R 的对数。θ→0 一阶分支；θ→π 对跖分支（从对角元取轴，
+/// 叉积形式在那里退化——这正是残差不用轴叉积的原因）。
+fn rotvec_from_mat3(r: [[f64; 3]; 3]) -> [f64; 3] {
+    let tr = r[0][0] + r[1][1] + r[2][2];
+    let c = ((tr - 1.0) / 2.0).clamp(-1.0, 1.0);
+    let th = c.acos();
+    if th < 1e-9 {
+        return [
+            (r[2][1] - r[1][2]) / 2.0,
+            (r[0][2] - r[2][0]) / 2.0,
+            (r[1][0] - r[0][1]) / 2.0,
+        ];
+    }
+    if std::f64::consts::PI - th < 1e-6 {
+        // 对跖：R = 2aaᵀ − I ⇒ 对角元给出 |a| 分量，取最大者定号。
+        let mut a = [
+            ((r[0][0] + 1.0) / 2.0).max(0.0).sqrt(),
+            ((r[1][1] + 1.0) / 2.0).max(0.0).sqrt(),
+            ((r[2][2] + 1.0) / 2.0).max(0.0).sqrt(),
+        ];
+        let k = if a[0] >= a[1] && a[0] >= a[2] {
+            0
+        } else if a[1] >= a[2] {
+            1
+        } else {
+            2
+        };
+        if a[k] > 1e-12 {
+            let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+            // 非对角元定另两个分量的号（a_i·a_k = R_ik/2）。
+            for &m in &[i, j] {
+                if r[m][k] + r[k][m] < 0.0 {
+                    a[m] = -a[m];
+                }
+            }
+            a = v3_unit(a);
+        }
+        return v3_scale(a, th);
+    }
+    let s = 2.0 * th.sin();
+    [
+        th * (r[2][1] - r[1][2]) / s,
+        th * (r[0][2] - r[2][0]) / s,
+        th * (r[1][0] - r[0][1]) / s,
+    ]
+}
+
+/// SO(3) 对数的左雅可比之逆（闭式）：rel 受世界系扰动 exp(ŵ·h)·rel 时
+/// d rotvec(rel)/dh = J_l(r)⁻¹·w。
+/// J_l(r)⁻¹ = I − ½r̂ + c₂·r̂²，c₂ = 1/θ² − (1+cosθ)/(2θ·sinθ)。
+/// 极限都可去：θ→0 时 c₂→1/12（级数分支）；θ→π 时 (1+cosθ)/(2θ sinθ)→u/(4θ)
+/// （u=π−θ，避免 0/0）。有了它朝向行雅可比在**任意**残差处精确，不只是 r=0
+/// （FD 对拍：drag_pose_jacobian_fd_check 含非零残差构型）。
+fn rotvec_left_jac_inv(r: [f64; 3]) -> [[f64; 3]; 3] {
+    let th = v3_norm(r);
+    let skew = [[0.0, -r[2], r[1]], [r[2], 0.0, -r[0]], [-r[1], r[0], 0.0]];
+    let skew2 = mat3_mul(skew, skew);
+    let c2 = if th < 1e-9 {
+        1.0 / 12.0
+    } else if th > std::f64::consts::PI - 1e-3 {
+        let u = std::f64::consts::PI - th;
+        1.0 / (th * th) - u / (4.0 * th)
+    } else {
+        1.0 / (th * th) - (1.0 + th.cos()) / (2.0 * th * th.sin())
+    };
+    let mut out = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = if i == j { 1.0 } else { 0.0 } - 0.5 * skew[i][j] + c2 * skew2[i][j];
+        }
+    }
+    out
+}
+
+fn mat3_vec(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+}
+
+/// 位姿残差（pub(crate) 可测）：位置差（3）+ rotvec(R_c·R_tᵀ)（3）。
+pub(crate) fn drag_pose_residual(
+    kin: &Kinematics,
+    path: &[usize],
+    free: &[usize],
+    x: &[f64],
+    target: &[f64; 16],
+) -> Vec<f64> {
+    let (world, _) = drag_path_walk(kin, path, free, x);
+    let rc = mat4_rot(&world);
+    let rt = mat4_rot(target);
+    let rel = mat3_mul(rc, mat3_transpose(rt));
+    let rv = rotvec_from_mat3(rel);
+    vec![
+        world[3] - target[3],
+        world[7] - target[7],
+        world[11] - target[11],
+        rv[0],
+        rv[1],
+        rv[2],
+    ]
+}
+
+/// 位姿雅可比（pub(crate) 可测）：位置行 w×p+v（任意位形精确）；朝向行
+/// J_l(r_rot)⁻¹·w（左雅可比逆闭式，任意残差处精确——不只是 r=0）。
+pub(crate) fn drag_pose_jacobian(
+    kin: &Kinematics,
+    path: &[usize],
+    free: &[usize],
+    x: &[f64],
+    target: &[f64; 16],
+) -> Vec<Vec<f64>> {
+    let (world, fa_ws) = drag_path_walk(kin, path, free, x);
+    let p = [world[3], world[7], world[11]];
+    let rel = mat3_mul(mat4_rot(&world), mat3_transpose(mat4_rot(target)));
+    let jl_inv = rotvec_left_jac_inv(rotvec_from_mat3(rel));
+    let mut j = vec![vec![0.0; free.len()]; 6];
+    for (k, &pi) in free.iter().enumerate() {
+        let pd = &kin.pairs[pi];
+        let pos = path
+            .iter()
+            .position(|&u| u == pi)
+            .expect("drag_pose: 自由 pair 必在路径上");
+        let mut q = pd.q.clone();
+        q[0] = x[k];
+        let s = screws_world_at(fa_ws[pos], &pd.kind, pd.axis, pd.pitch.unwrap_or(0.0), &q)[0];
+        let sgn = if pd.tree_up == pd.a { 1.0 } else { -1.0 };
+        let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
+        let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
+        let dp = v3_add(v3_cross(w, p), v);
+        let dw = mat3_vec(jl_inv, w);
+        for i in 0..3 {
+            j[i][k] = dp[i];
+            j[3 + i][k] = dw[i];
+        }
+    }
+    j
+}
+
+/// 把 link 的 frame 拖到目标位姿 `target`（4×4 齐次矩阵，旋转部分必须正规，
+/// 否则显式 Err）。自由变量/边界与 [`drag_solve`] 相同（`drag_free_pairs`）。
+/// 自由 DOF < 6 时 LM 求最小二乘——目标不可达由终检残差显式拒绝，不假装跟随。
+pub fn drag_pose_solve(
+    kin: &Kinematics,
+    link: &str,
+    target: [f64; 16],
+    extra_free: &std::collections::HashSet<String>,
+) -> Result<DragPoseSolved, String> {
+    // target 正规性：RᵀR ≈ I（不许拿缩放/剪切矩阵当位姿）。
+    let rt = mat4_rot(&target);
+    let gram = mat3_mul(mat3_transpose(rt), rt);
+    let ident = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for i in 0..3 {
+        for j in 0..3 {
+            if (gram[i][j] - ident[i][j]).abs() > 1e-9 {
+                return Err("JSX: drag_pose 的 target 旋转部分不正规（RᵀR ≠ I）".to_string());
+            }
+        }
+    }
+    let (path, free) = drag_free_pairs(kin, link, extra_free)?;
+    let mut x: Vec<f64> = free.iter().map(|&pi| kin.pairs[pi].q[0]).collect();
+    let mut rfn = |x: &[f64]| drag_pose_residual(kin, &path, &free, x, &target);
+    let mut jfn = |x: &[f64]| drag_pose_jacobian(kin, &path, &free, x, &target);
+    lm_solve_j(&mut x, &mut rfn, &mut jfn)
+        .map_err(|e| format!("JSX: drag_pose {link} 未收敛: {e}"))?;
+    let r = drag_pose_residual(kin, &path, &free, &x, &target);
+    let rnorm = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if rnorm > 1e-6 {
+        return Err(format!(
+            "JSX: drag_pose {link} 收敛后残差 {rnorm:e} 仍超界（目标不可达）"
+        ));
+    }
+    let mut solved = Vec::new();
+    for (k, &pi) in free.iter().enumerate() {
+        let p = &kin.pairs[pi];
+        let name = p.name.clone().expect("drag_pose: 上面已查无名");
+        if let Some([lo, hi]) = p.limit {
+            if x[k] < lo || x[k] > hi {
+                return Err(format!(
+                    "JSX: drag_pose 解出的 pair {name} q={} outside limit [{lo}, {hi}]（目标在限位外）",
+                    x[k]
+                ));
+            }
+        }
+        solved.push((name, x[k]));
+    }
+    let (world, _) = drag_path_walk(kin, &path, &free, &x);
+    Ok(DragPoseSolved {
+        link: link.to_string(),
+        pose: world,
+        target,
+        solved,
+        residual: rnorm,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1928,5 +2398,615 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 反向声明的 G5+ 场景：pair 朝 anchor 写（a 侧在生成树下游，BFS 反向边）。
+    /// 几何与 multi_dof_decl 同构：零位形下 l2 的 [0,1,0] 落在 base 的 [−1,1,0]。
+    fn multi_dof_decl_reversed() -> GraphDecl {
+        GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![
+                PairDecl {
+                    name: Some("cyl".into()),
+                    kind: JointKind::Cylindrical,
+                    a: "l1".into(),
+                    b: "base".into(),
+                    at: [0.0; 3],
+                    axis: [0.0, 0.0, 1.0],
+                    rpy: [0.0; 3],
+                    q_init: vec![],
+                    q_guess: vec![],
+                    q_given: false,
+                    pitch: None,
+                    limit: None,
+                },
+                PairDecl {
+                    name: Some("sph".into()),
+                    kind: JointKind::Spherical,
+                    a: "l2".into(),
+                    b: "l1".into(),
+                    at: [1.0, 0.0, 0.0],
+                    axis: [0.0, 0.0, 1.0],
+                    rpy: [0.0; 3],
+                    q_init: vec![],
+                    q_guess: vec![],
+                    q_given: false,
+                    pitch: None,
+                    limit: None,
+                },
+            ],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![ClosureDecl {
+                a: "l2".into(),
+                b: "base".into(),
+                at: [0.0, 1.0, 0.0],
+                b_at: [-1.0, 1.0, 0.0],
+                axis: [0.0, 0.0, 1.0],
+            }],
+        }
+    }
+
+    #[test]
+    fn closure_jacobian_fd_check_reversed_edges() {
+        // 探针（U1 前期）：反向边的下游是 a 侧，其运动螺旋 = −s（b 侧相对螺旋取负）。
+        // closure_jacobian 必须与 FD 一致——不一致就是反向边符号漏处理的实证。
+        let decl = multi_dof_decl_reversed();
+        let cd = &decl.closures[0];
+        let link_idx: HashMap<&str, usize> =
+            [("base", 0), ("l1", 1), ("l2", 2)].into_iter().collect();
+        // parent[v] = (pair, 上游 link, fwd)：两条边都是反向（fwd=false）。
+        let parent: [Option<(usize, usize, bool)>; 3] =
+            [None, Some((0, 0, false)), Some((1, 1, false))];
+        let order = [1usize, 2usize];
+        let qs: Vec<Vec<f64>> = vec![vec![0.3, 0.2], vec![0.1, -0.2, 0.15]];
+        let free: Vec<(usize, usize)> = vec![(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)];
+        let fwd = |qs: &Vec<Vec<f64>>| -> Vec<[f64; 16]> {
+            let mut world = vec![mat4_identity(); 3];
+            for &v in &order {
+                let (pi, u, is_fwd) = parent[v].unwrap();
+                let p = &decl.pairs[pi];
+                let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
+                let m = joint_motion(&p.kind, p.axis, &qs[pi], p.pitch.unwrap_or(0.0));
+                world[v] = if is_fwd {
+                    mat4_mul(world[u], mat4_mul(fa, m))
+                } else {
+                    mat4_mul(world[u], mat4_inv(mat4_mul(fa, m)))
+                };
+            }
+            world
+        };
+        let world = fwd(&qs);
+        let ja = closure_jacobian(&decl, cd, &free, 2, 0, &link_idx, &parent, &qs, &world);
+        for (k, &(pi, c)) in free.iter().enumerate() {
+            let h = 1e-7;
+            let mut qp = qs.clone();
+            qp[pi][c] += h;
+            let rp = closure_residual(cd, 2, 0, &fwd(&qp));
+            let r0 = closure_residual(cd, 2, 0, &fwd(&qs));
+            for i in 0..6 {
+                let fd = (rp[i] - r0[i]) / h;
+                assert!(
+                    (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
+                    "反向边 J[{i}][{k}] 解析 {} vs FD {fd}",
+                    ja[i][k]
+                );
+            }
+        }
+    }
+
+    // ---- 抓取驱动（U1）------------------------------------------------------
+
+    /// 由声明求解并组装 Kinematics（drag_solve 的输入形态）。
+    fn solve_kin(decl: &GraphDecl) -> Kinematics {
+        let sol = solve_graph(decl, &HashMap::new()).expect("solve");
+        let links = decl
+            .links
+            .iter()
+            .enumerate()
+            .map(|(i, n)| LinkDef {
+                name: n.clone(),
+                meshes: vec![],
+                world: sol.link_world[i],
+            })
+            .collect();
+        Kinematics {
+            links,
+            pairs: sol.pairs,
+            anchor: decl.anchor.clone(),
+            gears: decl
+                .gears
+                .iter()
+                .map(|g| GearRel {
+                    a: g.a.clone(),
+                    b: g.b.clone(),
+                    ratio: g.ratio,
+                    offset: g.offset,
+                })
+                .collect(),
+            cams: sol.cams,
+            closures: sol.closures,
+            pose: vec![],
+        }
+    }
+
+    fn pair_decl(name: &str, kind: JointKind, a: &str, b: &str, at: [f64; 3]) -> PairDecl {
+        PairDecl {
+            name: Some(name.into()),
+            kind,
+            a: a.into(),
+            b: b.into(),
+            at,
+            axis: [0.0, 0.0, 1.0],
+            rpy: [0.0; 3],
+            q_init: vec![],
+            q_guess: vec![],
+            q_given: false,
+            pitch: None,
+            limit: None,
+        }
+    }
+
+    /// 单摆：base —rev(z)→ l1，抓取点 l1 局部 [1,0,0]。
+    fn pend_decl(a: &str, b: &str) -> GraphDecl {
+        GraphDecl {
+            links: vec!["base".into(), "l1".into()],
+            pairs: vec![pair_decl("j", JointKind::Revolute, a, b, [0.0; 3])],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![],
+        }
+    }
+
+    #[test]
+    fn drag_pendulum_closed_form() {
+        // 闭式：抓取点 (1,0,0) 拖到 (0,1,0) → q = π/2（单位圆上的旋转）。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let d = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .expect("drag");
+        assert_eq!(d.solved.len(), 1);
+        assert_eq!(d.solved[0].0, "j");
+        assert!(
+            (d.solved[0].1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "q 应为 π/2，got {}",
+            d.solved[0].1
+        );
+        assert!(d.residual < 1e-9, "残差 {}", d.residual);
+        for i in 0..3 {
+            assert!((d.grab[i] - [0.0, 1.0, 0.0][i]).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn drag_pendulum_reversed_edge_closed_form() {
+        // 反向声明（a 侧在生成树下游）：world(l1) = R(z,−q)，同一目标 → q = −π/2。
+        // 与正向用例同几何、异号解——专门看守方向符号。
+        let kin = solve_kin(&pend_decl("l1", "base"));
+        let d = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .expect("drag");
+        assert!(
+            (d.solved[0].1 + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "反向边 q 应为 −π/2，got {}",
+            d.solved[0].1
+        );
+        assert!(d.residual < 1e-9);
+    }
+
+    #[test]
+    fn drag_unreachable_is_error() {
+        // 目标 (1,1,0) 距原点 √2 ≠ 1：不在单摆可达圆上 → Err，不假装跟随。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let e = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("drag"), "{e}");
+    }
+
+    #[test]
+    fn drag_limit_violation_is_error() {
+        // 限位 [−1,1] 的单摆拖到需要 q=π/2 的目标 → Err（目标在限位外）。
+        let mut decl = pend_decl("base", "l1");
+        decl.pairs[0].limit = Some([-1.0, 1.0]);
+        let kin = solve_kin(&decl);
+        let e = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("outside limit"), "{e}");
+    }
+
+    #[test]
+    fn drag_prismatic_closed_form() {
+        // 滑动副（x 轴）：抓取点随 q 平移，(1,0,0) → (2.5,0,0) 即 q = 1.5。
+        let mut decl = pend_decl("base", "l1");
+        decl.pairs[0].kind = JointKind::Prismatic;
+        decl.pairs[0].axis = [1.0, 0.0, 0.0];
+        let kin = solve_kin(&decl);
+        let d = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [2.5, 0.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .expect("drag");
+        assert!(
+            (d.solved[0].1 - 1.5).abs() < 1e-8,
+            "q 应为 1.5，got {}",
+            d.solved[0].1
+        );
+        // 滑动副到不了横向目标 → Err
+        assert!(drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [2.5, 0.1, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .is_err());
+    }
+
+    /// 平面 2R 臂：base —j1(z)→ l1 —j2(z, at=[1,0,0])→ l2，抓取 l2 局部 [1,0,0]。
+    fn two_r_decl(q1: f64, q2: f64) -> GraphDecl {
+        let mut j1 = pair_decl("j1", JointKind::Revolute, "base", "l1", [0.0; 3]);
+        j1.q_init = vec![q1];
+        let mut j2 = pair_decl("j2", JointKind::Revolute, "l1", "l2", [1.0, 0.0, 0.0]);
+        j2.q_init = vec![q2];
+        GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![j1, j2],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![],
+        }
+    }
+
+    #[test]
+    fn drag_two_r_arm_fk_roundtrip() {
+        // 闭式往返：q*=(0.9,1.1) 正解出末端点 p*，从种子 (0.3,0.5) 拖到 p*
+        // 应收回 q*（局部最近根；肘上/肘下两支离种子不等距）。
+        let kin_star = solve_kin(&two_r_decl(0.9, 1.1));
+        let l2w = kin_star
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .world;
+        let p_star = cga_core::transform_point(l2w, [1.0, 0.0, 0.0]);
+        let kin = solve_kin(&two_r_decl(0.3, 0.5));
+        let d = drag_solve(
+            &kin,
+            "l2",
+            [1.0, 0.0, 0.0],
+            p_star,
+            &std::collections::HashSet::new(),
+        )
+        .expect("drag");
+        assert!((d.solved[0].1 - 0.9).abs() < 1e-6, "q1: {}", d.solved[0].1);
+        assert!((d.solved[1].1 - 1.1).abs() < 1e-6, "q2: {}", d.solved[1].1);
+        assert!(d.residual < 1e-9);
+    }
+
+    #[test]
+    fn drag_jacobian_fd_check() {
+        // 解析雅可比 vs FD（裁判）：j1 正向 + j2 反向（a="l2", b="l1"）混合链，
+        // 专门看守反向边的 −s 与 fa_w = W_up∘M(q)⁻¹。
+        let mut j2 = pair_decl("j2", JointKind::Revolute, "l2", "l1", [0.5, 0.0, 0.0]);
+        j2.q_init = vec![0.3];
+        let mut j1 = pair_decl("j1", JointKind::Revolute, "base", "l1", [0.0; 3]);
+        j1.q_init = vec![0.4];
+        let decl = GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![j1, j2],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![],
+        };
+        let kin = solve_kin(&decl);
+        let path = link_path_pairs(&kin, "l2").expect("path");
+        let free: Vec<usize> = path.clone();
+        let grab_local = [0.5, 0.0, 0.0];
+        let x: Vec<f64> = free.iter().map(|&pi| kin.pairs[pi].q[0]).collect();
+        let ja = drag_jacobian(&kin, &path, &free, &x, grab_local);
+        let point = |x: &[f64]| {
+            let (w, _) = drag_path_walk(&kin, &path, &free, x);
+            cga_core::transform_point(w, grab_local)
+        };
+        let p0 = point(&x);
+        for k in 0..free.len() {
+            let h = 1e-7;
+            let mut xp = x.clone();
+            xp[k] += h;
+            let p1 = point(&xp);
+            for i in 0..3 {
+                let fd = (p1[i] - p0[i]) / h;
+                assert!(
+                    (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
+                    "drag J[{i}][{k}] 解析 {} vs FD {fd}",
+                    ja[i][k]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn drag_multi_dof_pair_stays_fixed() {
+        // 路径上的球副（未给定、多 DOF）在拖拽中保持当前 q：只有 rev 是自由变量。
+        // rev 单变量可达的目标 (0,2,0)：q = π/2（臂长 2 的圆）。
+        let j1 = pair_decl("j1", JointKind::Revolute, "base", "l1", [0.0; 3]);
+        let s = pair_decl("s", JointKind::Spherical, "l1", "l2", [1.0, 0.0, 0.0]);
+        let decl = GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![j1, s],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![],
+        };
+        let kin = solve_kin(&decl);
+        let d = drag_solve(
+            &kin,
+            "l2",
+            [1.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .expect("drag");
+        assert_eq!(d.solved.len(), 1, "球副不得成为自由变量: {:?}", d.solved);
+        assert_eq!(d.solved[0].0, "j1");
+        assert!((d.solved[0].1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn drag_gear_pair_not_free() {
+        // gear 耦合的 pair 在拖拽中固定：路径上只有 gear 副 → 无自由变量 → Err。
+        let mut decl = pend_decl("base", "l1");
+        decl.links.push("l2".into());
+        decl.pairs
+            .push(pair_decl("j2", JointKind::Revolute, "base", "l2", [0.0; 3]));
+        decl.gears.push(GearDecl {
+            a: "j".into(),
+            b: "j2".into(),
+            ratio: -2.0,
+            offset: 0.0,
+        });
+        let kin = solve_kin(&decl);
+        let e = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("可解的自由"), "{e}");
+    }
+
+    #[test]
+    fn drag_closure_path_rejected() {
+        // 闭链机构（multi_dof_decl 的 closure 解出 cyl[*]/sph[*]）：路径与之相交 → Err。
+        let decl = multi_dof_decl([0.0, 0.0], [0.0, 0.0, 0.0]);
+        let kin = solve_kin(&decl);
+        let e = drag_solve(
+            &kin,
+            "l2",
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("闭链"), "{e}");
+    }
+
+    #[test]
+    fn drag_cam_rejected() {
+        // 含 cam 的机构：cam 解出的 q 未在图里标记，拖拽会静默违反接触 → Err。
+        let mut kin = solve_kin(&pend_decl("base", "l1"));
+        kin.cams.push(CamSolved {
+            a: "base".into(),
+            b: "l1".into(),
+            q: 0.0,
+        });
+        let e = drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("cam"), "{e}");
+    }
+
+    #[test]
+    fn drag_extra_free_allows_redrag() {
+        // 上轮拖拽经 pose 写回的 pair（given=true）仍是本轮自由变量（extra_free）。
+        let mut decl = pend_decl("base", "l1");
+        decl.pairs[0].q_init = vec![0.2];
+        decl.pairs[0].q_given = true;
+        let kin = solve_kin(&decl);
+        assert!(drag_solve(
+            &kin,
+            "l1",
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            &std::collections::HashSet::new(),
+        )
+        .is_err());
+        let extra: std::collections::HashSet<String> = ["j".to_string()].into_iter().collect();
+        let d = drag_solve(&kin, "l1", [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], &extra).expect("re-drag");
+        assert!((d.solved[0].1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    // ---- 位姿抓取（U1 借清单第 1 件）---------------------------------------
+
+    #[test]
+    fn drag_pose_pendulum_closed_form() {
+        // link frame 从 I 拖到 R_z(π/2)（位置不动）：q = π/2。纯朝向目标——
+        // 抓点版够不到，由 rotvec 残差承载。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let target = Multivector::rotor([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2).to_matrix();
+        let d = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new())
+            .expect("drag_pose");
+        assert_eq!(d.solved.len(), 1);
+        assert!(
+            (d.solved[0].1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "q 应为 π/2，got {}",
+            d.solved[0].1
+        );
+        assert!(d.residual < 1e-9, "残差 {}", d.residual);
+    }
+
+    #[test]
+    fn drag_pose_pendulum_reversed_closed_form() {
+        // 反向声明：world(l1) = R_z(−q)，同一目标 → q = −π/2。
+        let kin = solve_kin(&pend_decl("l1", "base"));
+        let target = Multivector::rotor([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2).to_matrix();
+        let d = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new())
+            .expect("drag_pose");
+        assert!(
+            (d.solved[0].1 + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "反向边 q 应为 −π/2，got {}",
+            d.solved[0].1
+        );
+    }
+
+    #[test]
+    fn drag_pose_orientation_unreachable_is_error() {
+        // z 轴单摆够不到绕 x 的旋转 → Err，不假装跟随。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let target = Multivector::rotor([1.0, 0.0, 0.0], 0.5).to_matrix();
+        let e = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new()).unwrap_err();
+        assert!(e.contains("drag_pose"), "{e}");
+    }
+
+    #[test]
+    fn drag_pose_two_r_fk_roundtrip() {
+        // 位姿 FK 往返：q*=(0.9,1.1) 的位姿作目标，从种子 (0.3,0.5) 收回 q*。
+        // 2R 臂的位姿流形是 2 维（平面位置 + θ=q1+q2），FK 目标在流形上 → 精确。
+        let kin_star = solve_kin(&two_r_decl(0.9, 1.1));
+        let target = kin_star
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .world;
+        let kin = solve_kin(&two_r_decl(0.3, 0.5));
+        let d = drag_pose_solve(&kin, "l2", target, &std::collections::HashSet::new())
+            .expect("drag_pose");
+        assert!((d.solved[0].1 - 0.9).abs() < 1e-6, "q1: {}", d.solved[0].1);
+        assert!((d.solved[1].1 - 1.1).abs() < 1e-6, "q2: {}", d.solved[1].1);
+        assert!(d.residual < 1e-9);
+    }
+
+    #[test]
+    fn drag_pose_jacobian_fd_check() {
+        // 朝向行有左雅可比逆后在**任意**残差处精确：两组构型对拍——r=0（target =
+        // 当前位姿）与非零残差（target 偏移 [0.05,−0.04]）。FD 是裁判。
+        // 链与 drag_jacobian_fd_check 相同（j1 正向 + j2 反向）。
+        let mut j2 = pair_decl("j2", JointKind::Revolute, "l2", "l1", [0.5, 0.0, 0.0]);
+        j2.q_init = vec![0.3];
+        let mut j1 = pair_decl("j1", JointKind::Revolute, "base", "l1", [0.0; 3]);
+        j1.q_init = vec![0.4];
+        let decl = GraphDecl {
+            links: vec!["base".into(), "l1".into(), "l2".into()],
+            pairs: vec![j1, j2],
+            anchor: Some("base".into()),
+            gears: vec![],
+            cams: vec![],
+            closures: vec![],
+        };
+        let kin = solve_kin(&decl);
+        let path = link_path_pairs(&kin, "l2").expect("path");
+        let free: Vec<usize> = path.clone();
+        let x: Vec<f64> = free.iter().map(|&pi| kin.pairs[pi].q[0]).collect();
+        let (world0, _) = drag_path_walk(&kin, &path, &free, &x);
+        let mut x_off = x.clone();
+        x_off[0] += 0.05;
+        x_off[1] -= 0.04;
+        let (world_off, _) = drag_path_walk(&kin, &path, &free, &x_off);
+        for (tag, target, want_zero) in [("r=0", world0, true), ("非零残差", world_off, false)]
+        {
+            let ja = drag_pose_jacobian(&kin, &path, &free, &x, &target);
+            let r0 = drag_pose_residual(&kin, &path, &free, &x, &target);
+            if want_zero {
+                assert!(r0.iter().all(|v| v.abs() < 1e-12), "r=0 前提: {r0:?}");
+            } else {
+                assert!(r0.iter().any(|v| v.abs() > 1e-3), "非零残差前提: {r0:?}");
+            }
+            for k in 0..free.len() {
+                let h = 1e-7;
+                let mut xp = x.clone();
+                xp[k] += h;
+                let rp = drag_pose_residual(&kin, &path, &free, &xp, &target);
+                for i in 0..6 {
+                    let fd = (rp[i] - r0[i]) / h;
+                    assert!(
+                        (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
+                        "{tag} drag_pose J[{i}][{k}] 解析 {} vs FD {fd}",
+                        ja[i][k]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drag_pose_rejects_non_rotation_target() {
+        // 旋转部分带缩放 → 显式 Err（不拿非正规矩阵当位姿）。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let mut target = mat4_identity();
+        target[0] = 2.0;
+        let e = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new()).unwrap_err();
+        assert!(e.contains("不正规"), "{e}");
+    }
+
+    #[test]
+    fn drag_pose_shares_v1_boundaries() {
+        // 自由变量选择与抓点版同一条路径（drag_free_pairs 共用）：gear 拒绝。
+        let mut decl = pend_decl("base", "l1");
+        decl.links.push("l2".into());
+        decl.pairs
+            .push(pair_decl("j2", JointKind::Revolute, "base", "l2", [0.0; 3]));
+        decl.gears.push(GearDecl {
+            a: "j".into(),
+            b: "j2".into(),
+            ratio: -2.0,
+            offset: 0.0,
+        });
+        let kin = solve_kin(&decl);
+        let e = drag_pose_solve(
+            &kin,
+            "l1",
+            mat4_identity(),
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("可解的自由"), "{e}");
     }
 }

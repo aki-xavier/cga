@@ -3664,6 +3664,9 @@ pub struct SceneSession {
     incr: Option<cga_gpu::IncrementalRenderer>,
     /// 碰撞扫描器（C1）：指纹缓存跨帧复用，没变的对象对不重算。
     col_scan: crate::collision::CollisionScan,
+    /// 拖拽（U1）写回的 pair 名：这些 pose 项是上一轮 drag 的产物，下一次
+    /// drag 仍把它们当自由变量（作者/pose 钉的则始终固定）。
+    drag_owned: std::collections::HashSet<String>,
 }
 
 impl SceneSession {
@@ -3763,6 +3766,7 @@ impl SceneSession {
             stats: BuildStats::default(),
             incr: None,
             col_scan: crate::collision::CollisionScan::new(),
+            drag_owned: std::collections::HashSet::new(),
         };
         sess.build_from(&out.snapshot)?;
         Ok(sess)
@@ -3880,6 +3884,111 @@ impl SceneSession {
             "object": hit.object,
         });
         Ok(Some(self.dispatch(id, "onClick", &payload.to_string())?))
+    }
+
+    /// 拖拽 q 写回（drag / drag_pose 共用）：pose 覆盖 → 重建一帧；重建失败
+    /// 回滚 pose 保持会话一致。成功的 pair 记入 `drag_owned`（连续拖拽仍自由）。
+    fn apply_drag_q(&mut self, solved: &[(String, f64)]) -> Result<(), String> {
+        let old: Vec<(String, Option<f64>)> = solved
+            .iter()
+            .map(|(n, _)| (n.clone(), self.pose.get(n).copied()))
+            .collect();
+        for (n, q) in solved {
+            self.pose.insert(n.clone(), *q);
+        }
+        if let Err(e) = self.rebuild() {
+            for (n, v) in old {
+                match v {
+                    Some(v) => {
+                        self.pose.insert(n, v);
+                    }
+                    None => {
+                        self.pose.remove(&n);
+                    }
+                }
+            }
+            let _ = self.rebuild();
+            return Err(e);
+        }
+        for (n, _) in solved {
+            self.drag_owned.insert(n.clone());
+        }
+        Ok(())
+    }
+
+    /// 抓取拖拽（U1，docs/ue58-inspirations.md §3.U1）：把 link 上当前位于世界点
+    /// `from` 的点解到世界点 `to`——anchor→link 路径上自由 1-DOF pair 的 q 经
+    /// pose 通道写回并重建场景（一帧）。同一机构可连续拖拽：上轮写回的 q 仍是
+    /// 本轮的自由变量。不可达 / 不收敛 / 越限 / V1 边界（cam·gear·闭链·多 DOF，
+    /// 见 `drag_solve` 文档）→ Err，场景与 pose 保持不变。
+    pub fn drag(
+        &mut self,
+        link: &str,
+        from: [f64; 3],
+        to: [f64; 3],
+    ) -> Result<crate::scene_build::DragSolved, String> {
+        let solved = {
+            let run = self.run();
+            let l = run
+                .kinematics
+                .links
+                .iter()
+                .find(|l| l.name == link)
+                .ok_or_else(|| format!("JSX: drag 引用未知 link {link}"))?;
+            // 世界点 → link 局部系（解算器在图求解位姿系里工作）。
+            let grab_local = cga_core::transform_point(mat4_inv(l.world), from);
+            crate::scene_build::drag_solve(&run.kinematics, link, grab_local, to, &self.drag_owned)?
+        };
+        self.apply_drag_q(&solved.solved)?;
+        Ok(solved)
+    }
+
+    /// 位姿抓取拖拽（U1 借清单第 1 件）：把 link 的 frame 拖到目标位姿 `to`
+    /// （4×4 齐次矩阵，旋转部分必须正规）。残差 = 位置差 + rotvec(R_c·R_tᵀ)
+    /// （motor 对数形式，无轴叉积的对跖退化）。写回/回滚/连续拖拽与
+    /// [`SceneSession::drag`] 同一套。
+    pub fn drag_pose(
+        &mut self,
+        link: &str,
+        to: [f64; 16],
+    ) -> Result<crate::scene_build::DragPoseSolved, String> {
+        let solved = {
+            let run = self.run();
+            if !run.kinematics.links.iter().any(|l| l.name == link) {
+                return Err(format!("JSX: drag_pose 引用未知 link {link}"));
+            }
+            crate::scene_build::drag_pose_solve(&run.kinematics, link, to, &self.drag_owned)?
+        };
+        self.apply_drag_q(&solved.solved)?;
+        Ok(solved)
+    }
+
+    /// 像素抓取拖拽：拾取 → 命中对象所属 link → [`SceneSession::drag`]
+    /// （抓取点 = 命中点）。未命中或命中对象不在任何 link 下 → Ok(None)。
+    pub fn drag_pick(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: i32,
+        h: i32,
+        to: [f64; 3],
+    ) -> Result<Option<crate::scene_build::DragSolved>, String> {
+        let Some((hit, link)) = ({
+            let run = self.run();
+            cga_gpu::pick(&run.scene, &run.camera, x, y, w, h).map(|hit| {
+                let link = run
+                    .kinematics
+                    .links
+                    .iter()
+                    .find(|l| l.meshes.contains(&hit.object))
+                    .map(|l| l.name.clone());
+                (hit, link)
+            })
+        }) else {
+            return Ok(None);
+        };
+        let Some(link) = link else { return Ok(None) };
+        Ok(Some(self.drag(&link, hit.point, to)?))
     }
 
     /// 碰撞扫描（C1）：全对 broad+narrow，同组（非 0 且相等）免检；指纹缓存跨帧
@@ -4193,6 +4302,203 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         );
         // 未命中区域点击 → None
         assert!(s.click(0.5, 70.5, 96, 72).expect("miss").is_none());
+    }
+
+    /// U1 验收场景：平面 2R 臂（base 固定，j1/j2 不钉 → 抓取时均为自由变量）。
+    const ARM_SCENE: &str = r#"export default (
+  <scene>
+    <link name="base"><box s={[4, 4, 0.1]} t={[0, 0, -0.1]} /></link>
+    <link name="l1"><sphere r={0.1} t={[0.5, 0, 0]} /></link>
+    <link name="l2"><sphere r={0.12} t={[1, 0, 0]} /></link>
+    <pair kind="revolute" name="j1" a="base" b="l1" axis={[0, 0, 1]} />
+    <pair kind="revolute" name="j2" a="l1" b="l2" at={[1, 0, 0]} axis={[0, 0, 1]} />
+    <anchor link="base" />
+  </scene>
+);"#;
+
+    /// 2R 臂末端（l2 局部 [1,0,0]）的闭式正解。
+    fn arm_end(q1: f64, q2: f64) -> [f64; 3] {
+        [q1.cos() + (q1 + q2).cos(), q1.sin() + (q1 + q2).sin(), 0.0]
+    }
+
+    #[test]
+    fn session_drag_solves_closed_form_and_renders_bitwise() {
+        // U1 验收链：抓取点 + 目标 → LM 解 q（闭式对拍）→ pose 写回 → 场景重建
+        // → 增量渲染与全帧逐位一致；连续拖拽（上轮 q 仍自由）；不可达 → Err
+        // 且场景不变。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let end_now = |s: &SceneSession| {
+            let l2 = s
+                .run()
+                .kinematics
+                .links
+                .iter()
+                .find(|l| l.name == "l2")
+                .unwrap();
+            cga_core::transform_point(l2.world, [1.0, 0.0, 0.0])
+        };
+        // 初始 q=(0,0)：末端 (2,0,0)。
+        let p0 = end_now(&s);
+        assert!((p0[0] - 2.0).abs() < 1e-9 && p0[1].abs() < 1e-9, "{p0:?}");
+
+        let target = arm_end(0.9, 1.1);
+        let d = s.drag("l2", [2.0, 0.0, 0.0], target).expect("drag");
+        assert!((d.solved[0].1 - 0.9).abs() < 1e-6, "q1: {:?}", d.solved);
+        assert!((d.solved[1].1 - 1.1).abs() < 1e-6, "q2: {:?}", d.solved);
+        let p1 = end_now(&s);
+        for i in 0..3 {
+            assert!(
+                (p1[i] - target[i]).abs() < 1e-6,
+                "拖拽后末端应在目标: {p1:?}"
+            );
+        }
+
+        // 增量渲染与全帧逐位一致
+        let (img, _st) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        let run = s.run().clone();
+        let mut full = cga_gpu::Renderer::new(96, 72, 1, 3);
+        let want = full.render(run.scene.clone(), run.camera);
+        assert_eq!(
+            img.png,
+            cga_gpu::frame_to_png_bytes(&want),
+            "增量渲染必须与全帧逐位一致"
+        );
+
+        // 连续拖拽：上轮经 pose 写回的 q 仍是本轮自由变量。
+        let t2 = arm_end(0.4, 0.8);
+        let d2 = s.drag("l2", target, t2).expect("drag2");
+        assert!((d2.solved[0].1 - 0.4).abs() < 1e-6, "q1: {:?}", d2.solved);
+        assert!((d2.solved[1].1 - 0.8).abs() < 1e-6, "q2: {:?}", d2.solved);
+
+        // 不可达 → Err 且场景/pose 不变（不许假装跟随）。
+        assert!(s.drag("l2", t2, [3.0, 3.0, 0.0]).is_err());
+        let p2 = end_now(&s);
+        for i in 0..3 {
+            assert!((p2[i] - t2[i]).abs() < 1e-6, "失败后场景应保持: {p2:?}");
+        }
+        // 未知 link → Err
+        assert!(s.drag("nope", [0.0; 3], [0.0; 3]).is_err());
+    }
+
+    #[test]
+    fn session_drag_pick_grabs_hit_point() {
+        // 像素抓取：拾取命中 l2 球面 → 抓取点 = 命中点 → 拖到绕 z 旋转 0.5 的
+        // 目标（同半径同高度，必可达）→ 残差闭式断言。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let l2_meshes: Vec<usize> = s
+            .run()
+            .kinematics
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .meshes
+            .clone();
+        let mut picked = None;
+        'outer: for iy in 0..72 {
+            for ix in 0..128 {
+                if let Some((hit, _)) = s.pick(ix as f64 + 0.5, iy as f64 + 0.5, 128, 72) {
+                    if l2_meshes.contains(&hit.object) {
+                        picked = Some((ix as f64 + 0.5, iy as f64 + 0.5, hit.point));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let (px, py, grab) = picked.expect("应命中 l2 的球");
+        let (c, sn) = (0.5f64.cos(), 0.5f64.sin());
+        let to = [
+            grab[0] * c - grab[1] * sn,
+            grab[0] * sn + grab[1] * c,
+            grab[2],
+        ];
+        let d = s
+            .drag_pick(px, py, 128, 72, to)
+            .expect("drag_pick")
+            .expect("命中 l2");
+        assert_eq!(d.link, "l2");
+        assert!(d.residual < 1e-6, "残差 {}", d.residual);
+        for i in 0..3 {
+            assert!(
+                (d.grab[i] - to[i]).abs() < 1e-6,
+                "抓取点应达目标: {:?}",
+                d.grab
+            );
+        }
+        // 命中静态物体（base 不在路径上也有 pair，但 ground 类无 link 的对象 → None）：
+        // 本场景全部对象都在 link 下，改用未命中像素断言 None。
+        assert!(s
+            .drag_pick(0.5, 71.5, 128, 72, [0.0; 3])
+            .expect("miss")
+            .is_none());
+    }
+
+    #[test]
+    fn session_drag_pose_solves_closed_form_and_renders_bitwise() {
+        // 位姿抓取（借清单第 1 件）：目标 = FK(0.9,1.1) 的 link frame 位姿矩阵
+        // （l2 frame 原点在肘部 (cos q1, sin q1)，旋转 R_z(q1+q2)）→ 收回 q*；
+        // 增量渲染逐位一致；朝向不可达 → Err 场景不变。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let target = mat4_mul(
+            translate4([0.9f64.cos(), 0.9f64.sin(), 0.0]),
+            Multivector::rotor([0.0, 0.0, 1.0], 2.0).to_matrix(),
+        );
+        let d = s.drag_pose("l2", target).expect("drag_pose");
+        assert!((d.solved[0].1 - 0.9).abs() < 1e-6, "q1: {:?}", d.solved);
+        assert!((d.solved[1].1 - 1.1).abs() < 1e-6, "q2: {:?}", d.solved);
+        // 场景位姿 = 目标（逐元素）
+        let l2w = s
+            .run()
+            .kinematics
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .world;
+        for i in 0..16 {
+            assert!(
+                (l2w[i] - target[i]).abs() < 1e-6,
+                "位姿[{i}]: {} vs {}",
+                l2w[i],
+                target[i]
+            );
+        }
+        // 增量渲染与全帧逐位一致
+        let (img, _st) = s
+            .render_incremental(96, 72, 1, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        let run = s.run().clone();
+        let mut full = cga_gpu::Renderer::new(96, 72, 1, 3);
+        let want = full.render(run.scene.clone(), run.camera);
+        assert_eq!(
+            img.png,
+            cga_gpu::frame_to_png_bytes(&want),
+            "增量渲染必须与全帧逐位一致"
+        );
+        // 朝向不可达（绕 x 转，平面臂够不到）→ Err 且场景不变
+        let before = s
+            .run()
+            .kinematics
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .world;
+        let bad = Multivector::rotor([1.0, 0.0, 0.0], 0.5).to_matrix();
+        assert!(s.drag_pose("l2", bad).is_err());
+        let after = s
+            .run()
+            .kinematics
+            .links
+            .iter()
+            .find(|l| l.name == "l2")
+            .unwrap()
+            .world;
+        assert_eq!(before, after, "失败后场景应保持");
+        // 未知 link → Err
+        assert!(s.drag_pose("nope", target).is_err());
     }
 
     #[test]
