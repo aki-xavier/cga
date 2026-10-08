@@ -79,6 +79,8 @@ pub struct PairDef {
     pub q: Vec<f64>,
     pub pitch: Option<f64>,
     pub limit: Option<[f64; 2]>,
+    /// q 是否由作者/pose 给定（活动度计数的 pin；gear/cam/closure 解出的不算）。
+    pub given: bool,
     /// 解出后：F_a 的世界矩阵（报告 / URDF / 扫描用）。
     pub fa_world: [f64; 16],
     /// 生成树定向（求解器填充）：上游 / 下游连杆。
@@ -511,6 +513,8 @@ pub struct ClosureSolved {
     pub b_at: [f64; 3],
     /// 求解到的 pair（名 + q）。
     pub solved: Vec<(String, f64)>,
+    /// 独立约束数 = 残差雅可比在解处的秩（活动度计数用）。
+    pub rank: usize,
     /// 收敛后的残差范数。
     pub residual: f64,
 }
@@ -607,10 +611,12 @@ pub(crate) fn solve_graph(
     };
     let mut qs: Vec<Vec<f64>> = Vec::with_capacity(decl.pairs.len());
     let mut pinned: Vec<bool> = Vec::with_capacity(decl.pairs.len());
+    let mut author_pinned: Vec<bool> = Vec::with_capacity(decl.pairs.len());
     for p in &decl.pairs {
         let arity = p.kind.q_arity();
         let mut q = p.q_init.clone();
         let mut pin = p.q_given;
+        let mut author_pin = p.q_given;
         if let Some(n) = &p.name {
             if let Some(&o) = pose.get(n) {
                 if p.q_given {
@@ -626,6 +632,7 @@ pub(crate) fn solve_graph(
                 }
                 q = vec![o];
                 pin = true;
+                author_pin = true;
             }
         }
         if q.is_empty() && arity > 0 {
@@ -645,6 +652,7 @@ pub(crate) fn solve_graph(
         }
         qs.push(q);
         pinned.push(pin);
+        author_pinned.push(author_pin);
     }
 
     // ---- 3. gear 方程不动点（无因果：哪侧已知解哪侧） ----
@@ -884,7 +892,7 @@ pub(crate) fn solve_graph(
             })
             .collect();
         let mut wtmp = vec![mat4_identity(); n_links.max(1)];
-        lm_solve(&mut x, &mut |x| {
+        let j_final = lm_solve(&mut x, &mut |x| {
             for (k, &pi) in free.iter().enumerate() {
                 qs[pi][0] = x[k];
             }
@@ -913,6 +921,9 @@ pub(crate) fn solve_graph(
             at: cd.at,
             b_at: cd.b_at,
             solved,
+            // 独立约束数 = 残差雅可比的秩（平面闭环的退化行自动排除）。
+            // closure 自身还有一个被确定的旋转 DOF（+1 在 mobility 里算）。
+            rank: mat_rank(&j_final),
             residual: rnorm,
         });
     }
@@ -948,6 +959,7 @@ pub(crate) fn solve_graph(
             q: qs[pi].clone(),
             pitch: p.pitch,
             limit: p.limit,
+            given: author_pinned[pi],
             fa_world: mat4_mul(world[link_idx[p.a.as_str()]], fa),
             tree_up: up,
             tree_down: down,
@@ -964,7 +976,7 @@ pub(crate) fn solve_graph(
 /// 生成树上 a → b 的 pair 路径（parent 数组由 BFS 填充）。
 fn tree_path(parent: &[Option<(usize, usize, bool)>], mut a: usize, mut b: usize) -> Vec<usize> {
     // 先爬到同一深度，再同步上爬到 LCA。
-    let mut depth = |mut v: usize| {
+    let depth = |mut v: usize| {
         let mut d = 0;
         while let Some((_, u, _)) = parent[v] {
             d += 1;
@@ -998,19 +1010,21 @@ fn tree_path(parent: &[Option<(usize, usize, bool)>], mut a: usize, mut b: usize
 }
 
 /// 小规模 Levenberg–Marquardt：min |r(x)|，有限差分雅可比。
-/// 不收敛（100 轮）→ Err。用于闭链的位置级约束求解。
-fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<(), String> {
+/// 返回收敛处的雅可比（活动度的约束秩用）。不收敛（100 轮）→ Err。
+/// 用于闭链的位置级约束求解。
+fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<Vec<Vec<f64>>, String> {
     let n = x.len();
     let mut lambda = 1e-3;
     let mut cur = r(x);
     let mut cur_norm = cur.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let mut j: Vec<Vec<f64>> = Vec::new();
     for _ in 0..100 {
         if cur_norm < 1e-9 {
-            return Ok(());
+            return Ok(j);
         }
         let m = cur.len();
         // 有限差分雅可比
-        let mut j = vec![vec![0.0; n]; m];
+        j = vec![vec![0.0; n]; m];
         for (k, xk) in x.iter().enumerate() {
             let h = 1e-7 * (1.0 + xk.abs());
             let mut xp = x.to_vec();
@@ -1060,9 +1074,43 @@ fn lm_solve(x: &mut [f64], r: &mut dyn FnMut(&[f64]) -> Vec<f64>) -> Result<(), 
         }
     }
     if cur_norm < 1e-7 {
-        return Ok(());
+        return Ok(j);
     }
     Err(format!("LM 100 轮未收敛（残差 {cur_norm:e}）"))
+}
+
+/// 矩阵的秩（高斯消元，列主元）。
+fn mat_rank(m: &[Vec<f64>]) -> usize {
+    if m.is_empty() || m[0].is_empty() {
+        return 0;
+    }
+    let (rows, cols) = (m.len(), m[0].len());
+    let mut a: Vec<Vec<f64>> = m.to_vec();
+    let mut rank = 0;
+    let mut row = 0;
+    for c in 0..cols {
+        // 列主元：第一个非零行
+        let Some(pr) = (row..rows).find(|&r| a[r][c].abs() > 1e-9) else {
+            continue;
+        };
+        a.swap(row, pr);
+        let d = a[row][c];
+        for v in a[row].iter_mut().take(cols).skip(c) {
+            *v /= d;
+        }
+        for r in 0..rows {
+            if r != row {
+                let f = a[r][c];
+                let (src, dst) = (a[row].clone(), &mut a[r]);
+                for (k, dv) in dst.iter_mut().enumerate().take(cols).skip(c) {
+                    *dv -= f * src[k];
+                }
+            }
+        }
+        row += 1;
+        rank += 1;
+    }
+    rank
 }
 
 /// 小规模高斯消元（部分主元），奇异 → None。
@@ -1071,9 +1119,10 @@ fn gauss_solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     let mut m: Vec<Vec<f64>> = a.to_vec();
     let mut x = b.to_vec();
     for c in 0..n {
+        // 部分主元
         let mut piv = c;
-        for r in c + 1..n {
-            if m[r][c].abs() > m[piv][c].abs() {
+        for (r, row_r) in m.iter().enumerate().skip(c + 1) {
+            if row_r[c].abs() > m[piv][c].abs() {
                 piv = r;
             }
         }
@@ -1082,10 +1131,14 @@ fn gauss_solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
         }
         m.swap(c, piv);
         x.swap(c, piv);
-        for r in c + 1..n {
-            let f = m[r][c] / m[c][c];
-            for k in c..n {
-                m[r][k] -= f * m[c][k];
+        let pivot_val = m[c][c];
+        let (top, rest) = m.split_at_mut(c + 1);
+        for (ri, row_r) in rest.iter_mut().enumerate() {
+            let r = c + 1 + ri;
+            let f = row_r[c] / pivot_val;
+            let src = top[c].clone();
+            for (k, mv) in row_r.iter_mut().enumerate().take(n).skip(c) {
+                *mv -= f * src[k];
             }
             x[r] -= f * x[c];
         }
@@ -1099,4 +1152,241 @@ fn gauss_solve(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
         out[c] = s / m[c][c];
     }
     Some(out)
+}
+
+// ---- 速度级运动学（docs/roadmap.md §3.B）----------------------------------
+// twist 约定与 sweep_toi 一致：物理量纲 [ω; v]，ṗ = ω×(p−o) + v
+// （旋转副 v = o×ω）。注意 Multivector::velocity 存二重矢量系数（物理角速度
+// = 2ω），本模块输出一律物理量纲。全部雅可比列都有有限差分对拍看守。
+
+/// 副在当前位姿的世界螺旋轴列（多 DOF 副多列，列序 = q 的分量序）。
+/// `fa_world` 是运动前的副 frame（F_a 的世界位姿，solve_graph 已填）。
+pub fn pair_screws_world(p: &PairDef) -> Vec<[f64; 6]> {
+    let f = p.fa_world;
+    let r = |v: [f64; 3]| {
+        [
+            f[0] * v[0] + f[1] * v[1] + f[2] * v[2],
+            f[4] * v[0] + f[5] * v[1] + f[6] * v[2],
+            f[8] * v[0] + f[9] * v[1] + f[10] * v[2],
+        ]
+    };
+    let o0 = [f[3], f[7], f[11]];
+    let axis_w = v3_unit(r(p.axis));
+    let rot_col = |o: [f64; 3]| {
+        let w = axis_w;
+        let v = v3_cross(o, w);
+        [w[0], w[1], w[2], v[0], v[1], v[2]]
+    };
+    let slide_col = [0.0, 0.0, 0.0, axis_w[0], axis_w[1], axis_w[2]];
+    match p.kind {
+        JointKind::Revolute | JointKind::Continuous => vec![rot_col(o0)],
+        JointKind::Prismatic => vec![slide_col],
+        JointKind::Helical => {
+            // M = T(axis·p·q)·R(axis,q)：旋转心随平移走。
+            let pitch = p.pitch.unwrap_or(0.0);
+            let q = p.q.first().copied().unwrap_or(0.0);
+            let o = v3_add(o0, v3_scale(axis_w, pitch * q));
+            let v = v3_add(v3_cross(o, axis_w), v3_scale(axis_w, pitch));
+            vec![[axis_w[0], axis_w[1], axis_w[2], v[0], v[1], v[2]]]
+        }
+        JointKind::Cylindrical => {
+            // M = T(axis·qp)·R(axis,qr)：旋转心在平移后的点。
+            let qp = p.q.get(1).copied().unwrap_or(0.0);
+            let o = v3_add(o0, v3_scale(axis_w, qp));
+            vec![rot_col(o), slide_col]
+        }
+        JointKind::Spherical => {
+            // M = Rx·Ry·Rz（先 z 后 y 后 x）：瞬时轴 = x, Rx·y, Rx·Ry·z（F_a 系）。
+            let q = &p.q;
+            let (rx, ry) = (
+                q.first().copied().unwrap_or(0.0),
+                q.get(1).copied().unwrap_or(0.0),
+            );
+            let rx_m = Multivector::rotor([1.0, 0.0, 0.0], rx).to_matrix();
+            let ry_m = Multivector::rotor([0.0, 1.0, 0.0], ry).to_matrix();
+            let m3 = |m: [f64; 16], v: [f64; 3]| {
+                [
+                    m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+                    m[4] * v[0] + m[5] * v[1] + m[6] * v[2],
+                    m[8] * v[0] + m[9] * v[1] + m[10] * v[2],
+                ]
+            };
+            let axes = [
+                [1.0, 0.0, 0.0],
+                m3(rx_m, [0.0, 1.0, 0.0]),
+                m3(mat4_mul(rx_m, ry_m), [0.0, 0.0, 1.0]),
+            ];
+            axes.iter()
+                .map(|a| {
+                    let w = v3_unit(r(*a));
+                    let v = v3_cross(o0, w);
+                    [w[0], w[1], w[2], v[0], v[1], v[2]]
+                })
+                .collect()
+        }
+        JointKind::Planar => {
+            // M = T(x·e1 + y·e2)·R(axis,θ)：平移在 F_a 系（不经 θ 旋转！），
+            // 旋转轴过当前平移后的点。
+            let axis_l = p.axis;
+            let e1 = v3_perp(axis_l);
+            let e2 = v3_cross(axis_l, e1);
+            let q = &p.q;
+            let th = q.get(2).copied().unwrap_or(0.0);
+            let _ = th;
+            let (x, y) = (
+                q.first().copied().unwrap_or(0.0),
+                q.get(1).copied().unwrap_or(0.0),
+            );
+            let o = v3_add(o0, v3_add(v3_scale(r(e1), x), v3_scale(r(e2), y)));
+            let rotc = rot_col(o);
+            vec![
+                [0.0, 0.0, 0.0, r(e1)[0], r(e1)[1], r(e1)[2]],
+                [0.0, 0.0, 0.0, r(e2)[0], r(e2)[1], r(e2)[2]],
+                rotc,
+            ]
+        }
+        JointKind::Fixed => vec![],
+    }
+}
+
+/// 从 anchor 到 link 的树路径上的副（根→叶序）。
+pub fn link_path_pairs(kin: &Kinematics, link: &str) -> Result<Vec<usize>, String> {
+    let mut out = Vec::new();
+    let mut cur = link.to_string();
+    let anchor = kin.anchor.clone().unwrap_or_default();
+    while cur != anchor {
+        let Some(pi) = kin.pairs.iter().position(|p| p.tree_down == cur) else {
+            return Err(format!(
+                "kinematics: link {link} 到 anchor {anchor} 没有树路径（未知 link 或未连通）"
+            ));
+        };
+        out.push(pi);
+        cur = kin.pairs[pi].tree_up.clone();
+    }
+    out.reverse();
+    Ok(out)
+}
+
+/// 雅可比的列：`(pair 名, q 分量下标, 世界螺旋轴)`。
+pub type JacobianCol = (Option<String>, usize, [f64; 6]);
+
+/// 连杆末端雅可比：列 = 路径上各副的世界螺旋轴（列序 = 树路径序，多 DOF 副多列）。
+pub fn jacobian(kin: &Kinematics, link: &str) -> Result<Vec<JacobianCol>, String> {
+    let mut cols = Vec::new();
+    for pi in link_path_pairs(kin, link)? {
+        let p = &kin.pairs[pi];
+        for (k, s) in pair_screws_world(p).into_iter().enumerate() {
+            cols.push((p.name.clone(), k, s));
+        }
+    }
+    Ok(cols)
+}
+
+/// 连杆 twist（世界系）：Σ 螺旋列 · q̇。`qd` 按 pair 名给速率（无名/未给 = 0）。
+pub fn link_twist(
+    kin: &Kinematics,
+    link: &str,
+    qd: &HashMap<String, f64>,
+) -> Result<[f64; 6], String> {
+    let mut v = [0.0; 6];
+    for (name, _, s) in jacobian(kin, link)? {
+        let q = name
+            .as_deref()
+            .and_then(|n| qd.get(n))
+            .copied()
+            .unwrap_or(0.0);
+        for i in 0..6 {
+            v[i] += s[i] * q;
+        }
+    }
+    Ok(v)
+}
+
+/// 连杆上一点的世界系速度：ṗ = ω×(p − o) + v，由 twist [ω; v] 计算
+/// （twist 的 v 定义在螺旋轴点 o 上；这里换到原点参考：ṗ = ω×p + (v − ω×o)…
+/// 约定统一为 ṗ = ω×(p−o)+v ⇒ 用世界螺旋 [ω; v] 时 ṗ = ω×p + v 当且仅当 v 是
+/// 原点处的线速度。pair_screws_world 的 v = o×ω 正是"绕 o 转"的原点线速度）。
+pub fn point_velocity(
+    kin: &Kinematics,
+    link: &str,
+    point_world: [f64; 3],
+    qd: &HashMap<String, f64>,
+) -> Result<[f64; 3], String> {
+    let t = link_twist(kin, link, qd)?;
+    let w = [t[0], t[1], t[2]];
+    let v = [t[3], t[4], t[5]];
+    // ṗ = ω×p + v（v 是原点参考的线速度：v = o×ω 时 ω×p + o×ω = ω×(p−o)...
+    // 标准螺旋：ṗ = ω×p + v，v = −ω×o。我们的列给的是 v = o×ω？看 rot_col：
+    // v = o×ω ⇒ ṗ = ω×(p−o) = ω×p − ω×o = ω×p + o×ω ✓ 所以 ṗ = ω×p + v 直接成立。
+    let c = v3_cross(w, point_world);
+    Ok([c[0] + v[0], c[1] + v[1], c[2] + v[2]])
+}
+
+/// 列空间的秩（高斯消元，列主元）。
+fn cols_rank(cols: &[[f64; 6]]) -> usize {
+    let n = cols.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut m: Vec<Vec<f64>> = (0..6)
+        .map(|r| cols.iter().map(|c| c[r]).collect())
+        .collect();
+    let mut rank = 0;
+    let mut row = 0;
+    for c in 0..n {
+        let Some(pr) = (row..6).find(|&r| m[r][c].abs() > 1e-9) else {
+            continue;
+        };
+        m.swap(row, pr);
+        let d = m[row][c];
+        for v in m[row].iter_mut().take(n).skip(c) {
+            *v /= d;
+        }
+        let src: Vec<f64> = m[row].clone();
+        for (r, m_r) in m.iter_mut().enumerate() {
+            if r != row {
+                let f = m_r[c];
+                for (k, mv) in m_r.iter_mut().enumerate().take(n).skip(c) {
+                    *mv -= f * src[k];
+                }
+            }
+        }
+        row += 1;
+        rank += 1;
+    }
+    rank
+}
+
+/// 奇异位形：路径雅可比列秩 < 路径自由度数（如平面 2R 臂伸直）。
+pub fn is_singular(kin: &Kinematics, link: &str) -> Result<bool, String> {
+    let cols = jacobian(kin, link)?;
+    Ok(cols_rank(&cols.iter().map(|c| c.2).collect::<Vec<_>>()) < cols.len())
+}
+
+/// Grübler 活动度（构图期可知）：机构固有活动度 = 不钉任何输入时的值。
+/// 口径：gross = Σ 副的 q 维数 + Σ closure（每个 revolute 闭环自带 1 个旋转
+/// 自由度）；pins = 作者给定/pose 的 q 数 + gear 方程数 + cam 数 +
+/// Σ closure（解出的 q 数 + 1（自身被确定的 DOF））。
+#[derive(Clone, Debug)]
+pub struct MobilityReport {
+    pub gross_dofs: usize,
+    pub author_pins: usize,
+    pub gears: usize,
+    pub cams: usize,
+    pub closure_pins: usize,
+    pub dof: i64,
+}
+
+pub fn mobility(kin: &Kinematics) -> MobilityReport {
+    let gross: usize = kin.pairs.iter().map(|p| p.q.len()).sum::<usize>() + kin.closures.len();
+    let author_pins = kin.pairs.iter().filter(|p| p.given).count();
+    let closure_pins: usize = kin.closures.iter().map(|c| c.rank + 1).sum();
+    MobilityReport {
+        gross_dofs: gross,
+        author_pins,
+        gears: kin.gears.len(),
+        cams: kin.cams.len(),
+        closure_pins,
+        dof: gross as i64 - (author_pins + kin.gears.len() + kin.cams.len() + closure_pins) as i64,
+    }
 }

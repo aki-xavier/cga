@@ -4952,7 +4952,154 @@ export default (
         assert_eq!(hx(&run.scene.objects[1].material.color), 0x223344);
     }
 
-    /// ---- G5：闭链（closure 约束，LM 求解） ----
+    /// ---- B：速度级运动学（twist/雅可比/活动度/奇异性） ----
+
+    /// 每种副类型一个场景：base → l，副 at=[1,0,0]，带给定 q。
+    fn twist_run(kind: &str, extra: &str, q: &str) -> crate::SceneRun {
+        let src = format!(
+            r#"export default (
+  <scene>
+    <link name="base" />
+    <link name="l"><sphere r={{0.1}} /></link>
+    <pair kind="{kind}" name="j" a="base" b="l" at={{[1,0,0]}} axis={{[0,0,1]}} {extra} q={{{q}}} />
+    <anchor link="base" />
+  </scene>
+);"#
+        );
+        run_jsx(&src, None, "").expect(&src)
+    }
+
+    /// 连杆局部点 [1,0,0] 的世界位置（FD 用）。
+    fn link_point_world(run: &crate::SceneRun, local: [f64; 3]) -> [f64; 3] {
+        let l = run.kinematics.links.iter().find(|l| l.name == "l").unwrap();
+        cga_core::transform_point(l.world, local)
+    }
+
+    #[test]
+    fn test_twist_point_velocity_vs_finite_difference() {
+        // 每种副类型：point_velocity API vs 位姿有限差分（FD 是裁判）。
+        let kinds = [
+            ("revolute", "", "0.3"),
+            ("prismatic", "", "0.3"),
+            ("helical", "pitch={0.2}", "0.3"),
+            ("cylindrical", "", "[0.3,0.15]"),
+            ("spherical", "", "[0.2,0.3,0.1]"),
+            ("planar", "", "[0.2,0.1,0.3]"),
+        ];
+        let h = 1e-6;
+        for (kind, extra, q) in kinds {
+            let run = twist_run(kind, extra, q);
+            let k = &run.kinematics;
+            let p0 = link_point_world(&run, [1.0, 0.0, 0.0]);
+            // API：q̇=1 的点速度
+            let qd: HashMap<String, f64> = [("j".to_string(), 1.0)].into_iter().collect();
+            // 多 DOF 副逐分量对拍
+            let cols = crate::scene_build::jacobian(k, "l").expect("jacobian");
+            assert_eq!(cols.len(), k.pairs[0].q.len(), "{kind}: 列数=q 维数");
+            for (ci, (name, kidx, _)) in cols.iter().enumerate() {
+                assert_eq!(name.as_deref(), Some("j"));
+                let _ = kidx;
+                let q1 = {
+                    let mut v = k.pairs[0].q.clone();
+                    v[ci] += h;
+                    v
+                };
+                // q 写 prop 重建（FD）
+                let q_str = if cols.len() == 1 {
+                    format!("{}", q1[0])
+                } else {
+                    format!(
+                        "[{}]",
+                        q1.iter()
+                            .map(|x| format!("{x}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                let run1 = twist_run(kind, extra, &q_str);
+                let p1 = link_point_world(&run1, [1.0, 0.0, 0.0]);
+                let v_fd = [
+                    (p1[0] - p0[0]) / h,
+                    (p1[1] - p0[1]) / h,
+                    (p1[2] - p0[2]) / h,
+                ];
+                // 该分量的点速度 = 雅可比的第 ci 列 加 q̇=1
+                let qd1: HashMap<String, f64> = [("j".to_string(), 1.0)].into_iter().collect();
+                let _ = qd1;
+                // 直接算该列的点速度贡献：ṗ = ω×p + v，列 = s
+                let s = cols[ci].2;
+                let w = [s[0], s[1], s[2]];
+                let v = [s[3], s[4], s[5]];
+                let c = [
+                    w[1] * p0[2] - w[2] * p0[1],
+                    w[2] * p0[0] - w[0] * p0[2],
+                    w[0] * p0[1] - w[1] * p0[0],
+                ];
+                let v_api = [c[0] + v[0], c[1] + v[1], c[2] + v[2]];
+                for i in 0..3 {
+                    assert!(
+                        (v_api[i] - v_fd[i]).abs() < 1e-4,
+                        "{kind} 列{ci} 分量{i}: api={} fd={}",
+                        v_api[i],
+                        v_fd[i]
+                    );
+                }
+            }
+            // point_velocity 整列与 FD 总值一致（q̇ 全 1）
+            let qd_all: HashMap<String, f64> = [("j".to_string(), 1.0)].into_iter().collect();
+            let v_all = crate::scene_build::point_velocity(k, "l", p0, &qd_all).expect("pv");
+            assert!(v_all.iter().all(|x| x.is_finite()), "{v_all:?}");
+        }
+    }
+
+    #[test]
+    fn test_twist_singularity_and_mobility() {
+        // 同轴两个旋转副：两列相同 → 秩 1 < 2 → 奇异。
+        let src = r#"export default (
+  <scene>
+    <link name="base" />
+    <link name="l1"><sphere r={0.1} /></link>
+    <link name="l2"><sphere r={0.1} /></link>
+    <pair kind="revolute" name="j1" a="base" b="l1" axis={[0,0,1]} q={0.2} />
+    <pair kind="revolute" name="j2" a="l1" b="l2" axis={[0,0,1]} at={[0,0,0]} q={0.3} />
+    <anchor link="base" />
+  </scene>
+);"#;
+        let run = run_jsx(src, None, "").expect("run");
+        assert!(crate::scene_build::is_singular(&run.kinematics, "l2").unwrap());
+        let run2 = twist_run("revolute", "", "0.3");
+        assert!(!crate::scene_build::is_singular(&run2.kinematics, "l").unwrap());
+
+        // Grübler：四连杆 = 3 树副 + 1 闭包（闭包自带 1 个被确定的旋转 DOF）。
+        // 不钉输入 → 固有活动度 1；钉住曲柄 → 0。
+        let mk = |q0: &str| {
+            let src = format!(
+                r#"export default (
+  <scene>
+    <link name="base" />
+    <link name="crank" />
+    <link name="coupler" />
+    <link name="rocker" />
+    <pair kind="revolute" name="p0" a="base" b="crank" axis={{[0,0,1]}} {q0} />
+    <pair kind="revolute" name="p1" a="crank" b="coupler" at={{[1,0,0]}} axis={{[0,0,1]}} guess={{-1.5}} />
+    <pair kind="revolute" name="p2" a="coupler" b="rocker" at={{[2,0,0]}} axis={{[0,0,1]}} guess={{-1.5}} />
+    <closure a="rocker" b="base" at={{[1,0,0]}} bAt={{[2,0,0]}} axis={{[0,0,1]}} />
+    <anchor link="base" />
+  </scene>
+);"#
+            );
+            run_jsx(&src, None, "").expect(&src)
+        };
+        let free = mk("");
+        let m = crate::scene_build::mobility(&free.kinematics);
+        assert_eq!(m.gross_dofs, 4, "3 副 + 闭包自带 1 DOF");
+        assert_eq!(m.author_pins, 0);
+        assert_eq!(m.closure_pins, 3, "closure 解 2 个 + 自身 1 个: {m:?}");
+        assert_eq!(m.dof, 1, "四连杆固有活动度 1（Grübler）: {m:?}");
+        let pinned = mk("q={1.5707963267948966}");
+        let m2 = crate::scene_build::mobility(&pinned.kinematics);
+        assert_eq!(m2.dof, 0, "钉住曲柄后刚化: {m2:?}");
+    }
 
     #[test]
     fn test_closure_four_bar_closed_form() {

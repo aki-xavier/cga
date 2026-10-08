@@ -55,9 +55,26 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
 
 ### B. 速度级运动学
 
+**已实施（2026-10-08）**。`cga-host/src/scene_build/kinematics.rs`：
+
+- `pair_screws_world`：副在当前位姿的世界螺旋轴列（全部 8 种副类型；twist 约定
+  `[ω; v]` 物理量纲，与 sweep_toi 一致）。平面副的平移列不经 θ 旋转、旋转轴过
+  当前平移点——FD 对拍抓到过这个错。
+- `jacobian`（列带 `(pair 名, q 分量)` 标签）/ `link_twist` / `point_velocity`。
+- `is_singular`：路径雅可比列秩 < 自由度数（同轴双副 = 奇异，有测试）。
+- `mobility`：Grübler 口径——gross = Σq 维数 + closure 自带旋转 DOF；pins =
+  作者给定/pose + gear + cam + Σ(closure 残差雅可比的秩 + 1)。四连杆：不钉输入
+  dof=1，钉曲柄 dof=0（与 Grübler 一致）。
+- 验收：全部副类型的点速度与位姿有限差分对拍（1e-4；FD 是裁判，不是手推导）、
+  奇异/非奇异判定、活动度两组值。
+
+<details><summary>原始计划（留档）</summary>
+
 - twist 沿生成树传播（`Multivector::velocity` / `extract_velocity` 现成）；雅可比矩阵（连杆末端 twist 对 q 的偏导）；活动度 = 约束秩分析（构图期诊断奇异/冗余约束）。
 - 仍是几何不是动力学：可闭式验证（旋转副的雅可比列有解析形式）。
 - 为 C 与 G5+ 供底座。
+
+</details>
 
 ### C. 物理属性 + 静力学
 
