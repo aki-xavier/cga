@@ -5,7 +5,9 @@ edition = "2021"
 description = "cga GPU batch kernels (mlx-rs/Metal ray tracing)."
 [dependencies]
 cga-core = { path = "../cga-core" }
+cga-fastmetal = { path = "../cga-fastmetal" }
 mlx-rs = { workspace = true }
+mlx-sys = "0.6.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 inari = { version = "2.0.0", default-features = false }

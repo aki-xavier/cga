@@ -36,6 +36,7 @@ pub mod tol;
 pub mod certify;
 
 pub(crate) mod fallback;
+pub(crate) mod bvh_trace;
 
 #[cfg(test)]
 mod degenerate;

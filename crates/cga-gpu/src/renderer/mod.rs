@@ -49,8 +49,8 @@ mod tests {
     use crate::scene_graph::{srgb_to_linear, Color};
     use crate::shading::{Light, Material, MaterialParams};
     use cga_core::{
-        BoxGeometry, ConeGeometry, CyclideGeometry, EllipsoidGeometry, Geometry, PlaneGeometry,
-        SphereGeometry, TorusGeometry,
+        BoxGeometry, ConeGeometry, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry,
+        PlaneGeometry, SphereGeometry, TorusGeometry,
     };
     use mlx_rs::Array;
 
@@ -718,6 +718,176 @@ mod tests {
         assert_eq!(h.object, 0);
         assert!(h.point[1].abs() < 1e-3, "在地面上: {:?}", h.point);
         assert!((h.normal[1] - 1.0).abs() < 1e-3, "法线 +y: {:?}", h.normal);
+    }
+
+    // ---- BVH 求交内核 ------------------------------------------------------
+
+    /// 混合场景：40 个受支持对象（球/盒/柱/锥/椭球 8×5 网格）+ 地面平面
+    /// + torus（旧路径）+ 平行光/点光/环境光。
+    fn bvh_mixed_scene() -> Scene {
+        let mut sc = Scene::new(None);
+        for i in 0..8 {
+            for j in 0..5 {
+                let x = (i as f64 - 3.5) * 2.2;
+                let z = -(j as f64) * 2.2;
+                let y = 0.55;
+                let rot = (x * 0.7 + z * 0.3).rem_euclid(1.5);
+                let (geom, name): (Geometry, &str) = match (i + j) % 5 {
+                    0 => (Geometry::SphereGeometry(SphereGeometry::new(0.55)), "s"),
+                    1 => (
+                        Geometry::BoxGeometry(BoxGeometry::new(0.5, 0.5, 0.5)),
+                        "b",
+                    ),
+                    2 => (
+                        Geometry::CylinderGeometry(CylinderGeometry::new(0.4, 1.1)),
+                        "c",
+                    ),
+                    3 => (Geometry::ConeGeometry(ConeGeometry::new(0.5, 1.1)), "k"),
+                    _ => (
+                        Geometry::EllipsoidGeometry(EllipsoidGeometry::new(0.6, 0.45, 0.5)),
+                        "e",
+                    ),
+                };
+                let _ = name;
+                sc.add_object(Object::new(ObjectParams {
+                    geometry: geom,
+                    material: std_red_material(),
+                    position: [x, y, z],
+                    rotation_axis: [0.0, 1.0, 0.0],
+                    rotation_angle: rot,
+                    motor: None,
+                }));
+            }
+        }
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::TorusGeometry(TorusGeometry::new(0.8, 0.25)),
+            material: std_red_material(),
+            position: [0.0, 0.6, 2.0],
+            rotation_axis: [1.0, 0.0, 0.0],
+            rotation_angle: 0.6,
+            motor: None,
+        }));
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.0)),
+            material: Material::standard(MaterialParams {
+                color: Color::from_hex(0x7F8C8D),
+                roughness: 0.9,
+                metalness: 0.0,
+                emissive: Color::from_hex(0x000000),
+                opacity: 1.0,
+                ior: 1.5,
+                absorption: 0.0,
+            }),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::directional(Color::from_hex(0xFFFFFF), 0.7, [0.5, 1.0, 0.5]));
+        sc.add_light(Light::point(Color::from_hex(0xFFFFFF), 0.4, [3.0, 5.0, 4.0]));
+        sc.add_light(Light::ambient(Color::from_hex(0xFFFFFF), 0.3));
+        sc
+    }
+
+    fn bvh_cam() -> PerspectiveCamera {
+        let mut c = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 6.0, 9.0],
+            [0.0, 0.5, -3.0],
+            [0.0, 1.0, 0.0],
+        );
+        c.look_at([0.0, 0.5, -3.0], None);
+        c
+    }
+
+    #[test]
+    fn test_bvh_kernel_engages_and_matches_legacy() {
+        let sc = bvh_mixed_scene();
+        let cam = bvh_cam();
+
+        // 内核确实启用（force），且 40 个受支持对象入核、平面/torus 留旧路径
+        let mut r = Renderer::new(96, 72, 1, 3);
+        r.bvh_override = Some(true);
+        let p = r.prep(&sc, &cam);
+        let bvh = p.bvh.as_ref().expect("force 模式下必须建出 BVH");
+        let n_kernel = bvh.legacy.iter().filter(|&&l| !l).count();
+        assert_eq!(n_kernel, 40, "40 个受支持对象入核: {n_kernel}");
+        assert_eq!(bvh.legacy.len(), 42);
+        assert!(bvh.legacy[40] && bvh.legacy[41], "torus/平面留旧路径");
+
+        // 整帧对比：内核路径 vs 旧路径（f32 算序差异 → 容差比较；
+        // 旧路径本身也被画廊金标钉着，这里是"新引擎不劣于旧引擎"的断言）
+        let img_bvh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| data_f32(&r.render(sc.clone(), cam))));
+        if img_bvh.is_err() {
+            println!("LAST_MLX_ERROR: {}", cga_fastmetal::take_last_error_string());
+            panic!("bvh render failed");
+        }
+        let img_bvh = img_bvh.unwrap();
+        let mut r2 = Renderer::new(96, 72, 1, 3);
+        r2.bvh_override = Some(false);
+        let img_legacy = data_f32(&r2.render(sc, cam));
+        assert_eq!(img_bvh.len(), img_legacy.len());
+        let mut n_diff = 0;
+        let mut max_diff = 0.0f32;
+        for (a, b) in img_bvh.iter().zip(img_legacy.iter()) {
+            let d = (a - b).abs();
+            max_diff = max_diff.max(d);
+            if d > 1.0 {
+                n_diff += 1;
+            }
+        }
+        assert!(
+            max_diff <= 8.0 && n_diff * 100 < img_bvh.len(),
+            "BVH 内核与旧路径差异过大: max={max_diff} n_diff={n_diff}/{}",
+            img_bvh.len()
+        );
+    }
+
+    /// 阴影路径（点光源 + 平行光下的 vis 连乘）也由内核承担：上面整帧对比
+    /// 已覆盖（两盏灯都开）；这里补一个解析断言：正对球的光线，阴影可见度
+    /// 在球后为 0。
+    #[test]
+    fn test_bvh_shadow_occludes() {
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+            material: std_red_material(),
+            position: [0.0, 0.0, 0.0],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            1.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        let mut r = Renderer::new(8, 8, 1, 3);
+        r.bvh_override = Some(true);
+        let p = r.prep(&sc, &cam);
+        let bvh = p.bvh.as_ref().expect("bvh");
+        // 相机空间 +z 朝前：球心 (0,0,5) 半径 1。光线从 (−0.5,0,3) 向 +z：穿球。
+        let o = Array::from_slice(&[-0.5f32, 0.0, 3.0], &[1, 3]);
+        let d = Array::from_slice(&[0.0f32, 0.0, 1.0], &[1, 3]);
+        let tmax = Array::from_slice(&[10.0f32], &[1]);
+        let vis = bvh.trace_shadow(&o, &d, &tmax).expect("shadow kernel");
+        vis.eval().unwrap();
+        assert_eq!(vis.as_slice::<f32>(), &[0.0], "不透明球全遮挡");
+        let (t, idx, _n) = bvh.trace_nearest(&o, &d).expect("nearest kernel");
+        t.eval().unwrap();
+        idx.eval().unwrap();
+        let tv = t.as_slice::<f32>()[0];
+        // 偏心 0.5 的弦：t = 2 − √(1−0.25) = 2 − √0.75 ≈ 1.13397
+        assert!((tv - 1.1339746).abs() < 1e-4, "偏心弦入口 t: {tv}");
+        assert_eq!(idx.as_slice::<i32>()[0], 0);
     }
 
     #[test]

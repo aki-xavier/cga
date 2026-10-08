@@ -427,6 +427,9 @@ pub struct Renderer {
     /// 主光线逐对象屏幕区间剔除。增量渲染的子集光线包下标不是全帧下标，
     /// 子集追踪时必须关闭（次级光线的包络球剔除不受影响，仍可用）。
     pub(crate) cull_primary: bool,
+    /// BVH 求交内核覆盖（测试用）：Some(true) 强制启用、Some(false) 关闭、
+    /// None 走 env/阈值逻辑（`bvh_trace::bvh_mode`）。
+    pub(crate) bvh_override: Option<bool>,
 }
 impl Renderer {
     pub fn new(width: i32, height: i32, aa: i32, max_depth: i32) -> Renderer {
@@ -445,6 +448,7 @@ impl Renderer {
             cam: None,
             mode: RenderMode::Normal,
             cull_primary: true,
+            bvh_override: None,
         }
     }
 
@@ -506,7 +510,8 @@ impl Renderer {
 
     /// 一帧的预处理：光线包、背景、相机空间灯光、逐对象的相机空间/陈述参数。
     /// 全帧渲染与增量渲染共用（增量渲染还要拿 `params_list` 做帧间 diff）。
-    fn prep(&mut self, scene: &Scene, camera: &PerspectiveCamera) -> Prep {
+    /// pub(crate)：测试要断言 BVH 内核是否真的启用。
+    pub(crate) fn prep(&mut self, scene: &Scene, camera: &PerspectiveCamera) -> Prep {
         self.cam = Some(*camera);
         let rays = self.build_rays();
         let o = ck(ops::zeros_like(&rays));
@@ -536,6 +541,22 @@ impl Renderer {
             ));
             stated_list.push(geom_to_camera(&obj.geometry, &obj.motor()));
         }
+        // BVH 求交内核（相机空间参数 + 相机空间光线，同帧一致）：
+        // 小场景（画廊金标）留在旧数组路径，逐位不变；CGA_NO_BVH / CGA_BVH_FORCE 覆盖。
+        let bvh_mode = match self.bvh_override {
+            Some(true) => crate::bvh_trace::BvhMode::Force,
+            Some(false) => crate::bvh_trace::BvhMode::Off,
+            None => crate::bvh_trace::bvh_mode(),
+        };
+        let bvh = match bvh_mode {
+            crate::bvh_trace::BvhMode::Off => None,
+            crate::bvh_trace::BvhMode::Auto
+                if scene.objects.len() < crate::bvh_trace::BVH_MIN_OBJECTS =>
+            {
+                None
+            }
+            _ => crate::bvh_trace::BvhTrace::build(scene, &params_list, self.mode),
+        };
         Prep {
             rays,
             o,
@@ -544,6 +565,7 @@ impl Renderer {
             ambient,
             params_list,
             stated_list,
+            bvh,
         }
     }
 
@@ -589,6 +611,7 @@ impl Renderer {
             &in_medium,
             &sigma,
             0,
+            p.bvh.as_ref(),
         );
         (
             self.resolve(&rgb_sr),
@@ -610,6 +633,7 @@ impl Renderer {
         in_medium: &Array,
         sigma: &Array,
         depth: i32,
+        bvh: Option<&crate::bvh_trace::BvhTrace>,
     ) -> (Array, Array, Option<Truth>) {
         let (hit, t, n0, local, op, ior, abso, index, vis) = self.nearest(
             scene,
@@ -620,6 +644,7 @@ impl Renderer {
             lit,
             ambient,
             depth == 0,
+            bvh,
         );
         let mut cos_i = ck(ck(ck(d.multiply(&n0)).sum_axes(&[-1], true)).negative());
         let n = ck(ops::select(s_lt(&cos_i, 0.0), ck(n0.negative()), &n0));
@@ -716,6 +741,7 @@ impl Renderer {
                     &in_medium_s,
                     &sigma_s,
                     depth + 1,
+                    bvh,
                 );
                 let (refr, _, _) = self.trace(
                     scene,
@@ -729,6 +755,7 @@ impl Renderer {
                     &entering,
                     &sig_next,
                     depth + 1,
+                    bvh,
                 );
                 let body = ck(ck(ck(op_s.expand_dims(1)).multiply(&local_s))
                     .add(ck(
@@ -756,6 +783,7 @@ impl Renderer {
         (ck(result.multiply(&att)), t, truth)
     }
 
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn nearest(
         &self,
         scene: &Scene,
@@ -766,6 +794,7 @@ impl Renderer {
         lit: &[Light],
         ambient: Option<Light>,
         primary: bool,
+        bvh: Option<&crate::bvh_trace::BvhTrace>,
     ) -> (
         Array,
         Array,
@@ -792,16 +821,35 @@ impl Renderer {
             );
         }
         let n_rays = o.shape()[0];
-        let mut best_t = ck(ops::full::<f32>(&[n_rays], &fs(f64::INFINITY)));
-        let mut best_n = ck(ops::zeros::<f32>(&[n_rays, 3]));
-        let mut best_uv = ck(ops::zeros::<f32>(&[n_rays, 2]));
-        let mut best_idx = ck(ops::zeros::<i32>(&[n_rays]));
+        // BVH 内核：一次发射覆盖全部受支持对象；miss 的 idx=-1 钳成 0（与旧
+        // 路径 miss 时的 best_idx=0 一致；hit=false 的材料聚集结果不被采用）。
+        let kernel_hit = bvh.and_then(|b| b.trace_nearest(o, d));
+        let (mut best_t, mut best_n, mut best_uv, mut best_idx) = match &kernel_hit {
+            Some((t, idx, n)) => (
+                t.clone(),
+                n.clone(),
+                ck(ops::zeros::<f32>(&[n_rays, 2])),
+                ck(ops::maximum(idx, &ck(ops::zeros::<i32>(&[n_rays])))),
+            ),
+            None => (
+                ck(ops::full::<f32>(&[n_rays], &fs(f64::INFINITY))),
+                ck(ops::zeros::<f32>(&[n_rays, 3])),
+                ck(ops::zeros::<f32>(&[n_rays, 2])),
+                ck(ops::zeros::<i32>(&[n_rays])),
+            ),
+        };
         let objs = &scene.objects;
         // 临时排查开关：CGA_NO_CULL=1 关闭所有剔除子集（对照渲染）
         let cull_on = std::env::var("CGA_NO_CULL").is_err();
         let cam = self.cam.unwrap_or_else(|| panic!("no camera"));
         let frame = view_frame(&cam);
         for (i, _obj) in objs.iter().enumerate() {
+            // BVH 内核已覆盖的对象跳过（只在内核真正成功时跳过，失败回退全量旧路径）
+            if let (Some(b), Some(_)) = (bvh, &kernel_hit) {
+                if !b.legacy[i] {
+                    continue;
+                }
+            }
             let params = &params_list[i];
             // 主光线逐对象屏幕区间子集（保守剔除）：只对落在对象屏幕包围盒内的
             // 光线求交。无界几何/跨近平面 → None 回退全量；空表 → 画面外，跳过。
@@ -919,8 +967,25 @@ impl Renderer {
         for light in lit {
             let (ld, _) = light.direction_at(&p);
             let far = light.far(&p);
-            let mut v = ck(ops::ones::<f32>(&[n_rays]));
+            // BVH 内核阴影：一次发射算出受支持对象的遮挡连乘；点光源 far 是
+            // (N,) 数组，方向光 far 是 0 维 INF 标量 → 广播成 (N,)。
+            let kernel_vis = bvh.and_then(|b| {
+                let far_n = if far.ndim() == 1 {
+                    far.clone()
+                } else {
+                    ck(ops::full::<f32>(&[n_rays], &fs(f64::INFINITY)))
+                };
+                b.trace_shadow(&p_s, &ld, &far_n)
+            });
+            let mut v = kernel_vis.clone().unwrap_or_else(|| ck(ops::ones::<f32>(&[n_rays])));
             for (j, obj) in objs.iter().enumerate() {
+                if kernel_vis.is_some() {
+                    if let Some(b) = bvh {
+                        if !b.legacy[j] {
+                            continue;
+                        }
+                    }
+                }
                 // 逐对象阴影子集：只有“打到光源的射线”靠近该对象时才需要测试
                 let sh_sub = if cull_on {
                     shadow_ray_indices(&params_list[j], &p_s, &ld, &far, n_rays)
@@ -1015,14 +1080,16 @@ impl Renderer {
 }
 
 /// 一帧的预处理结果（全帧与增量渲染共用）。
-struct Prep {
-    rays: Array,
-    o: Array,
-    bg: Array,
-    lit: Vec<Light>,
-    ambient: Option<Light>,
-    params_list: Vec<GeometryParams>,
-    stated_list: Vec<GeometryParams>,
+pub(crate) struct Prep {
+    pub(crate) rays: Array,
+    pub(crate) o: Array,
+    pub(crate) bg: Array,
+    pub(crate) lit: Vec<Light>,
+    pub(crate) ambient: Option<Light>,
+    pub(crate) params_list: Vec<GeometryParams>,
+    pub(crate) stated_list: Vec<GeometryParams>,
+    /// BVH 求交内核（对象数 ≥ 阈值且环境允许时构建；None = 全旧路径）。
+    pub(crate) bvh: Option<crate::bvh_trace::BvhTrace>,
 }
 
 /// 稳定的指纹（帧间 diff 用）：`DefaultHasher::new()` 固定密钥，跨进程一致。
@@ -1320,6 +1387,7 @@ impl IncrementalRenderer {
             &in_medium,
             &sigma,
             0,
+            p.bvh.as_ref(),
         );
         self.r.cull_primary = true;
         let rays_rgb = ck(ops::indexing::scatter_single(
@@ -1374,6 +1442,7 @@ impl IncrementalRenderer {
             &in_medium,
             &sigma,
             0,
+            p.bvh.as_ref(),
         );
         let image = self.r.resolve(&rgb_sr);
         self.prev = Some(PrevFrame {

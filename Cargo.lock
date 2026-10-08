@@ -519,13 +519,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cga-fastmetal"
+version = "0.1.0"
+dependencies = [
+ "mlx-rs",
+ "mlx-sys",
+]
+
+[[package]]
 name = "cga-gpu"
 version = "0.1.0"
 dependencies = [
  "cga-core",
+ "cga-fastmetal",
  "image",
  "inari",
  "mlx-rs",
+ "mlx-sys",
 ]
 
 [[package]]

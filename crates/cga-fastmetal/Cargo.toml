@@ -1,0 +1,9 @@
+[package]
+name = "cga-fastmetal"
+version = "0.1.0"
+edition = "2021"
+description = "Safe wrapper over mlx-c's fast custom Metal kernel API (mlx-rs 未绑定 metal_kernel)。"
+
+[dependencies]
+mlx-sys = "0.6.0"
+mlx-rs = { workspace = true }
