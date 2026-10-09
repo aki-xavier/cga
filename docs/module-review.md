@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 模块划分评审（2026-10-09）
 
-状态：**评审完成，cga-scene 抽取开工**。范围：7 个 crate 的依赖图、体量、跨 crate 引用。
+状态：**评审完成；问题 1、2 已落地（2026-10-09），仅剩顺手项**。范围：7 个 crate 的依赖图、体量、跨 crate 引用。
 
 ## 结论：整体合理，两处结构性问题
 
@@ -35,11 +35,11 @@ Metal 渲染器。实证三处：
 **对策**：抽 `cga-scene` crate（Scene/Object/Material/Light/Camera/Color/
 纹理），gpu 与 host 改为依赖它；cga-gpu 内 re-export 保持现有 API 路径不破坏。
 
-## 问题 2（内聚性）：`jsx/mod.rs` 是 God file
+## 问题 2（内聚性）：`jsx/mod.rs` 是 God file —— 已解决
 
-4124 行非测试代码承担至少 6 类职责：swc 编译、CSS 匹配/级联、元素 walk/
+原 4124 行非测试代码承担至少 6 类职责：swc 编译、CSS 匹配/级联、元素 walk/
 几何构建、SceneSession（帧事务/增量）、拖拽与拾取 API、tag/face/center 查询。
-对策：拆 `jsx/{compile, css, build, session, query}` 子模块，pub API 不变。
+已按流水线切成五层（见行动表），`cga_host::*` 的 pub API 一行未变。
 
 ## 轻微项（记录在案）
 
@@ -54,6 +54,6 @@ Metal 渲染器。实证三处：
 | 项 | 动作 | 成本 | 状态 |
 | --- | --- | --- | --- |
 | 场景模型出 gpu | 抽 `cga-scene` crate | 中 | **已完成（2026-10-09）**：Scene/Object/Object3D/Color/Camera/OrbitControls/Light/Material/CPU 纹理/PNG 编解码全部迁入 `crates/cga-scene`（零 MLX 依赖）；`Texture.pixels` 改 `Vec<f32>`，GPU 采样走 cga-gpu 的 `texture::GpuTexture`（按次转换，缓存另行立项）；`Light::direction_at/far` 改自由函数 `shading::{light_direction_at, light_far}`；cga-gpu 四个模块改路径兼容 shim（旧 `cga_gpu::scene::*` 等路径不变）；cga-host 场景模型引用全面切到 `cga_scene`。344 测试全绿，重构无行为变化（纹理测试曾误改场景参数，已按原版恢复）。 |
-| jsx/mod.rs 拆分 | 按职责拆子模块 | 中 | 随后 |
+| jsx/mod.rs 拆分 | 按职责拆子模块 | 中 | **已完成（2026-10-09）**：按流水线切五层——`compile`（swc）/ `element`（El+prop）/ `css` / `builder`（Builder）/ `session`（boa+Session），测试独立成 `tests.rs`；pub API 不变。唯一实质改动：`Builder` 字段不再被 session 直读，改为 `Builder::start(BuilderStart)` + `build_all() -> BuiltRun`（走树→统计→默认相机→SceneRun 的编排收进 Builder，字段保持私有）。逐行多重集比对确认零语义漂移，344 测试全绿。 |
 | renderer/mod.rs 改名 | 测试挪 tests.rs | 小 | 顺手 |
 | v3 helper 收敛 | host 改用 cga-core | 小 | 顺手 |
