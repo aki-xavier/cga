@@ -1,7 +1,7 @@
 <!-- markdownlint-configure-file {"MD013": false} -->
 # 模块划分评审（2026-10-09）
 
-状态：**评审完成；问题 1、2 已落地（2026-10-09），仅剩顺手项**。范围：7 个 crate 的依赖图、体量、跨 crate 引用。
+状态：**评审全部落地（2026-10-09）**：问题 1、2 + 两个顺手项均已完成，行动表无未完成项。范围：7 个 crate 的依赖图、体量、跨 crate 引用。
 
 ## 结论：整体合理，两处结构性问题
 
@@ -55,5 +55,5 @@ Metal 渲染器。实证三处：
 | --- | --- | --- | --- |
 | 场景模型出 gpu | 抽 `cga-scene` crate | 中 | **已完成（2026-10-09）**：Scene/Object/Object3D/Color/Camera/OrbitControls/Light/Material/CPU 纹理/PNG 编解码全部迁入 `crates/cga-scene`（零 MLX 依赖）；`Texture.pixels` 改 `Vec<f32>`，GPU 采样走 cga-gpu 的 `texture::GpuTexture`（按次转换，缓存另行立项）；`Light::direction_at/far` 改自由函数 `shading::{light_direction_at, light_far}`；cga-gpu 四个模块改路径兼容 shim（旧 `cga_gpu::scene::*` 等路径不变）；cga-host 场景模型引用全面切到 `cga_scene`。344 测试全绿，重构无行为变化（纹理测试曾误改场景参数，已按原版恢复）。 |
 | jsx/mod.rs 拆分 | 按职责拆子模块 | 中 | **已完成（2026-10-09）**：按流水线切五层——`compile`（swc）/ `element`（El+prop）/ `css` / `builder`（Builder）/ `session`（boa+Session），测试独立成 `tests.rs`；pub API 不变。唯一实质改动：`Builder` 字段不再被 session 直读，改为 `Builder::start(BuilderStart)` + `build_all() -> BuiltRun`（走树→统计→默认相机→SceneRun 的编排收进 Builder，字段保持私有）。逐行多重集比对确认零语义漂移，344 测试全绿。 |
-| renderer/mod.rs 改名 | 测试挪 tests.rs | 小 | 顺手 |
-| v3 helper 收敛 | host 改用 cga-core | 小 | 顺手 |
+| renderer/mod.rs 改名 | 测试挪 tests.rs | 小 | **已完成（2026-10-09）**：31 个测试挪到 `renderer/tests.rs`，mod.rs 回到 45 行纯 helper |
+| v3 helper 收敛 | host 改用 cga-core | 小 | **部分完成（2026-10-09）**：`v3_cross` 收敛到 `cga_core::vec3_cross`（公式逐字相同，15 处调用点）；`v3_unit` **故意不合并**——近零退化语义是 `[0,0,0]`，与 `cga_scene::vec3_unit` 的 `[0,0,1]` 不同，合并会改相机/法线兜底方向。已在代码注释写明。 |
