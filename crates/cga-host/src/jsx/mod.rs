@@ -4098,6 +4098,28 @@ impl SceneSession {
             png: cga_gpu::frame_to_png_bytes(&img),
         })
     }
+
+    /// 薄透镜景深渲染（U6，docs/ue58-inspirations.md §3.U6）：`aperture` 光圈
+    /// 半径（0 = 针孔，与普通渲染逐位一致）、`focal` 对焦距离。确定性 Vogel
+    /// 光圈采样。全帧渲染（不走增量渲染器——dof 与帧间指纹的交互另行立项）。
+    pub fn render_dof(
+        &mut self,
+        w: i32,
+        h: i32,
+        aa: i32,
+        aperture: f64,
+        focal: f64,
+    ) -> Result<crate::HeadlessImage, String> {
+        self.rebuild()?;
+        let run = self.run();
+        let mut r = cga_gpu::Renderer::new(w, h, aa, 3).with_dof(aperture, focal);
+        let img = r.render(run.scene.clone(), run.camera.clone());
+        Ok(crate::HeadlessImage {
+            width: w,
+            height: h,
+            png: cga_gpu::frame_to_png_bytes(&img),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -4547,6 +4569,23 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             colors.insert(px.to_vec());
         }
         assert_eq!(colors.len(), 4, "背景+盒+两球应恰好 4 色: {colors:?}");
+    }
+
+    #[test]
+    fn session_render_dof_plumbing() {
+        // U6：dof 渲染 plumbing——aperture=0 与普通渲染逐位一致；aperture>0
+        // 逐位确定且与针孔不同。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let pin = s
+            .render(64, 36, 2, cga_gpu::RenderMode::Normal)
+            .expect("render");
+        let dof0 = s.render_dof(64, 36, 2, 0.0, 5.0).expect("dof0");
+        assert_eq!(pin.png, dof0.png, "aperture=0 应与针孔逐位一致");
+        let dof = s.render_dof(64, 36, 2, 0.3, 5.0).expect("dof");
+        assert_eq!(&dof.png[..4], b"\x89PNG");
+        let dof2 = s.render_dof(64, 36, 2, 0.3, 5.0).expect("dof2");
+        assert_eq!(dof.png, dof2.png, "dof 应逐位确定");
+        assert_ne!(dof.png, pin.png, "aperture>0 应与针孔不同");
     }
 
     #[test]

@@ -181,6 +181,21 @@ fn mcp_stdio_full_loop() {
     let (err, text) = m.tool_text("scene_render", json!({"channel": "bogus"}));
     assert!(err && text.contains("channel"), "{text}");
 
+    // 薄透镜景深（U6）：aperture+focal 出图；aperture>0 缺 focal → isError
+    let r = m.tool(
+        "scene_render",
+        json!({"w": 64, "h": 48, "aa": 1, "aperture": 0.4, "focal": 5.0}),
+    );
+    assert_eq!(r["isError"], false);
+    assert_eq!(r["content"][0]["mimeType"], "image/png");
+    assert!(
+        r["content"][1]["text"].as_str().unwrap().contains("dof("),
+        "{:?}",
+        r["content"][1]
+    );
+    let (err, text) = m.tool_text("scene_render", json!({"aperture": 0.4}));
+    assert!(err && text.contains("focal"), "{text}");
+
     // collisions：球心 z=0、盒顶 z=−0.05，两球真实穿入盒体——认证 Yes +
     // 解析分离度（r=0.1 穿入 0.05、r=0.12 穿入 0.07）；两球之间 No。
     let (err, text) = m.tool_text("scene_collisions", json!({}));

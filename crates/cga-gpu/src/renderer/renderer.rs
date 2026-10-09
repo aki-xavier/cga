@@ -525,6 +525,9 @@ pub struct Renderer {
     pub cam: Option<PerspectiveCamera>,
     /// 渲染模式（默认 `Normal`）。
     pub mode: RenderMode,
+    /// 薄透镜景深（U6）：`(光圈半径, 对焦距离)`，相机系长度单位。
+    /// `(0, _) = 针孔（默认，与无 dof 逐位一致）。
+    pub dof: (f64, f64),
     /// 主光线逐对象屏幕区间剔除。增量渲染的子集光线包下标不是全帧下标，
     /// 子集追踪时必须关闭（次级光线的包络球剔除不受影响，仍可用）。
     pub(crate) cull_primary: bool,
@@ -548,6 +551,7 @@ impl Renderer {
             max_depth,
             cam: None,
             mode: RenderMode::Normal,
+            dof: (0.0, 0.0),
             cull_primary: true,
             bvh_override: None,
         }
@@ -556,6 +560,20 @@ impl Renderer {
     /// 设定渲染模式（链式）。
     pub fn with_mode(mut self, mode: RenderMode) -> Renderer {
         self.mode = mode;
+        self
+    }
+
+    /// 薄透镜景深（U6，docs/ue58-inspirations.md §3.U6）：`aperture` = 光圈半径
+    /// （相机系长度单位），`focal` = 对焦距离。`aperture = 0` = 针孔（默认，
+    /// 与无 dof 逐位一致——金标场景不受影响）。光圈采样是确定性的 Vogel 螺旋
+    /// （无 RNG），同输入同输出逐位确定。
+    pub fn with_dof(mut self, aperture: f64, focal: f64) -> Renderer {
+        assert!(aperture >= 0.0, "aperture 不能为负: {aperture}");
+        assert!(
+            aperture == 0.0 || focal > 0.0,
+            "aperture > 0 时 focal 必须为正: {focal}"
+        );
+        self.dof = (aperture, focal);
         self
     }
 
@@ -570,7 +588,7 @@ impl Renderer {
         r.render(scene, camera)
     }
 
-    fn build_rays(&mut self) -> Array {
+    fn build_rays(&mut self) -> (Array, Array) {
         let hh = self.height;
         let ww = self.width;
         let cam = self.cam.unwrap_or_else(|| panic!("no camera"));
@@ -582,7 +600,11 @@ impl Renderer {
         let v0 = s_div(&s_sub(&ck(ops::arange::<i32, f32>(0, hh, 1)), cy), fy);
         let z = ck(ops::ones::<f32>(&[hh, ww]));
         let mut dirs: Vec<Array> = Vec::new();
+        let mut origins: Vec<Array> = Vec::new();
         let k = self.aa;
+        let k2 = (k * k) as usize;
+        let (aperture, focal) = self.dof;
+        let mut s = 0usize;
         for j in 0..k {
             for i in 0..k {
                 let off_u = (f64::from(i) + 0.5) / f64::from(k) - 0.5;
@@ -597,12 +619,36 @@ impl Renderer {
                     ck(s_add(&v0, dv).expand_dims(1)),
                     &[hh, ww],
                 ));
-                dirs.push(ck(ops::stack(&[&u, &v, &z], -1)));
+                let d = ck(ops::stack(&[&u, &v, &z], -1));
+                if aperture > 0.0 {
+                    // 薄透镜：光圈盘上的 Vogel 螺旋点（确定性，无 RNG）——
+                    // r = R·√((s+½)/N)，θ = s·黄金角。主光线改从光圈点射向
+                    // 原光线在焦平面上的点（对焦距离处保持锐利）。
+                    let r = aperture * ((s as f64 + 0.5) / k2 as f64).sqrt();
+                    let th = s as f64 * 2.399_963_229_728_653;
+                    let o = ck(ops::broadcast_to(
+                        arr3v([r * th.cos(), r * th.sin(), 0.0]),
+                        &[hh, ww, 3],
+                    ));
+                    let n = ck(ck(ck(d.multiply(&d)).sum_axes(&[-1], true)).sqrt());
+                    let pf = ck(ck(d.divide(&n)).multiply(&fs(focal)));
+                    let dd = ck(pf.subtract(&o));
+                    let nn = ck(ck(ck(dd.multiply(&dd)).sum_axes(&[-1], true)).sqrt());
+                    dirs.push(ck(dd.divide(&nn)));
+                    origins.push(o);
+                } else {
+                    dirs.push(d);
+                }
+                s += 1;
             }
         }
         let rays = ck(ck(ops::concatenate(&dirs, 0)).reshape(&[-1, 3]));
+        if aperture > 0.0 {
+            let o = ck(ck(ops::concatenate(&origins, 0)).reshape(&[-1, 3]));
+            return (o, rays);
+        }
         let n = ck(ck(ck(rays.multiply(&rays)).sum_axes(&[-1], true)).sqrt());
-        ck(rays.divide(&n))
+        (ck(ops::zeros_like(&rays)), ck(rays.divide(&n)))
     }
 
     pub fn render(&mut self, scene: Scene, camera: PerspectiveCamera) -> Array {
@@ -614,8 +660,12 @@ impl Renderer {
     /// pub(crate)：测试要断言 BVH 内核是否真的启用。
     pub(crate) fn prep(&mut self, scene: &Scene, camera: &PerspectiveCamera) -> Prep {
         self.cam = Some(*camera);
-        let rays = self.build_rays();
-        let o = ck(ops::zeros_like(&rays));
+        if self.dof.0 > 0.0 {
+            // 光圈偏移使主光线不再过针孔：屏幕区间剔除（针孔模型推导的）
+            // 保守关闭——宁可多算不可漏（次级光线的包络球剔除不受影响）。
+            self.cull_primary = false;
+        }
+        let (o, rays) = self.build_rays();
         let n_rays = o.shape()[0];
         let bg = ck(ops::broadcast_to(
             arr3v(scene.background.rgb()),

@@ -101,6 +101,8 @@ fn tool_defs() -> Value {
                 "aa": {"type": "integer", "default": 2, "description": "每像素采样数（抗锯齿）"},
                 "opaque": {"type": "boolean", "default": false, "description": "忽略透明度（无反射/折射）"},
                 "channel": {"type": "string", "enum": ["id", "normals", "depth"], "description": "诊断通道（给出时忽略 aa/opaque）"},
+                "aperture": {"type": "number", "description": "光圈半径（>0 启用薄透镜景深，此时必须给 focal）"},
+                "focal": {"type": "number", "description": "对焦距离（配合 aperture）"},
             }), &[]),
         },
         {
@@ -264,6 +266,22 @@ impl Server {
         } else {
             RenderMode::Normal
         };
+        // 薄透镜景深（U6）：aperture > 0 时 focal 必须给（对焦距离）。
+        if let Some(aperture) = args.get("aperture").and_then(Value::as_f64) {
+            if aperture > 0.0 {
+                let focal = args
+                    .get("focal")
+                    .and_then(Value::as_f64)
+                    .ok_or("aperture > 0 时必须给 focal（对焦距离）")?;
+                let img = self.sess()?.render_dof(w, h, aa, aperture, focal)?;
+                return Ok(tool_ok(vec![
+                    json!({"type": "image", "data": b64(&img.png), "mimeType": "image/png"}),
+                    text_block(format!(
+                        "rendered {w}x{h} aa={aa} dof(aperture={aperture}, focal={focal})"
+                    )),
+                ]));
+            }
+        }
         let (img, stats) = self.sess()?.render_incremental(w, h, aa, mode)?;
         Ok(tool_ok(vec![
             json!({"type": "image", "data": b64(&img.png), "mimeType": "image/png"}),

@@ -889,8 +889,117 @@ mod tests {
         assert_ne!(id, dp);
     }
 
-    // ---- BVH 求交内核 ------------------------------------------------------
+    // ---- 薄透镜景深（U6，docs/ue58-inspirations.md §3.U6）--------------------
 
+    fn dof_scene() -> (Scene, PerspectiveCamera) {
+        // 两个自发光小球：A 在 (0,0,0)（对焦距离 5 处），B 在 (0.35,0,−2)（离焦）。
+        let emissive = || crate::shading::Material {
+            emissive: Color::from_hex(0xFFFFFF),
+            ..std_red_material()
+        };
+        let mut sc = Scene::new(Some(Color::from_hex(0x000000)));
+        for (r, pos) in [(0.05, [0.0, 0.0, 0.0]), (0.05, [0.7, 0.0, -2.0])] {
+            sc.add_object(Object::new(ObjectParams {
+                geometry: Geometry::SphereGeometry(SphereGeometry::new(r)),
+                material: emissive(),
+                position: pos,
+                rotation_axis: [0.0, 0.0, 1.0],
+                rotation_angle: 0.0,
+                motor: None,
+            }));
+        }
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        (sc, cam)
+    }
+
+    /// 区域 (x0..x1, y0..y1) 内红通道 > 5（0..255 刻度）的像素数（模糊足迹）。
+    fn footprint(img: &Array, x0: usize, x1: usize, y0: usize, y1: usize, w: usize) -> usize {
+        let s = img.as_slice::<f32>();
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if s[4 * (y * w + x)] > 5.0 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    fn chan(img: &Array, x: usize, y: usize, w: usize) -> f32 {
+        img.as_slice::<f32>()[4 * (y * w + x)]
+    }
+
+    #[test]
+    fn test_dof_zero_aperture_is_bitwise_identical() {
+        // aperture=0（默认针孔）与无 dof 逐位一致——金标场景不受影响的看守。
+        let (sc, cam) = dof_scene();
+        let a = Renderer::new(96, 72, 2, 3)
+            .with_dof(0.0, 5.0)
+            .render(sc.clone(), cam);
+        let b = Renderer::new(96, 72, 2, 3).render(sc, cam);
+        assert_eq!(
+            crate::image_io::frame_to_png_bytes(&a),
+            crate::image_io::frame_to_png_bytes(&b),
+        );
+    }
+
+    #[test]
+    fn test_dof_focus_sharp_defocus_spreads() {
+        // 对焦在 A（距离 5）：A 的足迹≈针孔；B（距离 7，离焦）足迹显著变大、
+        // 中心峰值显著下降；同一 dof 渲染两次逐位一致（Vogel 采样确定性）。
+        // 光圈 0.8：aa=2 时 4 个光圈样本把 B 的像拉成 4 份位移 ±4px 的拷贝。
+        let (sc, cam) = dof_scene();
+        let pin = Renderer::new(96, 72, 4, 3).render(sc.clone(), cam);
+        pin.eval().unwrap();
+        let dof_img = Renderer::new(96, 72, 4, 3)
+            .with_dof(0.8, 5.0)
+            .render(sc.clone(), cam);
+        dof_img.eval().unwrap();
+        // B 的投影：深度 7，px ≈ 47.5 + (0.7/7)·fx（fx≈115.9）≈ 59.1。
+        // B 取 x≥53 的区域（避开 A 的 x≈48-49 与 B 模糊拷贝的互串）。
+        let (bx, by) = (59usize, 35usize);
+        let fp_b_pin = footprint(&pin, 53, 68, by - 7, by + 8, 96);
+        let fp_b_dof = footprint(&dof_img, 53, 68, by - 7, by + 8, 96);
+        assert!(
+            fp_b_dof > fp_b_pin + 8,
+            "离焦足迹应变大: pinhole {fp_b_pin} vs dof {fp_b_dof}"
+        );
+        let peak_pin = chan(&pin, bx, by, 96);
+        let peak_dof = chan(&dof_img, bx, by, 96);
+        assert!(
+            peak_dof < peak_pin - 40.0,
+            "离焦中心峰值应显著下降: {peak_pin} vs {peak_dof}"
+        );
+        // A 在对焦处：足迹不膨胀（与针孔同量级）
+        let (ax, ay) = (47usize, 35usize);
+        let fp_a_pin = footprint(&pin, ax - 5, ax + 3, ay - 4, ay + 5, 96);
+        let fp_a_dof = footprint(&dof_img, ax - 5, ax + 3, ay - 4, ay + 5, 96);
+        assert!(
+            fp_a_dof <= fp_a_pin + 4,
+            "对焦处足迹不应膨胀: pinhole {fp_a_pin} vs dof {fp_a_dof}"
+        );
+        // 确定性
+        let d2 = Renderer::new(96, 72, 4, 3)
+            .with_dof(0.8, 5.0)
+            .render(sc, cam);
+        assert_eq!(
+            crate::image_io::frame_to_png_bytes(&dof_img),
+            crate::image_io::frame_to_png_bytes(&d2),
+            "dof 渲染应逐位确定"
+        );
+    }
+
+    // ---- BVH 求交内核 ------------------------------------------------------
     /// 混合场景：40 个受支持对象（球/盒/柱/锥/椭球 8×5 网格）+ 地面平面
     /// + torus（旧路径）+ 平行光/点光/环境光。
     fn bvh_mixed_scene() -> Scene {
