@@ -9,7 +9,7 @@
 - **JSX+CSS 宿主**：真 React 19（hooks/context/memo/key/事件派发/宿主输入）、CSS 真匹配真级联（含错误契约）、帧间子树复用、分组（`Object::group`）、碰撞查询惰性求值。
 - **碰撞检测**（`cga-collision`）：三值重叠判定、凸对分离距离（含精确 MTV）、接触流形、螺旋 CCD（认证无接触）、关节行程干涉扫描。
 - **运动学图模型**：`<link>/<pair>/<anchor>` 无因果建模（Modelica 调研后设计）、生成树定向传播、gear/cam 无方向、`<closure>` 闭链 LM 求解、`guess` 选支。
-- **crate 卫生**：cga-core 零依赖、cga-collision / cga-mesh 独立、cga-gpu（MLX）/ cga-host（boa/swc）/ cga-examples。
+- **crate 卫生**：cga-core 零依赖、cga-scene 场景模型（2026-10-09 从 cga-gpu 抽出，docs/module-review.md）、cga-collision / cga-mesh 独立、cga-gpu（MLX）/ cga-host（boa/swc）/ cga-examples。
 
 ## 2. 方向与依赖
 

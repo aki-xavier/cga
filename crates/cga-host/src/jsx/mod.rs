@@ -34,8 +34,8 @@ use crate::scene_build::{
     GearDecl, GearRel, GraphDecl, JointKind, Kinematics, LinkDef, PairDecl, PairDef, TagInstance,
     TagRegistry,
 };
-use cga_gpu::scene::{Object, ObjectParams, PerspectiveCamera, Scene};
-use cga_gpu::scene_graph::Color;
+use cga_scene::{Object, ObjectParams, PerspectiveCamera, Scene};
+use cga_scene::Color;
 use cga_gpu::shading::Light;
 
 /// 场景预置：元素名常量 + 查询辅助 + `h`/`Fragment`（`scene-prelude.js`），
@@ -1907,7 +1907,7 @@ impl<'p> Builder<'p> {
         src: Option<i64>,
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
-        let g2 = if cga_gpu::scene_graph::is_identity3(lin) {
+        let g2 = if cga_scene::is_identity3(lin) {
             geo.clone()
         } else {
             cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))

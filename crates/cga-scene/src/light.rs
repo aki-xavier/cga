@@ -64,33 +64,6 @@ impl Light {
             LightKind::Ambient => *self,
         }
     }
-
-    pub fn direction_at(&self, p: &Array) -> (Array, Array) {
-        match self.kind {
-            LightKind::Directional => {
-                let ld = ck(ops::broadcast_to(arr3v(self.direction), p.shape()));
-                (ld, fs(self.intensity))
-            }
-            LightKind::Point => {
-                let lv = ck(ops::broadcast_to(arr3v(self.position), p.shape())).subtract(p);
-                let lv = ck(lv);
-                let dist2 = ck(ck(lv.multiply(&lv)).sum_axes(&[-1], true));
-                let ld = ck(lv.divide(ck(dist2.sqrt())));
-                let atten = s_rdiv(&s_add(&s_div(&dist2, 8.0), 1.0), self.intensity);
-                (ld, atten)
-            }
-            LightKind::Ambient => {
-                panic!("ambient light is not part of the per-light loop")
-            }
-        }
-    }
-
-    pub fn far(&self, p: &Array) -> Array {
-        if self.kind == LightKind::Point {
-            let lv = ck(ops::broadcast_to(arr3v(self.position), p.shape())).subtract(p);
-            let lv = ck(lv);
-            return ck(ck(ck(lv.multiply(&lv)).sum_axes(&[-1], false)).sqrt());
-        }
-        fs(f64::INFINITY)
-    }
 }
+// 注：批量光照方法 direction_at/far（MLX Array）留在 cga-gpu 的
+// shading::{light_direction_at, light_far}——那是渲染器的活，不是场景模型的。

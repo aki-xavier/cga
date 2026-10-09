@@ -10,10 +10,10 @@ use cga_core::{
     PlaneGeometry, SphereGeometry, TorusGeometry,
 };
 
-use cga_gpu::scene::Scene;
-use cga_gpu::scene_graph::{vec3_dot, Color};
+use cga_scene::Scene;
+use cga_scene::{vec3_dot, Color};
 use cga_gpu::shading::{Material, MaterialParams};
-use cga_gpu::texture::texture_load;
+use cga_scene::texture_load;
 
 pub mod arg_value;
 pub use self::arg_value::*;

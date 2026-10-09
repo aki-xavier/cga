@@ -1261,8 +1261,8 @@ impl Renderer {
         let p_s = ck(p.add(s_mul(&best_n, 1e-3)));
         let mut vis: Vec<Array> = Vec::new();
         for light in lit {
-            let (ld, _) = light.direction_at(&p);
-            let far = light.far(&p);
+            let (ld, _) = crate::shading::light_direction_at(light, &p);
+            let far = crate::shading::light_far(light, &p);
             // BVH 内核阴影：一次发射算出受支持对象的遮挡连乘；点光源 far 是
             // (N,) 数组，方向光 far 是 0 维 INF 标量 → 广播成 (N,)。
             let kernel_vis = bvh.and_then(|b| {
@@ -1362,7 +1362,7 @@ impl Renderer {
             );
             for (i, obj) in objs.iter().enumerate() {
                 if let Some(tex) = &obj.material.map {
-                    let sampled = ck(tex
+                    let sampled = ck(crate::texture::GpuTexture::from_cpu(tex)
                         .sample(&best_uv, WrapMode::Repeat, WrapMode::Repeat)
                         .take_axis(Array::from_slice(&[0_i32, 1, 2], &[3]), 1));
                     acc = ck(ops::select(

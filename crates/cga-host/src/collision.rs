@@ -3,8 +3,8 @@
 //! 与增量渲染同一套失效哲学）。
 
 use cga_collision::{probe, Contact, Hit};
-use cga_gpu::scene::{Object, ObjectParams, Scene};
-use cga_gpu::scene_graph::Color;
+use cga_scene::{Object, ObjectParams, Scene};
+use cga_scene::Color;
 use cga_gpu::shading::{Material, MaterialParams};
 use std::collections::HashMap;
 
@@ -738,8 +738,8 @@ fn motor_from_z_to(n: [f64; 3]) -> cga_core::Multivector {
 mod tests {
     use super::*;
     use cga_core::{Geometry, SphereGeometry};
-    use cga_gpu::scene::{Object, ObjectParams, Scene};
-    use cga_gpu::scene_graph::Color;
+    use cga_scene::{Object, ObjectParams, Scene};
+    use cga_scene::Color;
     use cga_gpu::shading::{Material, MaterialParams};
 
     fn sphere_obj(x: f64, r: f64, group: u32) -> Object {
@@ -976,7 +976,7 @@ export default (
     #[test]
     fn contact_markers_render_golden() {
         use cga_core::{BoxGeometry, PlaneGeometry};
-        use cga_gpu::scene::PerspectiveCamera;
+        use cga_scene::PerspectiveCamera;
         use cga_gpu::shading::Light;
 
         let mut sc = Scene::new(None);

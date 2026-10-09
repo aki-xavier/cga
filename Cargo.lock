@@ -533,6 +533,7 @@ version = "0.1.0"
 dependencies = [
  "cga-core",
  "cga-fastmetal",
+ "cga-scene",
  "image",
  "inari",
  "mlx-rs",
@@ -548,6 +549,7 @@ dependencies = [
  "cga-core",
  "cga-gpu",
  "cga-mesh",
+ "cga-scene",
  "lightningcss",
  "serde_json",
  "swc_core",
@@ -559,6 +561,14 @@ name = "cga-mesh"
 version = "0.1.0"
 dependencies = [
  "cga-core",
+]
+
+[[package]]
+name = "cga-scene"
+version = "0.1.0"
+dependencies = [
+ "cga-core",
+ "image",
 ]
 
 [[package]]

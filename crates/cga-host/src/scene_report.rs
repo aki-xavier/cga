@@ -3,8 +3,8 @@ use std::f64::consts::PI;
 
 use crate::scene_build::{csg_op_name, Kinematics, TagInstance, TagRegistry};
 use cga_gpu::geom_kernels::geom_to_camera;
-use cga_gpu::scene::{Object, PerspectiveCamera, Scene};
-use cga_gpu::scene_graph::{vec3_unit, Color};
+use cga_scene::{Object, PerspectiveCamera, Scene};
+use cga_scene::{vec3_unit, Color};
 use cga_gpu::shading::{Light, LightKind, Material, MaterialKind};
 
 fn fmt_num(v: f64) -> String {
@@ -452,10 +452,10 @@ pub fn scene_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cga_gpu::scene::{Object, ObjectParams};
-    use cga_gpu::scene_graph::Color;
+    use cga_scene::{Object, ObjectParams};
+    use cga_scene::Color;
     use cga_gpu::shading::MaterialKind;
-    use cga_gpu::texture::Texture;
+    use cga_scene::Texture;
 
     const DEF_MAT: &str = "material(color=0xFFFFFF, roughness=0.5, metalness=0, \
 emissive=0x000000, opacity=1, ior=1.5, absorption=0)";

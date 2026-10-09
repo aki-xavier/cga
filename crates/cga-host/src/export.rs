@@ -6,7 +6,7 @@
 
 use crate::run_jsx;
 use cga_core::transform_point;
-use cga_gpu::scene::Scene;
+use cga_scene::Scene;
 use cga_mesh::{stl_ascii, stl_binary, BakeExt, BakedMesh};
 
 /// 场景的实体几何 → 世界空间三角网（各对象的 motor 应用到顶点）。

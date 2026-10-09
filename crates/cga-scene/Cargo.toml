@@ -1,0 +1,12 @@
+[package]
+name = "cga-scene"
+version = "0.1.0"
+edition = "2021"
+description = "Scene model for the cga crates: scene graph, camera, lights, materials, CPU textures. No GPU/MLX dependency."
+
+[dependencies]
+cga-core = { path = "../cga-core" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[lints]
+workspace = true

@@ -1,5 +1,5 @@
 use super::*;
-use cga_gpu::scene::PerspectiveCamera;
+use cga_scene::PerspectiveCamera;
 
 /// A fully evaluated scene: geometry + camera + tag registry + kinematics.
 #[derive(Clone, Debug)]
