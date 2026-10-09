@@ -104,12 +104,7 @@ fn test_render_ellipsoid_hits() {
 fn test_render_cyclide_nonempty() {
     let mut sc = Scene::new(None);
     sc.add_object(Object::new(ObjectParams {
-        geometry: Geometry::CyclideGeometry(CyclideGeometry::new(
-            1.0,
-            0.98,
-            0.3,
-            [0.0, 0.0, 0.0],
-        )),
+        geometry: Geometry::CyclideGeometry(CyclideGeometry::new(1.0, 0.98, 0.3, [0.0, 0.0, 0.0])),
         material: std_red_material(),
         position: [0.0, 0.0, 0.0],
         rotation_axis: [0.0, 0.0, 1.0],

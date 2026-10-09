@@ -667,6 +667,9 @@ pub struct Renderer {
     /// BVH 求交内核覆盖（测试用）：Some(true) 强制启用、Some(false) 关闭、
     /// None 走 env/阈值逻辑（`bvh_trace::bvh_mode`）。
     pub(crate) bvh_override: Option<bool>,
+    /// 纹理上传缓存（按内容指纹）。`IncrementalRenderer` 持有本Renderer，
+    /// 故缓存跨帧存活；一次性 `Renderer::new(..).render(..)` 仍是一帧一传。
+    pub(crate) tex_cache: crate::texture::GpuTextureCache,
 }
 impl Renderer {
     pub fn new(width: i32, height: i32, aa: i32, max_depth: i32) -> Renderer {
@@ -687,6 +690,7 @@ impl Renderer {
             dof: (0.0, 0.0),
             cull_primary: true,
             bvh_override: None,
+            tex_cache: crate::texture::GpuTextureCache::new(),
         }
     }
 
@@ -1362,7 +1366,11 @@ impl Renderer {
             );
             for (i, obj) in objs.iter().enumerate() {
                 if let Some(tex) = &obj.material.map {
-                    let sampled = ck(crate::texture::GpuTexture::from_cpu(tex)
+                    // 缓存命中即复用已上传的 Array（内容变了指纹就变，见
+                    // texture::GpuTextureCache）。
+                    let sampled = ck(self
+                        .tex_cache
+                        .get_or_upload(tex)
                         .sample(&best_uv, WrapMode::Repeat, WrapMode::Repeat)
                         .take_axis(Array::from_slice(&[0_i32, 1, 2], &[3]), 1));
                     acc = ck(ops::select(
