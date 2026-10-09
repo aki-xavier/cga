@@ -186,19 +186,20 @@ fn csg_uv_probe_scale_relative() {
     ));
     let g = Geometry::CsgGeometry(CsgGeometry::new(CsgOp::Union, vec![a, b]));
     let p = cam(&g);
-    let cga_core::GeometryParams::CsgParams(cp) = &p else {
-        panic!()
-    };
     let pos = vec3([1.5e5, 2.5e4, 5e4]);
     let nrm = vec3([0.0, 0.0, 1.0]);
     let uv = crate::geom_uv(&p, &pos, &nrm);
     uv.eval().unwrap();
     let got = uv.as_slice::<f32>().to_vec();
-    let want_arr = crate::geom_uv(&cp.children[1], &pos, &nrm);
-    want_arr.eval().unwrap();
-    let want = want_arr.as_slice::<f32>().to_vec();
     assert!(got != [0.0, 0.0], "探针不得塌缩成 (0,0)（固定 δ 的旧行为）");
-    assert_eq!(got, want, "落点在 B 的 +z 面，应取 B 的 uv");
+    // 闭式 uv：B 局部点 = pos − (1.5e5,0,0) = (0, 2.5e4, 5e4)，+z 面（|l2|/half
+    // 最大）；box_uv 对 +z 面取 (l0, l1) 按 (2·half) 归一 +0.5：
+    // u = 0 + 0.5 = 0.5，v = 2.5e4/1e5 + 0.5 = 0.75（f32 下均精确表示）。
+    assert_eq!(
+        got,
+        [0.5, 0.75],
+        "落点在 B 的 +z 面，uv 应为闭式 (0.5, 0.75)"
+    );
 }
 
 #[test]

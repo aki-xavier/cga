@@ -4414,13 +4414,15 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
         assert!((d2.solved[1].1 - 0.8).abs() < 1e-6, "q2: {:?}", d2.solved);
 
         // 不可达 → Err 且场景/pose 不变（不许假装跟随）。
-        assert!(s.drag("l2", t2, [3.0, 3.0, 0.0]).is_err());
+        let e = s.drag("l2", t2, [3.0, 3.0, 0.0]).unwrap_err();
+        assert!(e.contains("目标不可达"), "{e}");
         let p2 = end_now(&s);
         for i in 0..3 {
             assert!((p2[i] - t2[i]).abs() < 1e-6, "失败后场景应保持: {p2:?}");
         }
-        // 未知 link → Err
-        assert!(s.drag("nope", [0.0; 3], [0.0; 3]).is_err());
+        // 未知 link → Err 带名字
+        let e = s.drag("nope", [0.0; 3], [0.0; 3]).unwrap_err();
+        assert!(e.contains("未知 link") && e.contains("nope"), "{e}");
     }
 
     #[test]
@@ -4528,7 +4530,8 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             .unwrap()
             .world;
         let bad = Multivector::rotor([1.0, 0.0, 0.0], 0.5).to_matrix();
-        assert!(s.drag_pose("l2", bad).is_err());
+        let e = s.drag_pose("l2", bad).unwrap_err();
+        assert!(e.contains("目标不可达"), "{e}");
         let after = s
             .run()
             .kinematics
@@ -4538,8 +4541,9 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
             .unwrap()
             .world;
         assert_eq!(before, after, "失败后场景应保持");
-        // 未知 link → Err
-        assert!(s.drag_pose("nope", target).is_err());
+        // 未知 link → Err 带名字
+        let e = s.drag_pose("nope", target).unwrap_err();
+        assert!(e.contains("未知 link") && e.contains("nope"), "{e}");
     }
 
     #[test]
@@ -5527,6 +5531,54 @@ export default (
     #[test]
     fn bad_size_errors() {
         assert!(render_jsx_png("export default <scene />;", None, ".", 0, 10, 1).is_err());
+    }
+
+    #[test]
+    fn default_camera_when_no_camera_element() {
+        // 无 <camera> 时的默认相机钉死（session_click 的投影手算依赖这个隐式行为）。
+        let run =
+            run_jsx("export default <scene><sphere r={1} /></scene>;", None, "").expect("run");
+        let c = &run.camera;
+        assert_eq!(c.fov, 50.0, "默认 fov");
+        assert_eq!(c.aspect, 16.0 / 9.0, "默认 aspect");
+        assert_eq!(c.position, [0.0, 0.0, 5.0], "默认位置");
+        assert_eq!(c.target, [0.0, 0.0, 0.0], "默认目标");
+        assert_eq!(c.up, [0.0, 1.0, 0.0], "默认 up");
+    }
+
+    #[test]
+    fn empty_scene_renders_uniform_background() {
+        // 空场景：渲染合法，整帧同色（纯背景）。不钉具体色值（背景色另有金标）。
+        let img =
+            render_jsx_png("export default <scene />;", None, ".", 32, 24, 1).expect("render");
+        let (rgba, w, h) = cga_gpu::decode_png_rgba(&img.png).expect("decode");
+        assert_eq!((w, h), (32, 24));
+        let first = &rgba[0..4];
+        assert!(rgba.chunks(4).all(|px| px == first), "空场景应整帧同色");
+    }
+
+    #[test]
+    fn scene_without_lights_darkens_hits_keeps_background() {
+        // 无灯光：命中像素比背景暗（没有光源照亮），未命中 = 背景。行为钉死。
+        let img = render_jsx_png(
+            "export default <scene><sphere r={1} /></scene>;",
+            None,
+            ".",
+            64,
+            48,
+            1,
+        )
+        .expect("render");
+        let (rgba, _, _) = cga_gpu::decode_png_rgba(&img.png).expect("decode");
+        let at = |x: usize, y: usize| rgba[4 * (y * 64 + x)..4 * (y * 64 + x) + 4].to_vec();
+        let lum = |p: &[u8]| p[0] as u32 + p[1] as u32 + p[2] as u32;
+        let bg = at(2, 2);
+        let center = at(32, 24);
+        assert!(
+            lum(&center) < lum(&bg),
+            "无灯光命中应比背景暗: center {center:?} vs bg {bg:?}"
+        );
+        assert_eq!(at(2, 2), at(60, 44), "未命中区域应同为背景色");
     }
 
     #[test]

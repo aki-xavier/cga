@@ -412,7 +412,8 @@ mod tests {
         let m0 = Multivector::rotor([0.0, 0.0, 1.0], 0.0);
         let m1 = Multivector::rotor([0.0, 0.0, 1.0], 0.1);
         let (ang, lin) = m1.extract_velocity(&m0, dt);
-        assert!((ang[2] - 1.0).abs() < 1e-3);
+        // 闭式：纯转子 log，ω = Δθ/dt = 0.1/0.1 = 1.0（1e-9：f64 log 路径精确量级）。
+        assert!((ang[2] - 1.0).abs() < 1e-9);
         assert!(lin[0].abs() < 1e-6);
         assert!(lin[1].abs() < 1e-6);
         assert!(lin[2].abs() < 1e-6);

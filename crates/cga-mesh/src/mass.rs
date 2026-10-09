@@ -330,14 +330,22 @@ mod tests {
         )
         .unwrap();
         let v = 4.0 * 0.5 * 0.5;
-        let want_xy = mp.mass * ((2.0 * 2.0 - 0.25 * 0.25) / 3.0) * 0.5 * 0.5;
-        // I_xy = m·(I1−I2)·sinθcosθ / ... 直接验证量级与符号
-        let _ = (v, want_xy);
+        let _ = v;
+        // 闭式 I_xy：I = R·diag(I1,I2,I3)·Rᵀ（教科书定义，与被测积分实现独立）。
+        // 半宽 (2, 0.25, 0.25)：主惯量 I1 = m(hy²+hz²)/3、I2 = I3 = m(hx²+hz²)/3。
+        let (hx, hy, hz) = (2.0, 0.25, 0.25);
+        let i1 = mp.mass * (hy * hy + hz * hz) / 3.0;
+        let i2 = mp.mass * (hx * hx + hz * hz) / 3.0;
+        // want_xy = Σ_k R[x][k]·I_k·R[y][k]（行主序：r[0..3] 是 x 行、r[4..7] 是 y 行）
+        let diag = [i1, i2, i2];
+        let want_xy: f64 = (0..3).map(|k| rot45[k] * diag[k] * rot45[4 + k]).sum();
         assert!(
-            mp.inertia[0][1].abs() > 1e-3,
-            "旋转后 I_xy 应非零: {:?}",
-            mp.inertia
+            (mp.inertia[0][1] - want_xy).abs() < 1e-9,
+            "I_xy 闭式 {want_xy} vs 积分 {}",
+            mp.inertia[0][1]
         );
+        // 对称性
+        assert_eq!(mp.inertia[0][1], mp.inertia[1][0]);
         // 迹不变（半宽 hx=2, hy=hz=0.25）
         let tr: f64 = (0..3).map(|i| mp.inertia[i][i]).sum();
         let il = mp.mass * ((0.0625 + 0.0625) / 3.0 + (4.0 + 0.0625) / 3.0 + (4.0 + 0.0625) / 3.0);

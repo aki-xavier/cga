@@ -762,15 +762,23 @@ mod tests {
 
     #[test]
     fn test_cyclide_generator_sphere_is_blade() {
+        // 期望值写规格公式的字面闭式（不是被测对象的 spine()/radius() 访问器）：
+        // spine(u) = (a·cos u, b·sin u, 0)，radius(u) = d − c·cos u，c = √(a²−b²)。
         let cy = cga_cy();
-        let s = cy.generator_sphere(0.7);
+        let u = 0.7;
+        let s = cy.generator_sphere(u);
         let (ctr, r) = s.to_sphere();
-        let sp = cy.spine(0.7);
-        let rad = cy.radius(0.7);
-        assert!((ctr[0] - sp[0]).abs() < 1e-5);
-        assert!((ctr[1] - sp[1]).abs() < 1e-5);
-        assert!((ctr[2] - sp[2]).abs() < 1e-5);
-        assert!((r - rad).abs() < 1e-5);
+        let c = (CGA_A * CGA_A - CGA_B * CGA_B).sqrt();
+        let want = [CGA_A * u.cos(), CGA_B * u.sin(), 0.0];
+        for i in 0..3 {
+            assert!(
+                (ctr[i] - want[i]).abs() < 1e-9,
+                "ctr[{i}]: {} vs {want:?}",
+                ctr[i]
+            );
+        }
+        let want_r = CGA_D - c * u.cos();
+        assert!((r - want_r).abs() < 1e-9, "r: {r} vs {want_r}");
     }
 
     #[test]

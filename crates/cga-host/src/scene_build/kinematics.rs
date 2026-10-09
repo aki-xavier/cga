@@ -1241,6 +1241,15 @@ fn lm_solve_j(
             }
         }
         if !solved {
+            // 停滞先分两种（诚实语义）：b = −Jᵀr ≈ 0 ⇒ 已经在驻点（局部最小），
+            // 返回 Ok 由调用方的残差终检给出「目标不可达 / 机构装不上」的准确
+            // 语义；b 显著非零 ⇒ 真停滞（病态/奇异），报错。
+            let ginf = b.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+            // 判据与 newton_minimize 的收敛口径同尺度：解析 J 与残差是两条
+            // 求值路径，驻点上 ginf 仍有 ~1e-8 噪声（实测 2R 臂不可达驻点）。
+            if ginf < 1e-7 * (1.0 + cur_norm) {
+                return Ok(j);
+            }
             return Err(format!("LM 停滞（残差 {cur_norm:e}）"));
         }
     }
@@ -2608,7 +2617,9 @@ mod tests {
 
     #[test]
     fn drag_unreachable_is_error() {
-        // 目标 (1,1,0) 距原点 √2 ≠ 1：不在单摆可达圆上 → Err，不假装跟随。
+        // 目标 (1,1,0) 距原点 √2 ≠ 1：不在单摆可达圆上。LM 收敛到最近点
+        // (0.707,0.707) 后残差 0.414 > 1e-6 → 走「目标不可达」终检（语义钉死，
+        // 不是笼统的「未收敛」）。
         let kin = solve_kin(&pend_decl("base", "l1"));
         let e = drag_solve(
             &kin,
@@ -2618,7 +2629,7 @@ mod tests {
             &std::collections::HashSet::new(),
         )
         .unwrap_err();
-        assert!(e.contains("drag"), "{e}");
+        assert!(e.contains("目标不可达"), "{e}");
     }
 
     #[test]
@@ -2658,15 +2669,16 @@ mod tests {
             "q 应为 1.5，got {}",
             d.solved[0].1
         );
-        // 滑动副到不了横向目标 → Err
-        assert!(drag_solve(
+        // 滑动副到不了横向目标 → 「目标不可达」（残差 0.1 > 1e-6 终检）
+        let e = drag_solve(
             &kin,
             "l1",
             [1.0, 0.0, 0.0],
             [2.5, 0.1, 0.0],
             &std::collections::HashSet::new(),
         )
-        .is_err());
+        .unwrap_err();
+        assert!(e.contains("目标不可达"), "{e}");
     }
 
     /// 平面 2R 臂：base —j1(z)→ l1 —j2(z, at=[1,0,0])→ l2，抓取 l2 局部 [1,0,0]。
@@ -2898,11 +2910,11 @@ mod tests {
 
     #[test]
     fn drag_pose_orientation_unreachable_is_error() {
-        // z 轴单摆够不到绕 x 的旋转 → Err，不假装跟随。
+        // z 轴单摆够不到绕 x 的旋转：LM 收敛后朝向残差 ~0.5 → 「目标不可达」。
         let kin = solve_kin(&pend_decl("base", "l1"));
         let target = Multivector::rotor([1.0, 0.0, 0.0], 0.5).to_matrix();
         let e = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new()).unwrap_err();
-        assert!(e.contains("drag_pose"), "{e}");
+        assert!(e.contains("目标不可达"), "{e}");
     }
 
     #[test]
@@ -3008,5 +3020,94 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("可解的自由"), "{e}");
+    }
+
+    // ---- 对跖朝向（θ→π 专门分支，审计 V3）-----------------------------------
+
+    #[test]
+    fn rotvec_from_mat3_antipodal_axis_recovery() {
+        // 对跖分支（PI − th < 1e-6）：轴从对角元恢复（叉积形式在 θ=π 退化）。
+        // 轴 (0.6,0.8,0)、角 π：R = 2aaᵀ−I → rotvec 应回到 ±axis·π
+        // （对跖处符号二义，断言模长 = π 且 |axis·rv̂| = 1）。
+        let m = Multivector::rotor([0.6, 0.8, 0.0], std::f64::consts::PI).to_matrix();
+        let rv = rotvec_from_mat3(mat4_rot(&m));
+        let n = v3_norm(rv);
+        assert!(
+            (n - std::f64::consts::PI).abs() < 1e-9,
+            "|rv| 应为 π: {rv:?}"
+        );
+        let dot = (rv[0] * 0.6 + rv[1] * 0.8) / n;
+        assert!(
+            (dot.abs() - 1.0).abs() < 1e-9,
+            "轴应平行 (0.6,0.8,0): {rv:?}"
+        );
+    }
+
+    #[test]
+    fn drag_pose_antipodal_converges() {
+        // 大残差收敛：目标 R_z(π−0.01)（|rotvec| ≈ 3.13，远离 r=0 的一阶区），
+        // 左雅可比逆精确 ⇒ 从 q=0 闭式收敛到 q = π−0.01。
+        let kin = solve_kin(&pend_decl("base", "l1"));
+        let th = std::f64::consts::PI - 0.01;
+        let target = Multivector::rotor([0.0, 0.0, 1.0], th).to_matrix();
+        let d = drag_pose_solve(&kin, "l1", target, &std::collections::HashSet::new())
+            .expect("drag_pose");
+        assert!(
+            (d.solved[0].1 - th).abs() < 1e-6,
+            "q 应为 π−0.01，got {}",
+            d.solved[0].1
+        );
+        assert!(d.residual < 1e-9);
+    }
+
+    /// SO(3) 对数的左雅可比（独立闭式，只作 `rotvec_left_jac_inv` 的裁判）：
+    /// J_l(r) = I + a·r̂ + b·r̂²，a = (1−cosθ)/θ²，b = (θ−sinθ)/θ³。
+    #[cfg(test)]
+    fn rotvec_left_jac(r: [f64; 3]) -> [[f64; 3]; 3] {
+        let th = v3_norm(r);
+        let skew = [[0.0, -r[2], r[1]], [r[2], 0.0, -r[0]], [-r[1], r[0], 0.0]];
+        let skew2 = mat3_mul(skew, skew);
+        let (a, b) = (
+            (1.0 - th.cos()) / (th * th),
+            (th - th.sin()) / (th * th * th),
+        );
+        let mut out = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                out[i][j] = if i == j { 1.0 } else { 0.0 } + a * skew[i][j] + b * skew2[i][j];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn rotvec_left_jac_inv_is_exact_inverse_near_antipode() {
+        // near-π 分支（th > PI−1e-3 的 u 代换）覆盖：acos 在 θ→π 奇异（dθ/dc
+        // = −1/sinθ 发散），FD 在该区域自身受损——此处的正确裁判是**代数逆
+        // 恒等式** J_l⁻¹·J_l = I（J_l 用独立闭式实现）。多轴向 × |r| = π−5e-4。
+        for axis in [[0.6, 0.8, 0.0], [0.0, 1.0, 0.0], [0.3, -0.5, 0.8]] {
+            let a = v3_unit(axis);
+            let r = v3_scale(a, std::f64::consts::PI - 5e-4);
+            let prod = mat3_mul(rotvec_left_jac_inv(r), rotvec_left_jac(r));
+            for i in 0..3 {
+                for j in 0..3 {
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!(
+                        (prod[i][j] - want).abs() < 1e-9,
+                        "axis={axis:?}: (J⁻¹J)[{i}][{j}] = {}",
+                        prod[i][j]
+                    );
+                }
+            }
+        }
+        // 小角级数分支（c2 = 1/12）同一恒等式
+        let r = [1e-6, -2e-6, 3e-6];
+        let prod = mat3_mul(rotvec_left_jac_inv(r), rotvec_left_jac(r));
+        for i in 0..3 {
+            for j in 0..3 {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((prod[i][j] - want).abs() < 1e-9, "小角分支: {}", prod[i][j]);
+            }
+        }
     }
 }

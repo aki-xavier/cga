@@ -25,7 +25,10 @@ fn install_error_handler() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
-        unsafe extern "C" fn handler(msg: *const std::os::raw::c_char, _data: *mut std::os::raw::c_void) {
+        unsafe extern "C" fn handler(
+            msg: *const std::os::raw::c_char,
+            _data: *mut std::os::raw::c_void,
+        ) {
             if !msg.is_null() {
                 let s = std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned();
                 if let Ok(mut g) = LAST_ERROR.lock() {
@@ -79,14 +82,19 @@ impl MetalKernel {
         header: &str,
     ) -> Result<Self, String> {
         install_error_handler();
-        let mk_cstr = |s: &str| {
-            CString::new(s).map_err(|_| format!("metal kernel: interior NUL in {s:?}"))
-        };
+        let mk_cstr =
+            |s: &str| CString::new(s).map_err(|_| format!("metal kernel: interior NUL in {s:?}"));
         let name_c = mk_cstr(name)?;
         let src_c = mk_cstr(source)?;
         let header_c = mk_cstr(header)?;
-        let ins: Vec<CString> = inputs.iter().map(|s| mk_cstr(s)).collect::<Result<_, _>>()?;
-        let outs: Vec<CString> = outputs.iter().map(|s| mk_cstr(s)).collect::<Result<_, _>>()?;
+        let ins: Vec<CString> = inputs
+            .iter()
+            .map(|s| mk_cstr(s))
+            .collect::<Result<_, _>>()?;
+        let outs: Vec<CString> = outputs
+            .iter()
+            .map(|s| mk_cstr(s))
+            .collect::<Result<_, _>>()?;
         let vin = vector_string(&ins);
         let vout = vector_string(&outs);
         let raw = unsafe {
@@ -269,7 +277,6 @@ mod grid_tests {
 mod big_grid_tests {
     use super::*;
 
-
     #[test]
     fn probe_dispatch_dims() {
         let k = MetalKernel::compile(
@@ -283,11 +290,19 @@ mod big_grid_tests {
         let v = vec![1.0f32; 6912];
         let inp = Array::from_slice(&v, &[6912]);
         let outs = k
-            .apply_tg(&[&inp], &[(mlx_sys::mlx_dtype__MLX_FLOAT32, &[6912])], 6912, 256)
+            .apply_tg(
+                &[&inp],
+                &[(mlx_sys::mlx_dtype__MLX_FLOAT32, &[6912])],
+                6912,
+                256,
+            )
             .expect("apply");
         outs[0].eval().unwrap();
         let s = outs[0].as_slice::<f32>();
         println!("DIMS grid={} tg={}", s[0], s[1]);
+        // kernel 写回的是派发参数本身：grid=6912、threadgroup=256（确定性）。
+        assert_eq!(s[0], 6912.0, "grid 维数");
+        assert_eq!(s[1], 256.0, "threadgroup 维数");
     }
 
     #[test]
@@ -312,8 +327,6 @@ mod big_grid_tests {
         }
     }
 
-
-
     #[test]
     fn grid_307k() {
         let k = MetalKernel::compile(
@@ -327,7 +340,11 @@ mod big_grid_tests {
         let v = vec![1.0f32; 307200];
         let inp = Array::from_slice(&v, &[307200]);
         let outs = k
-            .apply(&[&inp], &[(mlx_sys::mlx_dtype__MLX_FLOAT32, &[307200])], 307200)
+            .apply(
+                &[&inp],
+                &[(mlx_sys::mlx_dtype__MLX_FLOAT32, &[307200])],
+                307200,
+            )
             .expect("apply");
         if let Err(e) = outs[0].eval() {
             panic!("eval: {e:?} LAST={}", take_last_error_string());

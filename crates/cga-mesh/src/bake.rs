@@ -783,13 +783,20 @@ mod tests {
         g.identity_params()
     }
 
+    // 体积公差模型（本组测试统一）：marching-tetrahedra 的体积误差集中在
+    // 厚度 ~步长 h 的边界层，最坏不抵消时 |ΔV| ≈ 表面积·h；实际上符号误差
+    // 大部分抵消，实测误差远小于该界。下列公差是该界内的一个分数，作
+    // 截断/退化回归看守，不是精度声称；期望值一律写闭式常量。
+
     #[test]
     fn sphere_volume() {
         let p = world(&Geometry::SphereGeometry(SphereGeometry::new(1.0)));
         let m = p.bake(0.08).unwrap();
         assert!(m.triangle_count() > 1000);
         let v = m.volume().abs();
-        assert!((v - 4.18879).abs() < 4.18879 * 0.08, "V={v}");
+        // 闭式 4π/3；界 = 表面积·h = 4π·0.08 ≈ 1.0（24%），取 8% 看守。
+        let want = std::f64::consts::PI * 4.0 / 3.0;
+        assert!((v - want).abs() < want * 0.08, "V={v} vs 4π/3={want}");
     }
 
     #[test]
@@ -797,6 +804,8 @@ mod tests {
         let p = world(&Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0)));
         let m = p.bake(0.1).unwrap();
         let v = m.volume().abs();
+        // 闭式 8.0；面精确，误差集中在 12 条棱（总长 24）的 h² 倒角
+        // ≈ 24·0.1² = 0.24（3%），取 5% 看守。
         assert!((v - 8.0).abs() < 8.0 * 0.05, "V={v}");
     }
 
@@ -812,9 +821,10 @@ mod tests {
         let p = world(&g);
         let m = p.bake(0.08).unwrap();
         let v = m.volume().abs();
-
-        assert!((v - 3.18879).abs() < 0.35, "V={v}");
-        assert!(v < 4.18879);
+        // 闭式 4π/3 − 1（单位盒角点 |c| = √3/2 < 1，全在球内）。
+        let want = std::f64::consts::PI * 4.0 / 3.0 - 1.0;
+        assert!((v - want).abs() < 0.35, "V={v} vs 4π/3−1={want}");
+        assert!(v < std::f64::consts::PI * 4.0 / 3.0);
     }
 
     #[test]
@@ -822,11 +832,20 @@ mod tests {
         let t = world(&Geometry::TorusGeometry(TorusGeometry::new(1.0, 0.3)));
         let mt = t.bake(0.08).unwrap();
         assert!(mt.triangle_count() > 500);
+        // 闭式 2π²Rr² = 2π²·0.09；界 = 表面积·h = 4π²·0.3·0.08 ≈ 0.95（53%，
+        // 抵消后实测远小于界），取 25% 看守。
+        let vt = mt.volume().abs();
+        let want_t = 2.0 * std::f64::consts::PI.powi(2) * 0.09;
+        assert!(
+            (vt - want_t).abs() < want_t * 0.25,
+            "V_torus={vt} vs 2π²·0.09={want_t}"
+        );
         let c = world(&Geometry::ConeGeometry(ConeGeometry::new(0.5, 1.0)));
         let mc = c.bake(0.06).unwrap();
         let v = mc.volume().abs();
-
-        assert!((v - 0.261799).abs() < 0.05, "V={v}");
+        // 闭式 πr²h/3 = π/12。
+        let want = std::f64::consts::PI / 12.0;
+        assert!((v - want).abs() < 0.05, "V={v} vs π/12={want}");
     }
 
     #[test]
@@ -834,6 +853,7 @@ mod tests {
         let cy = world(&Geometry::CylinderGeometry(CylinderGeometry::new(0.5, 2.0)));
         let m = cy.bake(0.06).unwrap();
         let v = m.volume().abs();
+        // 闭式 πr²h = 0.5π；界 = 表面积·h = (2πrh+2πr²)·0.06 ≈ 0.52，取 0.15 看守。
         assert!(
             (v - std::f64::consts::PI * 0.25 * 2.0).abs() < 0.15,
             "V={v}"
@@ -843,7 +863,9 @@ mod tests {
         )));
         let me = el.bake(0.06).unwrap();
         let ve = me.volume().abs();
-        assert!((ve - 4.18879 * 0.25).abs() < 0.2, "V={ve}");
+        // 闭式 (4π/3)·abc = (4π/3)·0.25 = π/3。
+        let want_e = std::f64::consts::PI * 4.0 / 3.0 * 0.25;
+        assert!((ve - want_e).abs() < 0.2, "V={ve} vs π/3={want_e}");
     }
 
     fn assert_shells(m: &BakedMesh, want_euler: i64) {
