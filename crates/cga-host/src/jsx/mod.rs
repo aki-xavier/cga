@@ -4543,6 +4543,29 @@ export default <scene><camera /><sphere r={0.5} />{fixed}<Dial /><Counter /></sc
     }
 
     #[test]
+    fn session_render_toon_and_edge_channel() {
+        // U5：Toon 模式与 Edge 诊断通道 plumbing——PNG 魔数 + 逐位确定 +
+        // Toon ≠ Normal + Edge 图存在轮廓像素。
+        let mut s = SceneSession::open(ARM_SCENE, None, ".").expect("open");
+        let toon = s
+            .render(64, 36, 1, cga_gpu::RenderMode::Toon)
+            .expect("toon");
+        assert_eq!(&toon.png[..4], b"\x89PNG");
+        let toon2 = s
+            .render(64, 36, 1, cga_gpu::RenderMode::Toon)
+            .expect("toon2");
+        assert_eq!(toon.png, toon2.png, "toon 应逐位确定");
+        let normal = s.render(64, 36, 1, cga_gpu::RenderMode::Normal).expect("n");
+        assert_ne!(toon.png, normal.png, "toon 应与 normal 不同");
+        let edge = s
+            .render_diagnostic(64, 36, cga_gpu::DiagChannel::Edge)
+            .expect("edge");
+        assert_eq!(&edge.png[..4], b"\x89PNG");
+        let (rgba, _, _) = cga_gpu::decode_png_rgba(&edge.png).expect("decode");
+        assert!(rgba.chunks(4).any(|px| px[0] > 200), "edge 图应有轮廓像素");
+    }
+
+    #[test]
     fn session_render_diagnostic_channels() {
         // U3：三通道 plumbing + 逐位确定 + 对象 id 图恰好 4 色（背景/盒/两球）。
         // 64×36 = 16:9，与默认相机 aspect 一致（否则 l2 球在画幅外）。

@@ -4,7 +4,7 @@ use super::*;
 /// 正常模式取 `1 - opacity`；忽略透明度模式一律 0（当作不透明遮挡物）。
 fn eff_occlusion(mode: RenderMode, obj: &Object) -> f64 {
     match mode {
-        RenderMode::Normal => 1.0 - obj.material.opacity,
+        RenderMode::Normal | RenderMode::Toon => 1.0 - obj.material.opacity,
         RenderMode::IgnoreOpacity => 0.0,
     }
 }
@@ -388,7 +388,101 @@ pub fn pick(
     best
 }
 
+// ---- 解析轮廓（U5，docs/ue58-inspirations.md §3.U5）-------------------------
+// 透视下光滑表面轮廓的**精确**条件：n·(p − c) = 0（c 为相机中心）。相机系里
+// 光线过原点、p = t·d，所以条件就是 n·d = 0——facing ratio 不是近似，它就是
+// silhouette 本身。边缘 = silhouette（n·d→0）+ 对象可见性边界（下标/命中变化）。
+// 有限线宽需要阈值：τ = 1.2/fx（≈1.2 像素，随分辨率/视场自适应）。
+
+/// 解析轮廓掩码（逐位确定）：每亚采样光线逐包判定，按 aa 取均值（边缘自带
+/// 抗锯齿）。`normals` 必须已朝视线翻转（facing = −n·d ≥ 0，与着色同规则）。
+/// 返回 [w·h] 的 [0,1] 强度。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn edge_mask(
+    hits: &[bool],
+    normals: &[f32],
+    indices: &[i32],
+    rays: &[f32],
+    w: usize,
+    h: usize,
+    aa: usize,
+    fx: f64,
+) -> Vec<f32> {
+    let tau = 1.2 / fx as f32;
+    let bundles = aa * aa;
+    let hw = w * h;
+    let mut mask = vec![0.0f32; hw];
+    for s in 0..bundles {
+        let base = s * hw;
+        for y in 0..h {
+            for x in 0..w {
+                let i = base + y * w + x;
+                let mut e = false;
+                if hits[i] {
+                    let facing = -(normals[3 * i] * rays[3 * i]
+                        + normals[3 * i + 1] * rays[3 * i + 1]
+                        + normals[3 * i + 2] * rays[3 * i + 2]);
+                    e = facing < tau;
+                }
+                // 可见性边界：右/下邻居的下标或命中状态不同
+                if !e && x + 1 < w {
+                    let j = i + 1;
+                    e = hits[i] != hits[j] || (hits[i] && indices[i] != indices[j]);
+                }
+                if !e && y + 1 < h {
+                    let j = i + w;
+                    e = hits[i] != hits[j] || (hits[i] && indices[i] != indices[j]);
+                }
+                if e {
+                    mask[y * w + x] += 1.0 / bundles as f32;
+                }
+            }
+        }
+    }
+    mask
+}
+
+/// Toon 后处理（resolve 之后，显示值域 0..255）：亮度量化（4 带，保色相）+
+/// 轮廓描边（乘暗）。逐位确定。
+fn toon_post(img: &Array, truth: &Truth, rays: &Array, w: i32, h: i32, aa: i32, fx: f64) -> Array {
+    img.eval().unwrap();
+    truth.hit.eval().unwrap();
+    truth.normal.eval().unwrap();
+    truth.index.eval().unwrap();
+    rays.eval().unwrap();
+    let hits: Vec<bool> = truth.hit.as_slice::<bool>().to_vec();
+    let mask = edge_mask(
+        &hits,
+        truth.normal.as_slice::<f32>(),
+        truth.index.as_slice::<i32>(),
+        rays.as_slice::<f32>(),
+        w as usize,
+        h as usize,
+        aa as usize,
+        fx,
+    );
+    const BANDS: f32 = 4.0;
+    let mut px = img.as_slice::<f32>().to_vec();
+    for p in 0..(w as usize) * (h as usize) {
+        let dark = 1.0 - mask[p];
+        for c in 0..3 {
+            let v = px[4 * p + c];
+            // 逐通道 posterize（标准 cel 色阶）：0 保持 0，其余落到
+            // (floor(v·B)+1)/B 档（不压死暗部）；最后乘描边暗化。
+            let q = if v < 0.5 {
+                0.0
+            } else {
+                ((v / 255.0 * BANDS).floor() + 1.0).min(BANDS) / BANDS * 255.0
+            };
+            px[4 * p + c] = q * dark;
+        }
+    }
+    Array::from_slice(&px, &[h, w, 4])
+}
+
 // ---- 诊断通道（U3，docs/ue58-inspirations.md §3.U3）-------------------------
+// headless 引擎的"视口"：全部是主光线求交的副产品——无着色、无次级光线、
+// 无剔除、无 BVH，同输入同输出逐位确定。
 // headless 引擎的"视口"：全部是主光线求交的副产品——无着色、无次级光线、
 // 无剔除、无 BVH，同输入同输出逐位确定。
 
@@ -401,6 +495,8 @@ pub enum DiagChannel {
     Normal,
     /// 相机深度 t → 灰度 1/(1+t)：近白远黑，未命中 = 黑（无每帧归一化，跨帧可比）。
     Depth,
+    /// 解析轮廓（U5）：silhouette（n·d→0，精确）+ 可见性边界 → 白色强度。
+    Edge,
 }
 
 /// 确定性调色板：golden-ratio 步进的 hue（相邻下标颜色尽量远），s=0.75、v=0.95。
@@ -460,10 +556,39 @@ pub fn render_diagnostic(
         best_idx.as_slice::<i32>(),
         prep.rays.as_slice::<f32>(),
     );
+    let n_px = n_rays as usize;
+    // Edge 通道：翻转法线（与 Normal 通道同规则）后算解析轮廓掩码。
+    let edge = if channel == DiagChannel::Edge {
+        let mut hits = Vec::with_capacity(n_px);
+        let mut norms = vec![0.0f32; 3 * n_px];
+        for i in 0..n_px {
+            hits.push(ts[i].is_finite());
+            let mut nv = [ns[3 * i], ns[3 * i + 1], ns[3 * i + 2]];
+            let dd = [ds[3 * i], ds[3 * i + 1], ds[3 * i + 2]];
+            if nv[0] * dd[0] + nv[1] * dd[1] + nv[2] * dd[2] > 0.0 {
+                nv = [-nv[0], -nv[1], -nv[2]];
+            }
+            norms[3 * i..3 * i + 3].copy_from_slice(&nv);
+        }
+        let fy = f64::from(height) / (2.0 * (camera.fov.to_radians() / 2.0).tan());
+        edge_mask(
+            &hits,
+            &norms,
+            idxs,
+            ds,
+            width as usize,
+            height as usize,
+            1,
+            fy * camera.aspect,
+        )
+    } else {
+        Vec::new()
+    };
     let mut px = vec![0.0f32; (n_rays * 4) as usize];
     for i in 0..n_rays as usize {
         px[4 * i + 3] = 255.0; // alpha 恒 255（命中/未命中一致）
-        if !ts[i].is_finite() {
+                               // Edge 通道的轮廓可以落在背景像素上（对象边界的背景侧），不能跳过。
+        if !ts[i].is_finite() && channel != DiagChannel::Edge {
             continue; // 未命中 = 黑
         }
         let rgb = match channel {
@@ -479,6 +604,10 @@ pub fn render_diagnostic(
             }
             DiagChannel::Depth => {
                 let g = 1.0 / (1.0 + ts[i].max(0.0));
+                [g, g, g]
+            }
+            DiagChannel::Edge => {
+                let g = edge[i];
                 [g, g, g]
             }
         };
@@ -509,11 +638,15 @@ pub struct IncrementalStats {
 ///   半透明遮挡物按 `1 - opacity` 削弱阴影。
 /// - `IgnoreOpacity`：把一切当不透明——不发射任何次级光线，透明度不削弱阴影，
 ///   材质的不透明部分照常着色。用于"实体预览"与大幅提速（玻璃场景可快一个数量级）。
+/// - `Toon`（U5）：直接光照 + 亮度量化（4 带）+ 解析轮廓描边——边缘 = 光滑
+///   silhouette（透视下轮廓的精确条件就是 n·d = 0，无近似）+ 对象可见性边界。
+///   不发射次级光线。逐位确定（同输入同输出）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RenderMode {
     #[default]
     Normal,
     IgnoreOpacity,
+    Toon,
 }
 
 #[derive(Debug)]
@@ -764,10 +897,22 @@ impl Renderer {
             0,
             p.bvh.as_ref(),
         );
-        (
-            self.resolve(&rgb_sr),
-            truth.expect("the primary pass states a truth"),
-        )
+        let truth = truth.expect("the primary pass states a truth");
+        let mut img = self.resolve(&rgb_sr);
+        if self.mode == RenderMode::Toon {
+            // Toon 后处理（U5）：亮度量化 + 解析轮廓描边（主光线 truth 副产品）。
+            let fy = f64::from(self.height) / (2.0 * (camera.fov.to_radians() / 2.0).tan());
+            img = toon_post(
+                &img,
+                &truth,
+                &p.rays,
+                self.width,
+                self.height,
+                self.aa,
+                fy * camera.aspect,
+            );
+        }
+        (img, truth)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1354,6 +1499,20 @@ impl IncrementalRenderer {
     ) -> (Array, IncrementalStats) {
         let (w, h, k) = (self.r.width, self.r.height, self.r.aa);
         let total = (w as usize) * (h as usize) * (k as usize) * (k as usize);
+        // Toon 的边缘掩码依赖全帧主光线 truth，增量复用不适用：
+        // 保守全帧（正确性优先；帧间复用另行立项）。
+        if self.r.mode == RenderMode::Toon {
+            let (img, _truth) = self.r.render_with_truth(scene.clone(), *camera);
+            return (
+                img,
+                IncrementalStats {
+                    dirty: total,
+                    total,
+                    full: true,
+                    reason: "toon",
+                },
+            );
+        }
         let fps = Fps {
             camera: fp(camera),
             lights: fp(&scene.lights),

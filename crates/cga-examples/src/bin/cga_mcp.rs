@@ -100,7 +100,8 @@ fn tool_defs() -> Value {
                 "h": {"type": "integer", "default": 480},
                 "aa": {"type": "integer", "default": 2, "description": "每像素采样数（抗锯齿）"},
                 "opaque": {"type": "boolean", "default": false, "description": "忽略透明度（无反射/折射）"},
-                "channel": {"type": "string", "enum": ["id", "normals", "depth"], "description": "诊断通道（给出时忽略 aa/opaque）"},
+                "channel": {"type": "string", "enum": ["id", "normals", "depth", "edge"], "description": "诊断通道（给出时忽略 aa/opaque/toon）"},
+                "toon": {"type": "boolean", "default": false, "description": "卡通渲染（量化+解析轮廓描边；恒全帧）"},
                 "aperture": {"type": "number", "description": "光圈半径（>0 启用薄透镜景深，此时必须给 focal）"},
                 "focal": {"type": "number", "description": "对焦距离（配合 aperture）"},
             }), &[]),
@@ -253,7 +254,12 @@ impl Server {
                 "id" => cga_gpu::DiagChannel::ObjectId,
                 "normals" => cga_gpu::DiagChannel::Normal,
                 "depth" => cga_gpu::DiagChannel::Depth,
-                _ => return Err(format!("未知 channel {ch}（可选 id / normals / depth）")),
+                "edge" => cga_gpu::DiagChannel::Edge,
+                _ => {
+                    return Err(format!(
+                        "未知 channel {ch}（可选 id / normals / depth / edge）"
+                    ))
+                }
             };
             let img = self.sess()?.render_diagnostic(w, h, channel)?;
             return Ok(tool_ok(vec![
@@ -263,6 +269,8 @@ impl Server {
         }
         let mode = if args.get("opaque").and_then(Value::as_bool).unwrap_or(false) {
             RenderMode::IgnoreOpacity
+        } else if args.get("toon").and_then(Value::as_bool).unwrap_or(false) {
+            RenderMode::Toon
         } else {
             RenderMode::Normal
         };

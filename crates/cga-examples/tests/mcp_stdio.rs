@@ -196,6 +196,29 @@ fn mcp_stdio_full_loop() {
     let (err, text) = m.tool_text("scene_render", json!({"aperture": 0.4}));
     assert!(err && text.contains("focal"), "{text}");
 
+    // 解析轮廓 NPR（U5）：channel=edge 出图；toon 模式出图且文本带 mode=Toon
+    let r = m.tool("scene_render", json!({"w": 64, "h": 48, "channel": "edge"}));
+    assert_eq!(r["isError"], false);
+    assert_eq!(r["content"][0]["mimeType"], "image/png");
+    assert!(
+        r["content"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("channel=edge"),
+        "{:?}",
+        r["content"][1]
+    );
+    let r = m.tool(
+        "scene_render",
+        json!({"w": 64, "h": 48, "aa": 1, "toon": true}),
+    );
+    assert_eq!(r["isError"], false);
+    assert!(
+        r["content"][1]["text"].as_str().unwrap().contains("Toon"),
+        "{:?}",
+        r["content"][1]
+    );
+
     // collisions：球心 z=0、盒顶 z=−0.05，两球真实穿入盒体——认证 Yes +
     // 解析分离度（r=0.1 穿入 0.05、r=0.12 穿入 0.07）；两球之间 No。
     let (err, text) = m.tool_text("scene_collisions", json!({}));

@@ -999,6 +999,102 @@ mod tests {
         );
     }
 
+    // ---- 解析轮廓 NPR（U5，docs/ue58-inspirations.md §3.U5）-------------------
+
+    #[test]
+    fn test_diag_edge_channel_outlines() {
+        // 两球场景：轮廓线在球/背景过渡处为白，球心与角落为黑；线宽有限。
+        let (sc, cam) = diag_two_spheres();
+        let img = render_diagnostic(&sc, &cam, 96, 72, DiagChannel::Edge);
+        img.eval().unwrap();
+        assert_eq!(diag_px(&img, 47, 35, 96), [0.0; 3], "球心不应是轮廓");
+        assert_eq!(diag_px(&img, 0, 0, 96), [0.0; 3], "角落背景不应是轮廓");
+        // 球 A（r=0.6）在 y=35 行的轮廓：投影像素半径 ≈ asin(0.6/5)·fx ≈ 14
+        // ⇒ A 的像素区间 [34,61]，左右轮廓在 x≈33（背景侧）与 x≈61（对象侧）。
+        let whites: Vec<usize> = (0..96)
+            .filter(|&x| diag_px(&img, x, 35, 96)[0] > 0.5)
+            .collect();
+        assert!(whites.len() >= 2, "应有轮廓像素: {whites:?}");
+        assert!(whites.len() <= 14, "线宽应有限: {whites:?}");
+        assert!(
+            whites.iter().any(|&x| (30..40).contains(&x)),
+            "左轮廓应在 x≈33 附近: {whites:?}"
+        );
+        assert!(
+            whites.iter().any(|&x| (55..67).contains(&x)),
+            "右轮廓应在 x≈61 附近: {whites:?}"
+        );
+    }
+
+    #[test]
+    fn test_toon_quantizes_and_outlines() {
+        // 单球 + 方向光：Toon 颜色数远少于 Normal（亮度 4 带量化）；轮廓处有
+        // 描边压暗；逐位确定；增量渲染器全帧回退且与全帧逐位一致。
+        let mut sc = Scene::new(None);
+        sc.add_object(Object::new(ObjectParams {
+            geometry: Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+            material: std_red_material(),
+            position: [0.0; 3],
+            rotation_axis: [0.0, 0.0, 1.0],
+            rotation_angle: 0.0,
+            motor: None,
+        }));
+        sc.add_light(Light::directional(
+            Color::from_hex(0xFFFFFF),
+            2.0,
+            [1.0, 1.0, 1.0],
+        ));
+        let mut cam = PerspectiveCamera::new(
+            45.0,
+            96.0 / 72.0,
+            0.1,
+            100.0,
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        cam.look_at([0.0, 0.0, 0.0], None);
+        let normal = Renderer::new(96, 72, 2, 3).render(sc.clone(), cam);
+        normal.eval().unwrap();
+        let toon = Renderer::new(96, 72, 2, 3)
+            .with_mode(RenderMode::Toon)
+            .render(sc.clone(), cam);
+        toon.eval().unwrap();
+        let count = |img: &Array| -> usize {
+            let mut s = std::collections::HashSet::new();
+            for px in img.as_slice::<f32>().chunks(4) {
+                s.insert([px[0] as u32, px[1] as u32, px[2] as u32]);
+            }
+            s.len()
+        };
+        let (cn, ct) = (count(&normal), count(&toon));
+        assert!(ct * 3 < cn, "toon 颜色数 {ct} 应远少于 normal {cn}");
+        // 描边：存在像素在 toon 里亮度 < 40、在 normal 里亮度 > 80
+        let lum = |img: &Array, i: usize| {
+            let s = img.as_slice::<f32>();
+            0.299 * s[4 * i] + 0.587 * s[4 * i + 1] + 0.114 * s[4 * i + 2]
+        };
+        let found = (0..96 * 72).any(|i| lum(&toon, i) < 40.0 && lum(&normal, i) > 80.0);
+        assert!(found, "应有被描边压暗的像素");
+        // 逐位确定
+        let toon2 = Renderer::new(96, 72, 2, 3)
+            .with_mode(RenderMode::Toon)
+            .render(sc.clone(), cam);
+        assert_eq!(
+            crate::image_io::frame_to_png_bytes(&toon),
+            crate::image_io::frame_to_png_bytes(&toon2),
+        );
+        // 增量渲染器：Toon 全帧回退，与全帧逐位一致
+        let mut incr = IncrementalRenderer::new(96, 72, 2, 3).with_mode(RenderMode::Toon);
+        let (img_i, st) = incr.render(&sc, &cam);
+        assert!(st.full && st.reason == "toon", "{st:?}");
+        assert_eq!(
+            crate::image_io::frame_to_png_bytes(&img_i),
+            crate::image_io::frame_to_png_bytes(&toon),
+            "增量回退必须与全帧逐位一致"
+        );
+    }
+
     // ---- BVH 求交内核 ------------------------------------------------------
     /// 混合场景：40 个受支持对象（球/盒/柱/锥/椭球 8×5 网格）+ 地面平面
     /// + torus（旧路径）+ 平行光/点光/环境光。

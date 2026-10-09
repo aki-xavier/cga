@@ -604,7 +604,7 @@ impl BvhTrace {
             .objects
             .iter()
             .map(|o| match mode {
-                RenderMode::Normal => 1.0 - o.material.opacity as f32,
+                RenderMode::Normal | RenderMode::Toon => 1.0 - o.material.opacity as f32,
                 RenderMode::IgnoreOpacity => 0.0,
             })
             .collect();
