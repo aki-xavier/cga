@@ -106,6 +106,7 @@ impl GpuTexture {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::image_io::save_frame_png;
