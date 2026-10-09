@@ -41,13 +41,13 @@ Metal 渲染器。实证三处：
 几何构建、SceneSession（帧事务/增量）、拖拽与拾取 API、tag/face/center 查询。
 已按流水线切成五层（见行动表），`cga_host::*` 的 pub API 一行未变。
 
-## 轻微项（记录在案）
+## 轻微项（已处理）
 
-- `renderer/mod.rs` = 43 行 helper + 1336 行测试集中地，名不副实（测试可挪
-  `renderer/tests.rs`）；
-- `kinematics.rs` 非测试 1014 行内聚良好，测试/代码 2:1 是文化使然；
-- `v3_*` 小助手在 kinematics.rs 与 scene_graph 各一份，host 侧可收敛到
-  cga-core 的 `vec3_dot` 等。
+- `renderer/mod.rs` 曾是 43 行 helper + 1336 行测试集中地，名不副实 → 测试已挪
+  `renderer/tests.rs`；
+- `kinematics.rs` 非测试 1014 行内聚良好，测试/代码 2:1 是文化使然（保留）；
+- `v3_*` 小助手重复 → `v3_cross` 已收敛到 `cga_core::vec3_cross`；`v3_unit`
+  保留本地（退化语义不同，见行动表）。
 
 ## 行动表
 
