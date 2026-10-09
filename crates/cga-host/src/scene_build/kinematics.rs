@@ -190,13 +190,9 @@ fn v3_perp(u: [f64; 3]) -> [f64; 3] {
     v3_unit(c)
 }
 
-fn v3_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
+// 注：`v3_cross` 已收敛到 `cga_core::vec3_cross`（公式逐字相同）。
+// `v3_unit` 保留本地：它的退化语义是近零 → `[0,0,0]`，与 `cga_scene::vec3_unit`
+// 的近零 → `[0,0,1]` 不同，合并会改行为（相机/法线兜底方向不一样）。
 
 /// Joint motion M(q) as a 4×4 matrix, about the anchor (axis in parent frame).
 pub(crate) fn joint_motion(kind: &JointKind, axis: [f64; 3], q: &[f64], pitch: f64) -> [f64; 16] {
@@ -220,7 +216,7 @@ pub(crate) fn joint_motion(kind: &JointKind, axis: [f64; 3], q: &[f64], pitch: f
         ),
         JointKind::Planar => {
             let e1 = v3_perp(axis);
-            let e2 = v3_cross(axis, e1);
+            let e2 = vec3_cross(axis, e1);
             mat4_mul(
                 translate4(v3_add(v3_scale(e1, q[0]), v3_scale(e2, q[1]))),
                 Multivector::rotor(axis, q[2]).to_matrix(),
@@ -330,7 +326,7 @@ pub(crate) fn cam_solve(
     };
     let pa = pose_profile(&rel.a_profile, d_world);
     let pb0 = pose_profile(&rel.b_profile, t2(0.0));
-    let parallel = |u: [f64; 3], v: [f64; 3]| v3_norm(v3_cross(u, v)) < 1e-9;
+    let parallel = |u: [f64; 3], v: [f64; 3]| v3_norm(vec3_cross(u, v)) < 1e-9;
     let err_axis = || "build: cam profile normal must be parallel to its joint axis".to_string();
     if !pa.is_plane
         && matches!(
@@ -1099,7 +1095,7 @@ pub(crate) fn closure_residual(
     let pb = cga_core::transform_point(world[ib], cd.b_at);
     let ua = v3_unit(rot(&world[ia], cd.axis));
     let ub = v3_unit(rot(&world[ib], cd.axis));
-    let cr = v3_cross(ua, ub);
+    let cr = vec3_cross(ua, ub);
     vec![
         pa[0] - pb[0],
         pa[1] - pb[1],
@@ -1167,18 +1163,18 @@ pub(crate) fn closure_jacobian(
         );
         let (da, db) = (is_down(pi, ia), is_down(pi, ib));
         let d_pa = if da {
-            v3_add(v3_cross(w, pa), v)
+            v3_add(vec3_cross(w, pa), v)
         } else {
             [0.0; 3]
         };
         let d_pb = if db {
-            v3_add(v3_cross(w, pb), v)
+            v3_add(vec3_cross(w, pb), v)
         } else {
             [0.0; 3]
         };
-        let d_ua = if da { v3_cross(w, ua) } else { [0.0; 3] };
-        let d_ub = if db { v3_cross(w, ub) } else { [0.0; 3] };
-        let d_cr = v3_add(v3_cross(d_ua, ub), v3_cross(ua, d_ub));
+        let d_ua = if da { vec3_cross(w, ua) } else { [0.0; 3] };
+        let d_ub = if db { vec3_cross(w, ub) } else { [0.0; 3] };
+        let d_cr = v3_add(vec3_cross(d_ua, ub), vec3_cross(ua, d_ub));
         for i in 0..3 {
             j[i][k] = d_pa[i] - d_pb[i];
             j[3 + i][k] = d_cr[i];
@@ -1366,7 +1362,7 @@ pub fn screws_world_at(
     let axis_w = v3_unit(r(axis));
     let rot_col = |o: [f64; 3]| {
         let w = axis_w;
-        let v = v3_cross(o, w);
+        let v = vec3_cross(o, w);
         [w[0], w[1], w[2], v[0], v[1], v[2]]
     };
     let slide_col = [0.0, 0.0, 0.0, axis_w[0], axis_w[1], axis_w[2]];
@@ -1377,7 +1373,7 @@ pub fn screws_world_at(
             // M = T(axis·p·q)·R(axis,q)：旋转心随平移走。
             let q = q.first().copied().unwrap_or(0.0);
             let o = v3_add(o0, v3_scale(axis_w, pitch * q));
-            let v = v3_add(v3_cross(o, axis_w), v3_scale(axis_w, pitch));
+            let v = v3_add(vec3_cross(o, axis_w), v3_scale(axis_w, pitch));
             vec![[axis_w[0], axis_w[1], axis_w[2], v[0], v[1], v[2]]]
         }
         JointKind::Cylindrical => {
@@ -1410,7 +1406,7 @@ pub fn screws_world_at(
             axes.iter()
                 .map(|a| {
                     let w = v3_unit(r(*a));
-                    let v = v3_cross(o0, w);
+                    let v = vec3_cross(o0, w);
                     [w[0], w[1], w[2], v[0], v[1], v[2]]
                 })
                 .collect()
@@ -1420,7 +1416,7 @@ pub fn screws_world_at(
             // 旋转轴过当前平移后的点。
             let axis_l = axis;
             let e1 = v3_perp(axis_l);
-            let e2 = v3_cross(axis_l, e1);
+            let e2 = vec3_cross(axis_l, e1);
             let q = q;
             let th = q.get(2).copied().unwrap_or(0.0);
             let _ = th;
@@ -1523,7 +1519,7 @@ pub fn point_velocity(
     // ṗ = ω×p + v（v 是原点参考的线速度：v = o×ω 时 ω×p + o×ω = ω×(p−o)...
     // 标准螺旋：ṗ = ω×p + v，v = −ω×o。我们的列给的是 v = o×ω？看 rot_col：
     // v = o×ω ⇒ ṗ = ω×(p−o) = ω×p − ω×o = ω×p + o×ω ✓ 所以 ṗ = ω×p + v 直接成立。
-    let c = v3_cross(w, point_world);
+    let c = vec3_cross(w, point_world);
     Ok([c[0] + v[0], c[1] + v[1], c[2] + v[2]])
 }
 
@@ -1890,7 +1886,7 @@ pub(crate) fn drag_jacobian(
         let sgn = if p.tree_up == p.a { 1.0 } else { -1.0 };
         let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
         let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
-        let d = v3_add(v3_cross(w, p_grab), v);
+        let d = v3_add(vec3_cross(w, p_grab), v);
         for i in 0..3 {
             j[i][k] = d[i];
         }
@@ -2187,7 +2183,7 @@ pub(crate) fn drag_pose_jacobian(
         let sgn = if pd.tree_up == pd.a { 1.0 } else { -1.0 };
         let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
         let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
-        let dp = v3_add(v3_cross(w, p), v);
+        let dp = v3_add(vec3_cross(w, p), v);
         let dw = mat3_vec(jl_inv, w);
         for i in 0..3 {
             j[i][k] = dp[i];

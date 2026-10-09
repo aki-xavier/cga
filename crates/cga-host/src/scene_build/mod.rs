@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use cga_core::{
-    clamp01, mat4_identity, mat4_mul, transform_point, BoxGeometry, CircleGeometry, ConeGeometry,
-    CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry, Multivector,
-    PlaneGeometry, SphereGeometry, TorusGeometry,
+    clamp01, mat4_identity, mat4_mul, transform_point, vec3_cross, BoxGeometry, CircleGeometry,
+    ConeGeometry, CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry,
+    Multivector, PlaneGeometry, SphereGeometry, TorusGeometry,
 };
 
 use cga_gpu::shading::{Material, MaterialParams};
