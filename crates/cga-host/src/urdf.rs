@@ -626,9 +626,13 @@ mod tests {
         assert_eq!(e.meshes.len(), 1);
         let (name, data) = &e.meshes[0];
         assert_eq!(name, "meshes/j_link_0.stl");
-        assert!(data.len() > 84, "二进制 STL 至少有头 + 面数");
         let n = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
-        assert!(n > 10, "应有多面：{n}");
+        // 面数钉回归值：CSG 差集 box(0.8)−sphere(0.3) 在 step=0.08 下的三角化
+        // 面数。marching cubes 的面数逐 case 查表，不是闭式——所以这是**回归
+        // 钉**（与画廊足迹计数同级），不是精度声称：改动 step 或 CSG 形状会
+        // 改变它，那时该重新核对而不是放宽。原断言只写 > 10（任何非零都能过），
+        // 上面的尺寸等式已覆盖 "至少 84 字节" 的弱断言，故不再单列。
+        assert_eq!(n, 6096, "CSG 差集三角化面数回归钉（step=0.08）");
         assert_eq!(data.len(), 84 + n * 50, "二进制 STL 尺寸 = 84 + 50×面数");
     }
 

@@ -792,11 +792,30 @@ mod tests {
     fn sphere_volume() {
         let p = world(&Geometry::SphereGeometry(SphereGeometry::new(1.0)));
         let m = p.bake(0.08).unwrap();
-        assert!(m.triangle_count() > 1000);
         let v = m.volume().abs();
         // 闭式 4π/3；界 = 表面积·h = 4π·0.08 ≈ 1.0（24%），取 8% 看守。
         let want = std::f64::consts::PI * 4.0 / 3.0;
         assert!((v - want).abs() < want * 0.08, "V={v} vs 4π/3={want}");
+
+        // 三角形个数的**可证下界**（原断言只写 > 1000，实测 17592）。链条：
+        //  1) 体积在本测试里已钉在 4π/3 的 8% 内 ⇒ V ≥ 0.92·4π/3；
+        //  2) 等周不等式 A³ ≥ 36πV²（球取等）⇒ A ≥ (36π·(0.92·4π/3)²)^(1/3)；
+        //  3) 网格：bounds 张成 2、step 0.08 ⇒ nx = ceil(2.08/0.08) = 26、
+        //     dx = 2.08/26 = 0.08（padding 半格，见 bake 的 nx 计算）；
+        //  4) 单个三角形全在**一格**内 ⇒ 面积 ≤ (√3/2)dx²；
+        //  5) 面数 ≥ A / 单三角形最大面积。
+        // 前提 4 是实现约定（三角化在格内生成顶点）；若改成跨格插值，此界需重推。
+        let v_floor = 0.92 * want;
+        let area_floor = (36.0 * std::f64::consts::PI * v_floor * v_floor).cbrt();
+        let nx = ((2.0 + 2.0 * (0.5 * 2.0 / 25.0_f64)) / 0.08).ceil() as usize;
+        let dx = (2.0 + 2.0 * (0.5 * 2.0 / 25.0_f64)) / nx as f64;
+        let max_tri_area = 3.0_f64.sqrt() / 2.0 * dx * dx;
+        let tri_floor = (area_floor / max_tri_area).floor() as usize;
+        assert!(
+            m.triangle_count() >= tri_floor,
+            "面数 {} < 可证下界 {tri_floor}（A≥{area_floor:.4}, dx={dx:.4}）",
+            m.triangle_count()
+        );
     }
 
     #[test]

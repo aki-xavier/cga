@@ -752,11 +752,44 @@ mod tests {
 
     #[test]
     fn test_cyclide_focal_sphere_tangency() {
+        // 原写法调 `tangency_residual(u)` 并断言其 ≈ 0 —— 那是**同实现互证**：
+        // 该函数按定义就是 `d1 − r − (a−d)` / `d2 + r − (a+d)`，拿定义验定义。
+        //
+        // 独立形式：相切的几何含义是「生成圆与焦球面只在一点接触、不穿过」。
+        // 两个焦球恰好分居两侧（残差两项的不对称就来自这里）：
+        //   焦球1（半径 a−d，半径小于圆距）：**外切** ⇒ 圆上点到 F1 的
+        //     **最小**距离 = a−d；
+        //   焦球2（半径 a+d）：**内切** ⇒ 圆上点到 F2 的**最大**距离 = a+d。
+        // 这里用 `surface(u, v)`（参数化，另一条代码路径）+ 欧氏距离，期望值
+        // 是字面闭式（c = √(a²−b²)，焦球心 (±c,0,0)，焦半径 a∓d），与被测
+        // 实现无关。
+        //
+        // 采样误差：切点只在一个 v 上取到，均匀扫 N 个 v 的最大 deficit
+        // ≈ r·(2π/N)²/2（r = d − c·cos u ≤ d）。N=4096、r≤0.3 ⇒ ≤ 3.6e-7，
+        // 取 1e-5 留 28× 余量。
+        const N: usize = 4096;
+        const SWEEP_TOL: f64 = 1e-5;
         let cy = cga_cy();
+        let c = cga_c();
         for u in [0.0, 1.0, 2.0, 4.0] {
-            let r = cy.tangency_residual(u);
-            assert!(r[0].abs() < 1e-10);
-            assert!(r[1].abs() < 1e-10);
+            // 切点：外切看最近距离、内切看最远距离（见上）。
+            let (mut min1, mut max2) = (f64::INFINITY, 0.0f64);
+            for i in 0..N {
+                let v = 2.0 * std::f64::consts::PI * (i as f64) / (N as f64);
+                let p = cy.surface(u, v);
+                min1 = min1.min((p[0] - c).hypot(p[1]).hypot(p[2]));
+                max2 = max2.max((p[0] + c).hypot(p[1]).hypot(p[2]));
+            }
+            assert!(
+                (min1 - (CGA_A - CGA_D)).abs() < SWEEP_TOL,
+                "u={u}: 到 F1 的最近距离 {min1} ≠ a−d={}",
+                CGA_A - CGA_D
+            );
+            assert!(
+                (max2 - (CGA_A + CGA_D)).abs() < SWEEP_TOL,
+                "u={u}: 到 F2 的最远距离 {max2} ≠ a+d={}",
+                CGA_A + CGA_D
+            );
         }
     }
 
@@ -906,8 +939,18 @@ mod tests {
             3.0 - cga_x4(),
         ];
         want.sort_by(f64::total_cmp);
+        // 期望值是闭式（cga_x1..x4 是该四次方程的字面规格根，见
+        // cyclide_generator_sphere），不是自我金标。公差来源：求根在 f32 上
+        // 做，实测最大偏差 1.7e-5（根量级 ~3，即 ~5e-6 相对量级——比 f32 有效位
+        // 差一位，是迭代收敛残差）；取 1e-4 ≈ 6× 余量。原公差 1e-2 无来源，
+        // 比实测宽 600 倍，现收紧 100 倍。
         for i in 0..4 {
-            assert!((f64::from(td[i]) - want[i]).abs() < 1e-2);
+            assert!(
+                (f64::from(td[i]) - want[i]).abs() < 1e-4,
+                "根 {i}: 实测 {} vs 闭式 {}",
+                td[i],
+                want[i]
+            );
         }
     }
 

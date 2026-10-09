@@ -2965,7 +2965,24 @@ mod tests {
             if want_zero {
                 assert!(r0.iter().all(|v| v.abs() < 1e-12), "r=0 前提: {r0:?}");
             } else {
-                assert!(r0.iter().any(|v| v.abs() > 1e-3), "非零残差前提: {r0:?}");
+                // 非零残差前提：朝向块可闭式钉。链是平面的（两副均绕 z，
+                // 轴 [0,0,0]/[0.5,0,0]），FK 朝向只绕 z ⇒ rotvec = (0,0,θ)，
+                // θ = Δq1 − Δq0 = −0.04 − 0.05 = −0.09。原断言只写
+                // `any(|v| > 1e-3)`。
+                assert!(
+                    r0[3].abs() < 1e-12 && r0[4].abs() < 1e-12,
+                    "平面链的 rotvec 只该有 z 分量: {r0:?}"
+                );
+                assert!(
+                    (r0[5] - (-0.09)).abs() < 1e-12,
+                    "朝向差 = Δq1−Δq0 = −0.09: {r0:?}"
+                );
+                // 平移块不钉字面量（残差的平移分量走的是 FK 约定下的
+                // world[3]/[7]/[11]，其闭式要连约定一起推；此处只保证有限
+                // 且非零，见下面的整体范数）。
+                assert!(r0.iter().all(|v| v.is_finite()), "残差须有限: {r0:?}");
+                let rinf = r0.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                assert!(rinf > 1e-3, "非零残差前提 ‖r‖∞={rinf}: {r0:?}");
             }
             for k in 0..free.len() {
                 let h = 1e-7;

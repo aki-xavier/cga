@@ -806,9 +806,15 @@ mod tests {
         assert!(close(
             Multivector::point(2.0, 0.0, 0.0).op(&l).vmax(),
             0.0,
-            1e-4
+            1e-12
         ));
-        assert!(Multivector::point(0.0, 1.0, 0.0).op(&l).vmax() > 1e-3);
+        // 离轴点 (0,1,0) 到 x 轴的垂距 = 1.0（关联残差在此退化为有符号距离，
+        // 实测单分量 −1.0；原断言只写 > 1e-3）。
+        assert!(close(
+            Multivector::point(0.0, 1.0, 0.0).op(&l).vmax(),
+            1.0,
+            1e-12
+        ));
     }
 
     #[test]
@@ -817,9 +823,14 @@ mod tests {
         assert!(close(
             Multivector::point(0.3, -0.7, 2.0).ip(&pi).vmax(),
             0.0,
-            1e-4
+            1e-12
         ));
-        assert!(Multivector::point(0.0, 0.0, 0.0).ip(&pi).vmax() > 1e-3);
+        // 原点到平面 z=2 的距离 = 2.0（实测单分量 −2.0）。
+        assert!(close(
+            Multivector::point(0.0, 0.0, 0.0).ip(&pi).vmax(),
+            2.0,
+            1e-12
+        ));
     }
 
     #[test]
@@ -828,9 +839,16 @@ mod tests {
         assert!(close(
             Multivector::point(3.0, 2.0, 3.0).ip(&s).vmax(),
             0.0,
-            1e-4
+            1e-12
         ));
-        assert!(Multivector::point(0.0, 0.0, 0.0).ip(&s).vmax() > 1e-3);
+        // 球的关联残差是「点幂的一半」：( |p−c|² − r² ) / 2。原点处
+        // |p−c|² = 14、r² = 4 ⇒ (14−4)/2 = 5.0（实测单分量 −5.0）。
+        let d2 = 1.0 + 4.0 + 9.0;
+        assert!(close(
+            Multivector::point(0.0, 0.0, 0.0).ip(&s).vmax(),
+            (d2 - 4.0) / 2.0,
+            1e-12
+        ));
     }
 
     #[test]
@@ -839,9 +857,22 @@ mod tests {
         assert!(close(
             Multivector::point(0.0, 1.0, 0.0).ip(&c).vmax(),
             0.0,
-            1e-4
+            1e-12
         ));
-        assert!(Multivector::point(0.0, 0.0, 1.0).ip(&c).vmax() > 1e-3);
+        // 离圆的点：这里**不钉字面量**（诚实边界）。圆的关联残差落在两个
+        // grade-2 blade 上（e12 装径向、e13/e23 装轴向），`vmax` 取的是两者
+        // 的最大绝对值——换个点最大值就可能换 blade，所以没有一个统一的
+        // 「距离」闭式可钉（实测：(2,0,0)→1.5、圆心→0.5、轴上 (0,0,1)→1.0，
+        // 三者互不吻合任何单一公式）。按 P1（期望值不得与被测实现同源），
+        // 与其钉一个从实现反推的数字，不如断言可证明的性质：圆上严格为 0，
+        // 且沿径向外移时残差严格单调增。
+        let radial = |t: f64| Multivector::point(t, 0.0, 0.0).ip(&c).vmax();
+        assert_eq!(radial(1.0), 0.0, "圆上严格为 0");
+        let (r15, r20, r30) = (radial(1.5), radial(2.0), radial(3.0));
+        assert!(
+            r15 < r20 && r20 < r30,
+            "径向外移残差严格增: {r15} {r20} {r30}"
+        );
         let cnu = Multivector::circle([1.0, 2.0, 3.0], 2.0, [0.0, 0.0, 2.0]);
         assert!(close(
             Multivector::point(3.0, 2.0, 3.0).ip(&cnu).vmax(),
@@ -864,8 +895,18 @@ mod tests {
             0.0,
             1e-4
         ));
-        assert!(s.sphere_dist(&Multivector::point(5.0, 2.0, 3.0)) > 0.0);
-        assert!(s.sphere_dist(&Multivector::point(1.0, 2.0, 3.0)) < 0.0);
+        // 有符号距离的闭式：|p−c| − r。(5,2,3) 距球心 4、r=2 ⇒ +2；
+        // 球心 ⇒ −2。原断言只写 > 0.0 / < 0.0（任何非零值都能过）。
+        assert!(close(
+            s.sphere_dist(&Multivector::point(5.0, 2.0, 3.0)),
+            4.0 - 2.0,
+            1e-12
+        ));
+        assert!(close(
+            s.sphere_dist(&Multivector::point(1.0, 2.0, 3.0)),
+            -2.0,
+            1e-12
+        ));
     }
 
     #[test]
