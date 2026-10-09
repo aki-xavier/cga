@@ -49,7 +49,21 @@
 | `mcp_stdio.rs` 4 处 | 错误断言只 `contains("to")` / `("channel")` / `("focal")` / `("drag")` —— 这些子串在几乎任何相关消息里都会出现（"to" 是英文最常见子串之一），断言近乎恒真 | 全部钉错误原文：`scene_drag 需要数组参数 to` / `未知 channel bogus（可选 id / normals / depth / edge）` / `aperture > 0 时必须给 focal（对焦距离）` / `目标不可达`（cga 侧诚实拒绝）。已用哨兵值反验：把期望改错后测试确实失败 ✓ |
 | `cga-gpu` 渲染测试 | 调试 PNG 用 `create_dir_all().unwrap()` + `save_frame_png()`（内部对写失败 `panic!`）—— 只读源码树（容器挂载 / CI 只读 checkout）上会仅因写不动给人看的目录而测试失败 | 统一走 `#[cfg(test)] save_artifact()`：写不出就跳过，**不影响任何断言**。已实测：把 `artifacts/` 换成不可写文件后 102 个 gpu 测试仍全绿（改前会 panic）✓ |
 
-其余未动：画廊金标只覆盖 3/8 场景（**另行立项**，可分批）；fastmetal 全局 `LAST_ERROR` 并行串扰（**真并发 bug**：两个 kernel 同时失败会互相覆盖错误文本）+ GPU 依赖无 gate —— 后者涉及「无 GPU 环境下 `cargo test` 该如何表现」的策略，需单独立项。
+**第四批（2026-10-09，fastmetal：无 GPU 策略 + 错误契约）**
+
+用户定的策略：**无 GPU 的机器上 `cargo test` 跳过并报明确原因**（CI 用 `CGA_REQUIRE_GPU=1` 变严格，避免"没 GPU 所以什么都没测"变成假绿）。
+
+- `gpu_available()`：用 mlx 官方 `mlx_metal_is_available`，不自己猜（Intel mac / Metal 禁用 / 无 GPU 虚拟机都落到这里）。
+- `require_gpu(test)`：6 个 kernel 测试逐个过闸门，跳过时打印 `SKIP <测试名>: <具体原因>`。
+- 闸门判定抽成纯逻辑 `gate(test, avail, strict) -> Gate{Run,Skip,Fail}`，**策略本身有闭式测试**（`gpu_gate_policy`）——因为无法在有 GPU 的机器上制造无 GPU 状态，注入判定才能在每台机器上验证两个分支。
+- `bad_msl_reports_error` 原先只 `is_err()`（任何失败都能过），现钉 MLX 真实返回的文本：含 `Unable to build metal library` + 回显注入的坏源码。
+
+**关于 `LAST_ERROR` 并行串扰的诚实结论（与初审判断不同）**：已从进程级 `Mutex<String>` 改为**线程局部**（去掉共享可变状态）。但实测发现：MLX 0.32 上坏 MSL 的编译失败**根本不走这个槽**——`compile`/`apply` 都返回 Ok，错误推迟到 `Array::eval()` 由 MLX 自己的 Result 带回来。所以：
+- 真正的错误契约由 eval 的 Result 承担，天然逐调用、无共享状态；
+- 该槽只在 `mlx_fast_metal_kernel_new` 失败并回调处理器的路径上才有内容，这条路在当前 MLX 版本观测不到；
+- 因此**没有**能演示旧竞态的测试。原先审计写的"真并发 bug"判断过重——已按实测更正，防御性收敛 ≠ 已证实的修复。
+
+其余未动：画廊金标只覆盖 3/8 场景（**另行立项**，可分批）。
 
 ## 第二批台账（2026-10-09，灰色四类续集）
 

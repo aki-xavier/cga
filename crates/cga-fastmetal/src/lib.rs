@@ -14,12 +14,27 @@
 #![allow(unsafe_code)]
 
 use std::ffi::CString;
-use std::sync::Mutex;
 
 use mlx_rs::Array;
 
-/// mlx-c 最近一次错误（错误处理器回调捕获；进程级单例，调试用途）。
-static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+// mlx-c 最近一次错误（错误处理器回调捕获，调试用途）。
+//
+// **线程局部**，不是进程级单例：原实现是进程级 `Mutex<String>`，两个线程同时
+// 让 kernel 编译失败会互相覆盖槽位，`compile` 可能读到另一个 kernel 的报错。
+// 改成线程局部后各线程只取自己那份。
+//
+// 但要说清实测边界，别夸大（2026-10-09 核实）：在 MLX 0.32 上，坏 MSL 的
+// 编译失败**根本不走这个槽**——`compile`/`apply` 都返回 Ok，错误推迟到
+// `Array::eval()` 由 MLX 自己的 Result 带回来（`bad_msl_reports_error` 里钉的
+// 就是那条文本）。也就是说：
+//   - 现在的错误契约由 eval 的 Result 承担，天然逐调用、无共享状态；
+//   - 本槽只在 mlx-c 走 `mlx_fast_metal_kernel_new` 失败并回调处理器的路径上
+//     才有内容，而这条路在当前 MLX 版本上观测不到；
+//   - 因此**没有**能演示旧竞态的测试——别假装有。线程局部是防御性收敛
+//     （去掉共享可变状态），不是已证实的 bug 修复。
+thread_local! {
+    static LAST_ERROR: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
 
 fn install_error_handler() {
     use std::sync::Once;
@@ -31,9 +46,7 @@ fn install_error_handler() {
         ) {
             if !msg.is_null() {
                 let s = std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned();
-                if let Ok(mut g) = LAST_ERROR.lock() {
-                    *g = s;
-                }
+                LAST_ERROR.with(|g| *g.borrow_mut() = s);
             }
         }
         mlx_sys::mlx_set_error_handler(Some(handler), std::ptr::null_mut(), None);
@@ -41,10 +54,72 @@ fn install_error_handler() {
 }
 
 fn take_last_error() -> String {
-    LAST_ERROR
-        .lock()
-        .map(|mut g| std::mem::take(&mut *g))
-        .unwrap_or_default()
+    LAST_ERROR.with(|g| std::mem::take(&mut *g.borrow_mut()))
+}
+
+/// GPU（Metal device）可用性探测。返回 `Err(原因)` 时原因可直接展示给用户。
+///
+/// 用 mlx 官方的 `mlx_metal_is_available`，不自己猜：Intel mac / Metal 被禁用
+/// / 虚拟机无 GPU 都会落到这里。
+pub fn gpu_available() -> Result<(), String> {
+    let mut ok = false;
+    let rc = unsafe { mlx_sys::mlx_metal_is_available(&mut ok) };
+    if rc != 0 {
+        return Err(format!("mlx_metal_is_available 调用失败 (rc={rc})"));
+    }
+    if ok {
+        Ok(())
+    } else {
+        Err("mlx 报告无可用 Metal device（mlx_metal_is_available = false）".to_string())
+    }
+}
+
+/// 无 GPU 时的测试闸门（2026-10-09 定的策略：**跳过并报明确原因**）。
+///
+/// - 有 GPU → 返回 `true`，测试照常跑。
+/// - 无 GPU → 打印 `SKIP <测试名>: <原因>` 后返回 `false`，测试**立即返回**
+///   （算通过，不算失败——本 crate 的测试全部需要真 GPU）。
+/// - 设 `CGA_REQUIRE_GPU=1`（CI 用）→ 改为 `panic!`，让缺 GPU 在 CI 上变响。
+///
+/// 为什么两种模式都要：本地无 GPU 是正常环境，静默跳过是对的；但 CI 上
+/// "因为没 GPU 所以什么都没测" 必须失败，否则是假绿。默认跳过 + 环境变量
+/// 变严格，两边各取所需。
+pub fn require_gpu(test: &str) -> bool {
+    let strict = std::env::var("CGA_REQUIRE_GPU")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    match gate(test, gpu_available(), strict) {
+        Gate::Run => true,
+        Gate::Skip(msg) => {
+            eprintln!("{msg}");
+            false
+        }
+        Gate::Fail(msg) => panic!("{msg}"),
+    }
+}
+
+/// 闸门判定结果（与机器状态解耦，便于在**任何**机器上验证策略本身）。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// 有 GPU，照常跑。
+    Run,
+    /// 无 GPU 且非严格模式：打印原因后跳过。
+    Skip(String),
+    /// 无 GPU 且严格模式（`CGA_REQUIRE_GPU=1`）：缺 GPU 视为失败。
+    Fail(String),
+}
+
+/// 闸门策略的纯逻辑（无 I/O、无环境读取），见 [`require_gpu`]。
+pub fn gate(test: &str, avail: Result<(), String>, strict: bool) -> Gate {
+    match avail {
+        Ok(()) => Gate::Run,
+        Err(why) if strict => Gate::Fail(format!(
+            "{test}: 需要 GPU —— {why}（CGA_REQUIRE_GPU=1 时缺 GPU 视为失败）"
+        )),
+        Err(why) => Gate::Skip(format!(
+            "SKIP {test}: {why}（设 CGA_REQUIRE_GPU=1 可让缺 GPU 变成失败）"
+        )),
+    }
 }
 
 /// 读取并清空最近一次 mlx-c 错误文本（调试 kernel 编译失败用）。
@@ -215,10 +290,14 @@ unsafe impl Sync for MetalKernel {}
 
 #[cfg(test)]
 mod tests {
+    use super::require_gpu;
     use super::*;
 
     #[test]
     fn smoke_custom_kernel_roundtrip() {
+        if !require_gpu("smoke_custom_kernel_roundtrip") {
+            return;
+        }
         let k = MetalKernel::compile(
             "cga_smoke_double",
             &["inp"],
@@ -237,24 +316,40 @@ mod tests {
 
     #[test]
     fn bad_msl_reports_error() {
+        if !require_gpu("bad_msl_reports_error") {
+            return;
+        }
         // MSL 语法错误：mlx-c 在 new 或 apply 之一处拒绝（JIT 时机是其内部
         // 实现细节），两处都必须把失败变成 Err 而不是崩溃/静默成功。
-        let bad = MetalKernel::compile("cga_smoke_bad", &["inp"], &["out"], "this is not msl", "");
+        const BAD_SRC: &str = "this is not msl";
+        let bad = MetalKernel::compile("cga_smoke_bad", &["inp"], &["out"], BAD_SRC, "");
         let inp = Array::from_slice(&[1.0f32], &[1]);
         let r = bad.and_then(|k| {
             k.apply(&[&inp], &[(mlx_sys::mlx_dtype__MLX_FLOAT32, &[1])], 1)
                 .and_then(|outs| outs[0].eval().map_err(|e| format!("eval: {e}")))
         });
-        assert!(r.is_err(), "坏 MSL 必须报错");
+        let err = r.expect_err("坏 MSL 必须报错");
+        // 钉错误文本（原先只 `is_err()`，任何失败都能过）。实测 MLX 0.32 的
+        // 编译失败**不走** mlx-c 错误处理器，而是推迟到 `eval()` 由 MLX 自己
+        // 的 Result 带回来（见 LAST_ERROR 处的说明），所以错误契约钉在这里。
+        assert!(
+            err.contains("Unable to build metal library"),
+            "应报 JIT 构建失败: {err}"
+        );
+        assert!(err.contains(BAD_SRC), "错误里应回显注入的坏源码: {err}");
     }
 }
 
 #[cfg(test)]
 mod grid_tests {
+    use super::require_gpu;
     use super::*;
 
     #[test]
     fn large_grid_small_threadgroup() {
+        if !require_gpu("large_grid_small_threadgroup") {
+            return;
+        }
         let k = MetalKernel::compile(
             "cga_smoke_grid",
             &["inp"],
@@ -279,6 +374,9 @@ mod big_grid_tests {
 
     #[test]
     fn probe_dispatch_dims() {
+        if !require_gpu("probe_dispatch_dims") {
+            return;
+        }
         let k = MetalKernel::compile(
             "cga_smoke_dims",
             &["inp"],
@@ -307,6 +405,9 @@ mod big_grid_tests {
 
     #[test]
     fn apply_twice_same_kernel() {
+        if !require_gpu("apply_twice_same_kernel") {
+            return;
+        }
         let k = MetalKernel::compile(
             "cga_smoke_twice",
             &["inp"],
@@ -329,6 +430,9 @@ mod big_grid_tests {
 
     #[test]
     fn grid_307k() {
+        if !require_gpu("grid_307k") {
+            return;
+        }
         let k = MetalKernel::compile(
             "cga_smoke_grid_big",
             &["inp"],
@@ -350,6 +454,42 @@ mod big_grid_tests {
             panic!("eval: {e:?} LAST={}", take_last_error_string());
         }
         assert_eq!(outs[0].as_slice::<f32>()[307199], 1.0);
+    }
+
+    /// 闸门策略的闭式测试（不依赖本机有没有 GPU，所以每台机器都能跑）。
+    ///
+    /// 2026-10-09 定的策略：无 GPU 时 `cargo test` **跳过并报明确原因**；设
+    /// `CGA_REQUIRE_GPU=1` 时（CI 用）改为失败，避免"因为没 GPU 所以什么都没测"
+    /// 变成假绿。
+    #[test]
+    fn gpu_gate_policy() {
+        const WHY: &str = "mlx 报告无可用 Metal device（mlx_metal_is_available = false）";
+        // 有 GPU → 跑，两种模式都一样。
+        assert_eq!(gate("t", Ok(()), false), Gate::Run);
+        assert_eq!(gate("t", Ok(()), true), Gate::Run);
+        // 无 GPU + 默认 → 跳过，且消息里带测试名与**具体原因**（不是"跳过"两个字）。
+        match gate("smoke_custom_kernel_roundtrip", Err(WHY.to_string()), false) {
+            Gate::Skip(msg) => {
+                assert!(msg.contains("smoke_custom_kernel_roundtrip"), "{msg}");
+                assert!(msg.contains(WHY), "{msg}");
+                assert!(msg.contains("CGA_REQUIRE_GPU=1"), "应说明如何变严格: {msg}");
+            }
+            other => panic!("应跳过，实际 {other:?}"),
+        }
+        // 无 GPU + 严格 → 失败，消息同样带原因。
+        match gate("t", Err(WHY.to_string()), true) {
+            Gate::Fail(msg) => {
+                assert!(msg.contains(WHY), "{msg}");
+                assert!(msg.contains("CGA_REQUIRE_GPU=1"), "{msg}");
+            }
+            other => panic!("应失败，实际 {other:?}"),
+        }
+        // 探测本身的错误（mlx 调用返回非零）也走同一分支，不被当成有 GPU。
+        let rc_err = "mlx_metal_is_available 调用失败 (rc=-1)".to_string();
+        assert!(matches!(
+            gate("t", Err(rc_err.clone()), false),
+            Gate::Skip(m) if m.contains("rc=-1")
+        ));
     }
 }
 pub use mlx_sys;
