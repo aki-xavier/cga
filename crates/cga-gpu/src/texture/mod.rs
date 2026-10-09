@@ -175,7 +175,6 @@ impl GpuTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image_io::save_frame_png;
     use crate::scene_graph::Color;
     use crate::{
         Light, Material, MaterialParams, Object, ObjectParams, PerspectiveCamera, Renderer, Scene,
@@ -245,9 +244,7 @@ mod tests {
         );
         cam.look_at([0.0, 0.0, 0.0], None);
         let img = Renderer::render_frame(sc, cam, 80, 80, 1);
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../artifacts/tests");
-        std::fs::create_dir_all(dir).ok();
-        save_frame_png(&format!("{dir}/textured_box.png"), &img);
+        crate::save_artifact("textured_box.png", &img);
         img.eval().unwrap();
         let data = img.as_slice::<f32>();
 

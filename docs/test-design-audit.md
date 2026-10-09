@@ -42,7 +42,14 @@
 3. **无注释公差**（~15 处）：`test_pick_occlusion` 的 0.1、`test_bvh` 的 8/255、cyclide 四次根 1e-2。留待后续批次。
 4. **同实现互证边缘**（4 处）：已修 2 处（见 2）；`tangency_residual≈0` 与 `uv_roundtrip`（cyclide 参数化自洽性检查）留待后续。
 
-其余记录：画廊金标只覆盖 3/8 场景（**另行立项**，可分批）；fastmetal 全局 `LAST_ERROR` 并行串扰 + GPU 依赖无 gate；渲染测试写 `artifacts/` 固定文件名；MCP `contains("to")` 过松。
+**第三批（2026-10-09，「其余记录」中的两项）**
+
+| 位置 | 问题 | 修复 |
+| --- | --- | --- |
+| `mcp_stdio.rs` 4 处 | 错误断言只 `contains("to")` / `("channel")` / `("focal")` / `("drag")` —— 这些子串在几乎任何相关消息里都会出现（"to" 是英文最常见子串之一），断言近乎恒真 | 全部钉错误原文：`scene_drag 需要数组参数 to` / `未知 channel bogus（可选 id / normals / depth / edge）` / `aperture > 0 时必须给 focal（对焦距离）` / `目标不可达`（cga 侧诚实拒绝）。已用哨兵值反验：把期望改错后测试确实失败 ✓ |
+| `cga-gpu` 渲染测试 | 调试 PNG 用 `create_dir_all().unwrap()` + `save_frame_png()`（内部对写失败 `panic!`）—— 只读源码树（容器挂载 / CI 只读 checkout）上会仅因写不动给人看的目录而测试失败 | 统一走 `#[cfg(test)] save_artifact()`：写不出就跳过，**不影响任何断言**。已实测：把 `artifacts/` 换成不可写文件后 102 个 gpu 测试仍全绿（改前会 panic）✓ |
+
+其余未动：画廊金标只覆盖 3/8 场景（**另行立项**，可分批）；fastmetal 全局 `LAST_ERROR` 并行串扰（**真并发 bug**：两个 kernel 同时失败会互相覆盖错误文本）+ GPU 依赖无 gate —— 后者涉及「无 GPU 环境下 `cargo test` 该如何表现」的策略，需单独立项。
 
 ## 第二批台账（2026-10-09，灰色四类续集）
 

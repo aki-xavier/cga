@@ -179,7 +179,12 @@ fn mcp_stdio_full_loop() {
         r["content"][1]
     );
     let (err, text) = m.tool_text("scene_render", json!({"channel": "bogus"}));
-    assert!(err && text.contains("channel"), "{text}");
+    // 钉错误原文（cga_mcp.rs:260）：`contains("channel")` 太松——"channel" 在
+    // 几乎任何相关消息里都出现，等于恒真。
+    assert!(
+        err && text.contains("未知 channel bogus（可选 id / normals / depth / edge）"),
+        "{text}"
+    );
 
     // 薄透镜景深（U6）：aperture+focal 出图；aperture>0 缺 focal → isError
     let r = m.tool(
@@ -194,7 +199,11 @@ fn mcp_stdio_full_loop() {
         r["content"][1]
     );
     let (err, text) = m.tool_text("scene_render", json!({"aperture": 0.4}));
-    assert!(err && text.contains("focal"), "{text}");
+    // 钉原文（cga_mcp.rs:283）；原 `contains("focal")` 能撞上任何提到焦距的消息。
+    assert!(
+        err && text.contains("aperture > 0 时必须给 focal（对焦距离）"),
+        "{text}"
+    );
 
     // 解析轮廓 NPR（U5）：channel=edge 出图；toon 模式出图且文本带 mode=Toon
     let r = m.tool("scene_render", json!({"w": 64, "h": 48, "channel": "edge"}));
@@ -289,15 +298,19 @@ fn mcp_stdio_error_paths() {
     let (err, text) = m.tool_text("scene_open", json!({"jsx": ARM_JSX}));
     assert!(!err, "{text}");
     let (err, text) = m.tool_text("scene_drag", json!({"link": "l2", "from": [0.0, 0.0, 0.0]}));
-    assert!(err && text.contains("to"), "{text}");
+    // 钉原文（cga_mcp.rs:342）。原断言是 `contains("to")`——"to" 是英文里
+    // 最常见的子串之一（"token"/"tool"/"invalid **to**…"），几乎恒真。
+    assert!(err && text.contains("scene_drag 需要数组参数 to"), "{text}");
 
     // 不可达拖拽 → cga 的诚实 Err 透传，且场景未变（mobility 仍 2）
     let (err, text) = m.tool_text(
         "scene_drag",
         json!({"link": "l2", "from": [2.0, 0.0, 0.0], "to": [3.0, 3.0, 0.0]}),
     );
+    // 钉 cga 的诚实拒绝原文（kinematics.rs:1985「目标不可达」）。原
+    // `contains("drag")` 能撞上任何提到拖拽的消息，分不清是哪条拒绝路径。
     assert!(err, "{text}");
-    assert!(text.contains("drag"), "{text}");
+    assert!(text.contains("目标不可达"), "{text}");
     let (_, text) = m.tool_text("scene_mobility", json!({}));
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["dof"], 2);
 }

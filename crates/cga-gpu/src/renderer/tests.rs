@@ -2,7 +2,6 @@
 //! helper + 1336 行测试，名不副实）。
 
 use super::*;
-use crate::image_io::save_frame_png;
 use crate::scene::{Object, ObjectParams, PerspectiveCamera};
 use crate::scene_graph::{srgb_to_linear, Color};
 use crate::shading::{Light, Material, MaterialParams};
@@ -11,12 +10,6 @@ use cga_core::{
     PlaneGeometry, SphereGeometry, TorusGeometry,
 };
 use mlx_rs::Array;
-
-const ARTIFACTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../artifacts/tests");
-
-fn ensure_artifacts() {
-    std::fs::create_dir_all(ARTIFACTS).unwrap();
-}
 
 fn data_f32(img: &Array) -> Vec<f32> {
     img.eval().unwrap();
@@ -62,8 +55,7 @@ fn render_center(geom: Geometry, pos: [f64; 3], name: &str) -> [f32; 3] {
     );
     cam.look_at(pos, None);
     let img = Renderer::render_frame(sc, cam, 120, 120, 1);
-    ensure_artifacts();
-    save_frame_png(&format!("{}/{}.png", ARTIFACTS, name), &img);
+    crate::save_artifact(&format!("{name}.png"), &img);
     let data = data_f32(&img);
     let idx = 60 * 120 * 4 + 60 * 4;
     [data[idx], data[idx + 1], data[idx + 2]]
@@ -128,8 +120,7 @@ fn test_render_cyclide_nonempty() {
     );
     cam.look_at([0.0, 0.0, 0.0], None);
     let img = Renderer::render_frame(sc, cam, 120, 120, 1);
-    ensure_artifacts();
-    save_frame_png(&format!("{}/cyclide.png", ARTIFACTS), &img);
+    crate::save_artifact("cyclide.png", &img);
     let data = data_f32(&img);
     let mut hit = 0;
     for i in 0..120 * 120 {
@@ -168,8 +159,7 @@ fn test_render_torus_nonempty() {
     );
     cam.look_at([0.0, 0.0, 0.0], None);
     let img = Renderer::render_frame(sc, cam, 120, 120, 1);
-    ensure_artifacts();
-    save_frame_png(&format!("{}/torus.png", ARTIFACTS), &img);
+    crate::save_artifact("torus.png", &img);
     let data = data_f32(&img);
     let mut nonbg = 0;
     for i in 0..120 * 120 {
