@@ -1,3 +1,4 @@
+use cga_examples::{collect_css, src_dir};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -31,33 +32,10 @@ fn main() {
             (n.to_string(), x)
         })
         .collect();
-    let dir = match src.rfind('/') {
-        Some(i) => &src[..i],
-        None => ".",
-    };
+    let dir = src_dir(src);
     // 跟随 import './x.css'
-    let mut css = String::new();
-    let mut rest = text.as_str();
-    while let Some(i) = rest.find(".css") {
-        let head = &rest[..i + 4];
-        if let Some(q) = head.rfind(['\'', '"']) {
-            let path = &head[q + 1..];
-            if path.starts_with("./") || path.starts_with("../") {
-                css.push_str(
-                    &std::fs::read_to_string(format!("{dir}/{path}"))
-                        .unwrap_or_else(|_| panic!("cannot read {dir}/{path}")),
-                );
-                css.push('\n');
-            }
-        }
-        rest = &rest[i + 4..];
-    }
-    match cga_host::run_jsx_pose(
-        &text,
-        if css.is_empty() { None } else { Some(&css) },
-        dir,
-        &pose,
-    ) {
+    let css = collect_css(&text, &dir);
+    match cga_host::run_jsx_pose(&text, css.as_deref(), &dir, &pose) {
         Ok(run) => print!(
             "{}",
             cga_host::scene_report::scene_report(

@@ -1,5 +1,6 @@
 use cga_core::*;
 use cga_gpu::*;
+use cga_scene::*;
 
 fn render_panel(sc: Scene, cam_pos: [f64; 3], target: [f64; 3], name: &str) {
     let mut cam = PerspectiveCamera::new(

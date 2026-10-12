@@ -12,7 +12,7 @@ use cga_scene::Scene;
 /// 场景的实体几何 → 世界空间三角网（各对象的 motor 应用到顶点）。
 /// 返回 `(三角网, 被跳过的对象说明)`（无界几何如平面/无限长圆柱、圆不是实体）。
 pub fn scene_to_mesh(scene: &Scene, step: f64) -> Result<(BakedMesh, Vec<String>), String> {
-    if !(step > 0.0) || !step.is_finite() {
+    if !step.is_finite() || step <= 0.0 {
         return Err(format!("export: bad step {step}"));
     }
     let mut verts: Vec<[f64; 3]> = Vec::new();

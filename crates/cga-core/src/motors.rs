@@ -1,4 +1,4 @@
-use crate::Multivector;
+use crate::{vec3_len, Multivector};
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, Debug)]
@@ -123,8 +123,8 @@ impl Multivector {
 
         let w_bar = [2.0 * wx, 2.0 * wy, 2.0 * wz];
         let v_bar = [2.0 * vx, 2.0 * vy, 2.0 * vz];
-        let theta = (w_bar[0] * w_bar[0] + w_bar[1] * w_bar[1] + w_bar[2] * w_bar[2]).sqrt();
-        let v_norm = (v_bar[0] * v_bar[0] + v_bar[1] * v_bar[1] + v_bar[2] * v_bar[2]).sqrt();
+        let theta = vec3_len(w_bar);
+        let v_norm = vec3_len(v_bar);
         if theta < 1e-12 {
             if v_norm < 1e-12 {
                 return Self::identity();
@@ -273,8 +273,7 @@ impl Multivector {
         let trace = r[0][0] + r[1][1] + r[2][2];
         let cos_theta = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0);
         let antisym = [r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1]];
-        let sin_theta_abs = 0.5
-            * (antisym[0] * antisym[0] + antisym[1] * antisym[1] + antisym[2] * antisym[2]).sqrt();
+        let sin_theta_abs = 0.5 * vec3_len(antisym);
         let theta = sin_theta_abs.atan2(cos_theta);
 
         let mut w_bar = [0.0; 3];

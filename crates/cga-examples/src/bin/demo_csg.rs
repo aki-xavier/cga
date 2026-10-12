@@ -1,5 +1,6 @@
 use cga_core::*;
 use cga_gpu::*;
+use cga_scene::*;
 
 fn main() {
     let mut sc = Scene::new(None);

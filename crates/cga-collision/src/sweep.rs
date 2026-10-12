@@ -38,7 +38,7 @@ pub fn sweep_toi(
     let v = [xi[3], xi[4], xi[5]];
     // Multivector::velocity 存的是二重矢量系数（物理角速度 = 2ω），喂一半得到
     // 物理螺旋速度。
-    let (wh, vh) = (scale(w, 0.5), scale(v, 0.5));
+    let (wh, vh) = (vec3_scale(w, 0.5), vec3_scale(v, 0.5));
     let f = |t: f64| -> Option<f64> {
         let m = mat4_mul(Multivector::velocity(wh, vh).exp(t).to_matrix(), wa);
         separation(a, m, b, wb)
@@ -135,10 +135,10 @@ fn max_speed(xi: [f64; 6], a: &Geometry, wa: [f64; 16]) -> Option<f64> {
         return Some(norm(v)); // 纯平移
     }
     // 螺旋轴：过 o = ω×v/|ω|²，方向 ω̂；轴向速度 = (ω·v/|ω|²)·ω
-    let o = scale(cross(w, v), 1.0 / (wn * wn));
-    let h = dot(w, v) / (wn * wn);
+    let o = vec3_scale(vec3_cross(w, v), 1.0 / (wn * wn));
+    let h = vec3_dot(w, v) / (wn * wn);
     let v_par = h.abs() * wn;
-    let wu = scale(w, 1.0 / wn);
+    let wu = vec3_scale(w, 1.0 / wn);
     let mut r_max = 0.0f64;
     for c in 0..8 {
         let p = [
@@ -147,7 +147,7 @@ fn max_speed(xi: [f64; 6], a: &Geometry, wa: [f64; 16]) -> Option<f64> {
             if c & 4 == 0 { bb[0][2] } else { bb[1][2] },
         ];
         let q = sub(p, o);
-        let axial = scale(wu, dot(q, wu));
+        let axial = vec3_scale(wu, vec3_dot(q, wu));
         r_max = r_max.max(norm(sub(q, axial)));
     }
     Some(v_par + wn * r_max)

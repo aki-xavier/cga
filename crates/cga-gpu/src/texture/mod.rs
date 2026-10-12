@@ -20,8 +20,7 @@ use crate::geometry_ops::col;
 use crate::mlxops::*;
 use mlx_rs::{ops, Array};
 
-// 路径兼容层（`cga_gpu::texture::{Texture, WrapMode, texture_load, ...}` 不变）。
-pub use cga_scene::{texture_from_bytes, texture_from_png_bytes, texture_load, Texture, WrapMode};
+use cga_scene::{Texture, WrapMode};
 
 fn srgb_to_linear_arr(rgb: &Array) -> Array {
     ck(ops::select(
@@ -175,12 +174,12 @@ impl GpuTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene_graph::Color;
-    use crate::{
-        Light, Material, MaterialParams, Object, ObjectParams, PerspectiveCamera, Renderer, Scene,
-    };
+    use crate::Renderer;
     use cga_core::{BoxGeometry, Geometry};
-    use cga_scene::load_png_rgba;
+    use cga_scene::{
+        load_png_rgba, texture_load, Color, Light, Material, MaterialParams, Object, ObjectParams,
+        PerspectiveCamera, Scene,
+    };
 
     #[test]
     fn test_png_decode_and_sample() {

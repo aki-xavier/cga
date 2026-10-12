@@ -8,8 +8,8 @@
 //! the pixel to anti-aliasing).
 
 use cga_core::{
-    ConeParams, CyclideParams, CylinderParams, EllipsoidParams, Mat3, PlaneParams, SphereParams,
-    TorusParams,
+    vec3_add, vec3_dot, vec3_len, vec3_scale, vec3_sub, ConeParams, CyclideParams, CylinderParams,
+    EllipsoidParams, Mat3, PlaneParams, SphereParams, TorusParams,
 };
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -24,36 +24,13 @@ pub(crate) struct RowHit {
     pub n: [f64; 3],
 }
 
-#[inline]
-fn vsub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-#[inline]
-fn vadd(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-#[inline]
-fn vscale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
-#[inline]
-fn vdot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-#[inline]
-fn vnorm(a: [f64; 3]) -> f64 {
-    vdot(a, a).sqrt()
-}
-
+/// 单位化：近零退化时返回零向量（与 `cga_scene::vec3_unit` 的 `[0,0,1]` 兜底
+/// 方向语义不同，故保留为本模块自有助手）。
 #[inline]
 fn vunit(a: [f64; 3]) -> [f64; 3] {
-    let n = vnorm(a);
+    let n = vec3_len(a);
     if n > 1e-300 {
-        vscale(a, 1.0 / n)
+        vec3_scale(a, 1.0 / n)
     } else {
         [0.0, 0.0, 0.0]
     }
@@ -61,7 +38,7 @@ fn vunit(a: [f64; 3]) -> [f64; 3] {
 
 #[inline]
 fn mat3_mul(m: Mat3, v: [f64; 3]) -> [f64; 3] {
-    [vdot(m[0], v), vdot(m[1], v), vdot(m[2], v)]
+    [vec3_dot(m[0], v), vec3_dot(m[1], v), vec3_dot(m[2], v)]
 }
 
 #[inline]
@@ -80,13 +57,13 @@ fn local_ray(
     o: [f64; 3],
     d: [f64; 3],
 ) -> Option<([f64; 3], [f64; 3], f64)> {
-    let ol = vadd(mat3_mul(a_inv3, o), t_inv);
+    let ol = vec3_add(mat3_mul(a_inv3, o), t_inv);
     let dl = mat3_mul(a_inv3, d);
-    let lam = vnorm(dl);
+    let lam = vec3_len(dl);
     if !lam.is_finite() || lam <= 1e-300 {
         return None;
     }
-    Some((ol, vscale(dl, 1.0 / lam), lam))
+    Some((ol, vec3_scale(dl, 1.0 / lam), lam))
 }
 
 /// n_world = normalize(A⁻ᵀ · n_l) — the inverse-transpose normal transform,
@@ -176,17 +153,17 @@ fn splice(
 // --- per-primitive f64 row solvers (camera-space rays, certified) ---
 
 fn sphere_rows(p: &SphereParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
-    let oc = vsub(o, p.c);
-    let b = 2.0 * vdot(oc, d);
-    let c = vdot(oc, oc) - p.r * p.r;
+    let oc = vec3_sub(o, p.c);
+    let b = 2.0 * vec3_dot(oc, d);
+    let c = vec3_dot(oc, oc) - p.r * p.r;
     match QuadRoots::solve(1.0, b, c) {
         QuadRoots::Two(t1, t2) => [t1, t2]
             .into_iter()
             .map(|t| {
-                let hp = vadd(o, vscale(d, t));
+                let hp = vec3_add(o, vec3_scale(d, t));
                 RowHit {
                     t,
-                    n: vscale(vsub(hp, p.c), 1.0 / p.r),
+                    n: vec3_scale(vec3_sub(hp, p.c), 1.0 / p.r),
                 }
             })
             .collect(),
@@ -195,11 +172,11 @@ fn sphere_rows(p: &SphereParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
 }
 
 fn plane_rows(p: &PlaneParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
-    let denom = vdot(p.n, d);
+    let denom = vec3_dot(p.n, d);
     if !denom.is_finite() || denom.abs() <= 1e-30 {
         return Vec::new();
     }
-    let t = (p.d - vdot(p.n, o)) / denom;
+    let t = (p.d - vec3_dot(p.n, o)) / denom;
     if !t.is_finite() {
         return Vec::new();
     }
@@ -208,14 +185,14 @@ fn plane_rows(p: &PlaneParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
 
 fn cylinder_rows(p: &CylinderParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
     let u = p.u;
-    let oc = vsub(o, p.q);
-    let d_par = vdot(d, u);
-    let o_par = vdot(oc, u);
-    let d_p = vsub(d, vscale(u, d_par));
-    let o_p = vsub(oc, vscale(u, o_par));
-    let a = vdot(d_p, d_p);
-    let b = 2.0 * vdot(o_p, d_p);
-    let c = vdot(o_p, o_p) - p.r * p.r;
+    let oc = vec3_sub(o, p.q);
+    let d_par = vec3_dot(d, u);
+    let o_par = vec3_dot(oc, u);
+    let d_p = vec3_sub(d, vec3_scale(u, d_par));
+    let o_p = vec3_sub(oc, vec3_scale(u, o_par));
+    let a = vec3_dot(d_p, d_p);
+    let b = 2.0 * vec3_dot(o_p, d_p);
+    let c = vec3_dot(o_p, o_p) - p.r * p.r;
     // Side interval: None = no side section; (lo, hi) may be unbounded when
     // the ray is parallel to the axis and inside the tube.
     let side: Option<(f64, f64)> = if a == 0.0 && b == 0.0 {
@@ -230,7 +207,7 @@ fn cylinder_rows(p: &CylinderParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
             _ => None, // Double = tangent = no crossing; Indeterminate = abstain
         }
     };
-    let side_n = |t: f64| vscale(vadd(o_p, vscale(d_p, t)), 1.0 / p.r);
+    let side_n = |t: f64| vec3_scale(vec3_add(o_p, vec3_scale(d_p, t)), 1.0 / p.r);
     let Some((slo, shi)) = side else {
         return Vec::new();
     };
@@ -258,13 +235,21 @@ fn cylinder_rows(p: &CylinderParams, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
     };
     let enter = slo.max(at0);
     let exit_ = shi.min(at1);
-    if !(enter < exit_) || !enter.is_finite() || !exit_.is_finite() {
+    if !enter.is_finite() || !exit_.is_finite() || enter >= exit_ {
         return Vec::new();
     }
     let t_plus = (p.h - o_par) / d_par;
     let t_minus = (-p.h - o_par) / d_par;
-    let n_cap_enter = if t_plus < t_minus { u } else { vscale(u, -1.0) };
-    let n_cap_exit = if t_plus > t_minus { u } else { vscale(u, -1.0) };
+    let n_cap_enter = if t_plus < t_minus {
+        u
+    } else {
+        vec3_scale(u, -1.0)
+    };
+    let n_cap_exit = if t_plus > t_minus {
+        u
+    } else {
+        vec3_scale(u, -1.0)
+    };
     let n_enter = if enter == at0 {
         n_cap_enter
     } else {
@@ -292,13 +277,13 @@ fn cone_local_rows(r: f64, h: f64, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
     let k2 = 1.0 + k * k;
     let wz = o[2] - h / 2.0;
     let dz = d[2];
-    let wd = vdot(o, d) - dz * h / 2.0;
-    let ww = vdot(o, o) - o[2] * h + h * h / 4.0;
+    let wd = vec3_dot(o, d) - dz * h / 2.0;
+    let ww = vec3_dot(o, o) - o[2] * h + h * h / 4.0;
     let a = 1.0 - k2 * dz * dz;
     let b = 2.0 * (wd - k2 * wz * dz);
     let c = ww - k2 * wz * wz;
     let side_n = |t: f64| {
-        let p = vadd(o, vscale(d, t));
+        let p = vec3_add(o, vec3_scale(d, t));
         let s = p[2] - h / 2.0;
         vunit([p[0], p[1], s * (1.0 - k2)])
     };
@@ -340,7 +325,7 @@ fn cone_local_rows(r: f64, h: f64, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
         Iv::Below(s1) => (at0, s1.min(at1)),
         Iv::Empty => return Vec::new(),
     };
-    if !(enter < exit_) || !enter.is_finite() || !exit_.is_finite() {
+    if !enter.is_finite() || !exit_.is_finite() || enter >= exit_ {
         return Vec::new();
     }
     let n_cap_enter = if t_top < t_bot {
@@ -376,14 +361,14 @@ fn cone_local_rows(r: f64, h: f64, o: [f64; 3], d: [f64; 3]) -> Vec<RowHit> {
 }
 
 fn ellipsoid_local_rows(o_l: [f64; 3], d_u: [f64; 3]) -> Vec<RowHit> {
-    let b = 2.0 * vdot(o_l, d_u);
-    let c = vdot(o_l, o_l) - 1.0;
+    let b = 2.0 * vec3_dot(o_l, d_u);
+    let c = vec3_dot(o_l, o_l) - 1.0;
     match QuadRoots::solve(1.0, b, c) {
         QuadRoots::Two(t1, t2) => [t1, t2]
             .into_iter()
             .map(|t| RowHit {
                 t,
-                n: vadd(o_l, vscale(d_u, t)), // unit sphere: gradient = point
+                n: vec3_add(o_l, vec3_scale(d_u, t)), // unit sphere: gradient = point
             })
             .collect(),
         _ => Vec::new(),
@@ -398,7 +383,7 @@ fn torus_local_rows(major: f64, minor: f64, arc: f64, o: [f64; 3], d: [f64; 3]) 
     roots
         .into_iter()
         .filter_map(|t| {
-            let p = vadd(o, vscale(d, t));
+            let p = vec3_add(o, vec3_scale(d, t));
             let theta = p[1].atan2(p[0]);
             let turned = if theta < 0.0 {
                 theta + std::f64::consts::TAU
@@ -408,7 +393,7 @@ fn torus_local_rows(major: f64, minor: f64, arc: f64, o: [f64; 3], d: [f64; 3]) 
             if turned > arc {
                 return None;
             }
-            let s1 = vdot(p, p) + r2 - minor * minor;
+            let s1 = vec3_dot(p, p) + r2 - minor * minor;
             let fac = s1 - 2.0 * r2;
             Some(RowHit {
                 t,
@@ -435,8 +420,8 @@ fn cyclide_local_rows(
     roots
         .into_iter()
         .map(|t| {
-            let p = vsub(vadd(o, vscale(d, t)), shift);
-            let g = vdot(p, p) + bb;
+            let p = vec3_sub(vec3_add(o, vec3_scale(d, t)), shift);
+            let g = vec3_dot(p, p) + bb;
             let n = [
                 4.0 * p[0] * g - 8.0 * a * (a * p[0] - c * dd),
                 4.0 * p[1] * g - 8.0 * b * b * p[1],
@@ -449,6 +434,47 @@ fn cyclide_local_rows(
 
 // --- wiring entry points (take the f32 results, return them patched) ---
 
+/// 用 `row` 在 CPU f64 上重算 `amb` 标记的行，其余行原样保留。
+fn certify_rows(
+    o: &Array,
+    d: &Array,
+    amb: &Array,
+    ts: Array,
+    ns: Array,
+    vs: Array,
+    row: impl Fn([f64; 3], [f64; 3]) -> Vec<RowHit>,
+) -> (Array, Array, Array) {
+    let idx = ambiguous_indices(amb);
+    if idx.is_empty() {
+        return (ts, ns, vs);
+    }
+    let (o64, d64) = read_rays(o, d);
+    let rows: Vec<(usize, Vec<RowHit>)> =
+        idx.into_iter().map(|i| (i, row(o64[i], d64[i]))).collect();
+    splice(&ts, &ns, &vs, &rows)
+}
+
+/// 把局部空间的行解算器 `row` 提升到仿射包装：光线先归一到局部，解出的
+/// `t` 除以 `|A⁻¹d|`、法线经 `A⁻ᵀ` 回到世界空间（退化光线无命中）。
+fn local_rows(
+    a_inv3: Mat3,
+    t_inv: [f64; 3],
+    row: impl Fn([f64; 3], [f64; 3]) -> Vec<RowHit>,
+) -> impl Fn([f64; 3], [f64; 3]) -> Vec<RowHit> {
+    move |o, d| {
+        let Some((o_l, d_u, lam)) = local_ray(a_inv3, t_inv, o, d) else {
+            return Vec::new();
+        };
+        row(o_l, d_u)
+            .into_iter()
+            .map(|h| RowHit {
+                t: h.t / lam,
+                n: world_normal(a_inv3, h.n),
+            })
+            .collect()
+    }
+}
+
 pub(crate) fn sphere_fallback(
     p: &SphereParams,
     o: &Array,
@@ -458,16 +484,7 @@ pub(crate) fn sphere_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| (i, sphere_rows(p, o64[i], d64[i])))
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    certify_rows(o, d, amb, ts, ns, vs, |o, d| sphere_rows(p, o, d))
 }
 
 pub(crate) fn plane_fallback(
@@ -479,16 +496,7 @@ pub(crate) fn plane_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| (i, plane_rows(p, o64[i], d64[i])))
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    certify_rows(o, d, amb, ts, ns, vs, |o, d| plane_rows(p, o, d))
 }
 
 pub(crate) fn cylinder_fallback(
@@ -500,16 +508,7 @@ pub(crate) fn cylinder_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| (i, cylinder_rows(p, o64[i], d64[i])))
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    certify_rows(o, d, amb, ts, ns, vs, |o, d| cylinder_rows(p, o, d))
 }
 
 pub(crate) fn cone_fallback(
@@ -521,28 +520,8 @@ pub(crate) fn cone_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| {
-            let Some((o_l, d_u, lam)) = local_ray(p.a_inv3, p.t_inv, o64[i], d64[i]) else {
-                return (i, Vec::new());
-            };
-            let hits = cone_local_rows(p.r, p.h, o_l, d_u)
-                .into_iter()
-                .map(|h| RowHit {
-                    t: h.t / lam,
-                    n: world_normal(p.a_inv3, h.n),
-                })
-                .collect();
-            (i, hits)
-        })
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    let row = local_rows(p.a_inv3, p.t_inv, |o, d| cone_local_rows(p.r, p.h, o, d));
+    certify_rows(o, d, amb, ts, ns, vs, row)
 }
 
 pub(crate) fn ellipsoid_fallback(
@@ -554,28 +533,8 @@ pub(crate) fn ellipsoid_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| {
-            let Some((o_l, d_u, lam)) = local_ray(p.a_inv3, p.t_inv, o64[i], d64[i]) else {
-                return (i, Vec::new());
-            };
-            let hits = ellipsoid_local_rows(o_l, d_u)
-                .into_iter()
-                .map(|h| RowHit {
-                    t: h.t / lam,
-                    n: world_normal(p.a_inv3, h.n),
-                })
-                .collect();
-            (i, hits)
-        })
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    let row = local_rows(p.a_inv3, p.t_inv, ellipsoid_local_rows);
+    certify_rows(o, d, amb, ts, ns, vs, row)
 }
 
 pub(crate) fn torus_fallback(
@@ -587,28 +546,10 @@ pub(crate) fn torus_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| {
-            let Some((o_l, d_u, lam)) = local_ray(p.a_inv3, p.t_inv, o64[i], d64[i]) else {
-                return (i, Vec::new());
-            };
-            let hits = torus_local_rows(p.major, p.minor, p.arc, o_l, d_u)
-                .into_iter()
-                .map(|h| RowHit {
-                    t: h.t / lam,
-                    n: world_normal(p.a_inv3, h.n),
-                })
-                .collect();
-            (i, hits)
-        })
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    let row = local_rows(p.a_inv3, p.t_inv, |o, d| {
+        torus_local_rows(p.major, p.minor, p.arc, o, d)
+    });
+    certify_rows(o, d, amb, ts, ns, vs, row)
 }
 
 pub(crate) fn cyclide_fallback(
@@ -620,33 +561,16 @@ pub(crate) fn cyclide_fallback(
     ns: Array,
     vs: Array,
 ) -> (Array, Array, Array) {
-    let idx = ambiguous_indices(amb);
-    if idx.is_empty() {
-        return (ts, ns, vs);
-    }
-    let (o64, d64) = read_rays(o, d);
-    let rows: Vec<(usize, Vec<RowHit>)> = idx
-        .into_iter()
-        .map(|i| {
-            let Some((o_l, d_u, lam)) = local_ray(p.a_inv3, p.t_inv, o64[i], d64[i]) else {
-                return (i, Vec::new());
-            };
-            let hits = cyclide_local_rows(p.a, p.b, p.d, p.c, p.shift, o_l, d_u)
-                .into_iter()
-                .map(|h| RowHit {
-                    t: h.t / lam,
-                    n: world_normal(p.a_inv3, h.n),
-                })
-                .collect();
-            (i, hits)
-        })
-        .collect();
-    splice(&ts, &ns, &vs, &rows)
+    let row = local_rows(p.a_inv3, p.t_inv, |o, d| {
+        cyclide_local_rows(p.a, p.b, p.d, p.c, p.shift, o, d)
+    });
+    certify_rows(o, d, amb, ts, ns, vs, row)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ray;
     use cga_core::{CylinderParams, PlaneParams, SphereParams, TorusParams};
 
     const IDENT: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -657,13 +581,9 @@ mod tests {
         0.0, 0.0, 0.0, 1.0,
     ];
 
-    fn ray(x: f64, y: f64, z: f64) -> Array {
-        Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
-    }
-
     fn crossings(p: &cga_core::GeometryParams, o: [f64; 3], d: [f64; 3]) -> (Vec<f32>, Vec<bool>) {
         let (ts, _ns, vs) =
-            crate::geom_crossings(p, &ray(o[0], o[1], o[2]), &ray(d[0], d[1], d[2]));
+            crate::geom_crossings(p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
         ts.eval().unwrap();
         vs.eval().unwrap();
         (

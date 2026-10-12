@@ -10,7 +10,7 @@
 
 use crate::bake::BakedMesh;
 use crate::BakeExt;
-use cga_core::Geometry;
+use cga_core::{vec3_scale, Geometry};
 
 /// 质量属性：`mass`、`cog`（世界系质心）、`inertia`（关于质心、世界方向的惯性张量）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,10 +18,6 @@ pub struct MassProps {
     pub mass: f64,
     pub cog: [f64; 3],
     pub inertia: [[f64; 3]; 3],
-}
-
-fn v3_scale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
 }
 
 /// 局部闭式解：(体积, 局部质心, 局部惯性对角)。柱轴/锥轴/环轴都是局部 z。
@@ -203,7 +199,7 @@ pub fn mesh_integrate(mesh: &BakedMesh) -> (f64, [f64; 3], [[f64; 3]; 3]) {
             }
         }
     }
-    let cog = v3_scale(cog_acc, 1.0 / v_total);
+    let cog = vec3_scale(cog_acc, 1.0 / v_total);
     // 惯性张量（单位密度，关于原点）：I_xx = ∫(y²+z²)，I_xy = −∫xy
     let inertia = [
         [i2[1][1] + i2[2][2], -i2[0][1], -i2[0][2]],
@@ -329,8 +325,6 @@ mod tests {
             1.0,
         )
         .unwrap();
-        let v = 4.0 * 0.5 * 0.5;
-        let _ = v;
         // 闭式 I_xy：I = R·diag(I1,I2,I3)·Rᵀ（教科书定义，与被测积分实现独立）。
         // 半宽 (2, 0.25, 0.25)：主惯量 I1 = m(hy²+hz²)/3、I2 = I3 = m(hx²+hz²)/3。
         let (hx, hy, hz) = (2.0, 0.25, 0.25);

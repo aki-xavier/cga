@@ -84,11 +84,6 @@ pub fn s_max(a: &Array, v: f64) -> Array {
 }
 
 #[inline]
-pub fn s_min(a: &Array, v: f64) -> Array {
-    ck(ops::minimum(a, fs(v)))
-}
-
-#[inline]
 pub fn s_clip(a: &Array, lo: f64, hi: f64) -> Array {
     ck(ops::clip(a, (&fs(lo), &fs(hi))))
 }

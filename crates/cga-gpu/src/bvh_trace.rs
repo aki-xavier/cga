@@ -25,7 +25,7 @@ use mlx_rs::Array;
 
 use crate::geometry_ops::geom_bounds;
 use crate::renderer::RenderMode;
-use crate::scene::Scene;
+use cga_scene::Scene;
 
 /// 自动启用的对象数下限（画廊金标场景全在此下 → 逐位不变）。
 pub(crate) const BVH_MIN_OBJECTS: usize = 32;
@@ -382,7 +382,13 @@ fn kernels() -> Option<&'static Kernels> {
         let nearest = MetalKernel::compile(
             "cga_bvh_nearest",
             &[
-                "rays_o", "rays_d", "node_lo", "node_hi", "node_ab", "prim_type", "prim_params",
+                "rays_o",
+                "rays_d",
+                "node_lo",
+                "node_hi",
+                "node_ab",
+                "prim_type",
+                "prim_params",
                 "prim_obj",
             ],
             &["out_t", "out_obj", "out_n"],
@@ -393,8 +399,16 @@ fn kernels() -> Option<&'static Kernels> {
         let shadow = MetalKernel::compile(
             "cga_bvh_shadow",
             &[
-                "rays_o", "rays_d", "node_lo", "node_hi", "node_ab", "prim_type", "prim_params",
-                "prim_obj", "t_max", "obj_occ",
+                "rays_o",
+                "rays_d",
+                "node_lo",
+                "node_hi",
+                "node_ab",
+                "prim_type",
+                "prim_params",
+                "prim_obj",
+                "t_max",
+                "obj_occ",
             ],
             &["out_vis"],
             MSL_SHADOW,
@@ -464,7 +478,11 @@ fn pack_params(p: &GeometryParams) -> [f32; PARAM_SLOTS] {
             out[7] = *h as f32;
         }
         GeometryParams::ConeParams(ConeParams {
-            a_inv3, t_inv, r, h, ..
+            a_inv3,
+            t_inv,
+            r,
+            h,
+            ..
         }) => {
             for (j, row) in a_inv3.iter().enumerate() {
                 put3(&mut out, 3 * j, *row);
@@ -491,6 +509,9 @@ struct Node {
     b: i32, // 内部 = 右子；叶 = -1
 }
 
+/// 一个可 kernel 化图元：`(scene_idx, 类型, 打包参数, AABB)`。
+type Prim = (i32, i32, [f32; PARAM_SLOTS], [[f32; 3]; 2]);
+
 impl BvhTrace {
     /// 构建；返回 None = 本帧无可 kernel 化对象（全旧路径）。
     pub(crate) fn build(
@@ -502,7 +523,7 @@ impl BvhTrace {
         let _ = ks;
         let n_obj = scene.objects.len();
         let mut legacy = vec![true; n_obj];
-        let mut prims: Vec<(i32, i32, [f32; PARAM_SLOTS], [[f32; 3]; 2])> = Vec::new(); // (scene_idx, type, params, aabb)
+        let mut prims: Vec<Prim> = Vec::new(); // (scene_idx, type, params, aabb)
         for (i, obj) in scene.objects.iter().enumerate() {
             let Some(ty) = eligible(&params_list[i], obj.material.map.is_some()) else {
                 continue;
@@ -539,7 +560,12 @@ impl BvhTrace {
                 }
             }
             let idx = nodes.len() as i32;
-            nodes.push(Node { lo: nlo, hi: nhi, a: -1, b: -1 });
+            nodes.push(Node {
+                lo: nlo,
+                hi: nhi,
+                a: -1,
+                b: -1,
+            });
             if prims.len() == 1 {
                 nodes[idx as usize].a = prims[0];
                 nodes[idx as usize].b = -1;
@@ -624,7 +650,7 @@ impl BvhTrace {
     /// 合并；miss：t = +inf、obj = -1（调用方钳成 0，与旧路径 miss 一致）。
     pub(crate) fn trace_nearest(&self, o: &Array, d: &Array) -> Option<(Array, Array, Array)> {
         let ks = kernels()?;
-        let n = o.shape()[0] as i32;
+        let n = o.shape()[0];
         let outs = ks
             .nearest
             .apply(
@@ -652,7 +678,7 @@ impl BvhTrace {
     /// 光线包 → 阴影可见度连乘积（遮挡因子语义 = 旧路径 `eff_occlusion`）。
     pub(crate) fn trace_shadow(&self, o: &Array, d: &Array, tmax: &Array) -> Option<Array> {
         let ks = kernels()?;
-        let n = o.shape()[0] as i32;
+        let n = o.shape()[0];
         let outs = ks
             .shadow
             .apply(

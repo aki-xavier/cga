@@ -5,8 +5,7 @@
 
 use crate::mlxops::*;
 
-// 路径兼容层（`cga_gpu::shading::{Light, Material, ...}` 旧路径不变）。
-pub use cga_scene::{Light, LightKind, Material, MaterialKind, MaterialParams};
+use cga_scene::{Light, LightKind};
 
 /// 原 `Light::direction_at`：方向/点光的单位方向与衰减（MLX 批量）。
 pub fn light_direction_at(light: &Light, p: &mlx_rs::Array) -> (mlx_rs::Array, mlx_rs::Array) {

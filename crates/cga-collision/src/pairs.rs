@@ -36,7 +36,7 @@ pub(crate) fn pair_separation(a: &Shape, b: &Shape) -> Option<f64> {
 pub(crate) fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
     match *s {
         Shape::Sphere { c, r } => Some(norm(sub(p, c)) - r),
-        Shape::Plane { n, d } => Some(dot(n, p) - d), // 半空间：内部为负
+        Shape::Plane { n, d } => Some(vec3_dot(n, p) - d), // 半空间：内部为负
         Shape::Box { c, axes, half } => Some(sdf_box(c, axes, half, p)),
         Shape::Cylinder { q, u, r, half } => Some(sdf_cylinder(q, u, r, half, p)),
         Shape::Cone { c, axis, r, h } => Some(sdf_cone(c, axis, r, h, p)),
@@ -47,8 +47,8 @@ pub(crate) fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
             minor,
         } => {
             let q = sub(p, c);
-            let z = dot(q, axis);
-            let rho = norm(sub(q, scale(axis, z)));
+            let z = vec3_dot(q, axis);
+            let rho = norm(sub(q, vec3_scale(axis, z)));
             Some(norm([rho - major, z, 0.0]) - minor)
         }
         Shape::Ellipsoid { c, axes, radii } => {
@@ -63,7 +63,7 @@ fn sdf_box(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3], p: [f64; 3]) -> f64
     let mut dmax = f64::NEG_INFINITY;
     let mut out2 = 0.0;
     for i in 0..3 {
-        let d = dot(q, axes[i]).abs() - half[i];
+        let d = vec3_dot(q, axes[i]).abs() - half[i];
         dmax = dmax.max(d);
         out2 += d.max(0.0) * d.max(0.0);
     }
@@ -73,8 +73,8 @@ fn sdf_box(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3], p: [f64; 3]) -> f64
 /// 柱 SDF（精确）：half ≤ 0 为无限长。
 fn sdf_cylinder(q0: [f64; 3], u: [f64; 3], r: f64, half: f64, p: [f64; 3]) -> f64 {
     let w = sub(p, q0);
-    let x = dot(w, u);
-    let rho = norm(sub(w, scale(u, x)));
+    let x = vec3_dot(w, u);
+    let rho = norm(sub(w, vec3_scale(u, x)));
     let dx = rho - r;
     if half <= 0.0 {
         return dx;
@@ -88,8 +88,8 @@ fn sdf_cylinder(q0: [f64; 3], u: [f64; 3], r: f64, half: f64, p: [f64; 3]) -> f6
 /// 的 2D 点–边距离 + 内外判定。
 fn sdf_cone(c: [f64; 3], axis: [f64; 3], r: f64, h: f64, p: [f64; 3]) -> f64 {
     let q = sub(p, c);
-    let z = dot(q, axis);
-    let rho = norm(sub(q, scale(axis, z)));
+    let z = vec3_dot(q, axis);
+    let rho = norm(sub(q, vec3_scale(axis, z)));
     let apex = (0.0, h / 2.0);
     let base = (r, -h / 2.0);
     let axbot = (0.0, -h / 2.0);
@@ -124,25 +124,27 @@ pub(crate) fn dist_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 /// 实体在方向 n（单位）上的支撑区间 [lo, hi]（n·x 的最小/最大）。
 pub(crate) fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
     match *s {
-        Shape::Sphere { c, r } => Some((dot(n, c) - r, dot(n, c) + r)),
+        Shape::Sphere { c, r } => Some((vec3_dot(n, c) - r, vec3_dot(n, c) + r)),
         Shape::Box { c, axes, half } => {
-            let e: f64 = (0..3).map(|i| dot(n, axes[i]).abs() * half[i]).sum();
-            Some((dot(n, c) - e, dot(n, c) + e))
+            let e: f64 = (0..3).map(|i| vec3_dot(n, axes[i]).abs() * half[i]).sum();
+            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
         }
         Shape::Cylinder { q, u, r, half } => {
             if half <= 0.0 {
                 return None; // 无限长柱与平面没有有限支撑区间
             }
-            let nu = dot(n, u);
+            let nu = vec3_dot(n, u);
             let e = half * nu.abs() + r * (1.0 - nu * nu).max(0.0).sqrt();
-            Some((dot(n, q) - e, dot(n, q) + e))
+            Some((vec3_dot(n, q) - e, vec3_dot(n, q) + e))
         }
         Shape::Cone { c, axis, r, h } => {
-            let apex = add(c, scale(axis, h / 2.0));
-            let bc = add(c, scale(axis, -h / 2.0));
-            let s = (1.0 - dot(n, axis) * dot(n, axis)).max(0.0).sqrt();
-            let na = dot(n, apex);
-            let nb = dot(n, bc);
+            let apex = add(c, vec3_scale(axis, h / 2.0));
+            let bc = add(c, vec3_scale(axis, -h / 2.0));
+            let s = (1.0 - vec3_dot(n, axis) * vec3_dot(n, axis))
+                .max(0.0)
+                .sqrt();
+            let na = vec3_dot(n, apex);
+            let nb = vec3_dot(n, bc);
             Some((na.min(nb - r * s), na.max(nb + r * s)))
         }
         Shape::Torus {
@@ -151,19 +153,19 @@ pub(crate) fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
             major,
             minor,
         } => {
-            let na = dot(n, axis);
+            let na = vec3_dot(n, axis);
             let e = major * (1.0 - na * na).max(0.0).sqrt() + minor;
-            Some((dot(n, c) - e, dot(n, c) + e))
+            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
         }
         Shape::Ellipsoid { c, axes, radii } => {
             let e: f64 = (0..3)
                 .map(|i| {
-                    let v = dot(n, axes[i]) * radii[i];
+                    let v = vec3_dot(n, axes[i]) * radii[i];
                     v * v
                 })
                 .sum::<f64>()
                 .sqrt();
-            Some((dot(n, c) - e, dot(n, c) + e))
+            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
         }
         Shape::Plane { .. } => None, // 平面–平面在 plane_separation 单列
     }
@@ -175,8 +177,8 @@ pub(crate) fn plane_separation(n: [f64; 3], d: f64, s: &Shape) -> Option<f64> {
         // 平行：|Δd|（法向同向取差，反向取和）；相交：0。注意：两个相交半空间
         // 有无限重叠体积，MTV 无定义——这里的 0 是**表面距离**语义（表面相交
         // 即接触），不是穿入深度。
-        return if norm(cross(n, n2)) < 1e-9 {
-            Some(if dot(n, n2) > 0.0 {
+        return if norm(vec3_cross(n, n2)) < 1e-9 {
+            Some(if vec3_dot(n, n2) > 0.0 {
                 (d - d2).abs()
             } else {
                 (d + d2).abs()
@@ -217,7 +219,7 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
     // SAT：6 个面法向 + 9 个叉积轴（分离轴定理：布尔相离判定是精确的）。
     let t = sub(cb, ca);
     let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+        (0..3).map(|i| vec3_dot(l, axes[i]).abs() * half[i]).sum()
     };
     let mut separated = false;
     let mut sat = |l: [f64; 3]| {
@@ -225,8 +227,8 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
         if ll < 1e-9 {
             return; // 两轴平行，叉积退化：跳过
         }
-        let l = scale(l, 1.0 / ll);
-        if extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs() < 0.0 {
+        let l = vec3_scale(l, 1.0 / ll);
+        if extent(l, aa, ha) + extent(l, ab, hb) - vec3_dot(t, l).abs() < 0.0 {
             separated = true;
         }
     };
@@ -235,7 +237,7 @@ pub(crate) fn box_box(a: &Shape, b: &Shape) -> Option<f64> {
     }
     for axa in aa {
         for axb in ab {
-            sat(cross(axa, axb));
+            sat(vec3_cross(axa, axb));
         }
     }
     if !separated {
@@ -286,40 +288,48 @@ pub(crate) fn box_mtv_exact(
     hb: [f64; 3],
 ) -> [f64; 3] {
     let e = [
-        scale(aa[0], ha[0]),
-        scale(aa[1], ha[1]),
-        scale(aa[2], ha[2]),
-        scale(ab[0], hb[0]),
-        scale(ab[1], hb[1]),
-        scale(ab[2], hb[2]),
+        vec3_scale(aa[0], ha[0]),
+        vec3_scale(aa[1], ha[1]),
+        vec3_scale(aa[2], ha[2]),
+        vec3_scale(ab[0], hb[0]),
+        vec3_scale(ab[1], hb[1]),
+        vec3_scale(ab[2], hb[2]),
     ];
     let c = sub(ca, cb);
     let mut best_d2 = f64::INFINITY;
     let mut best = [0.0; 3];
     for i in 0..6 {
         for j in i + 1..6 {
-            let cr = cross(e[i], e[j]);
+            let cr = vec3_cross(e[i], e[j]);
             if norm(cr) < 1e-12 {
                 continue;
             }
             let n0 = unit(cr);
             for s in [1.0, -1.0] {
-                let n = scale(n0, s);
+                let n = vec3_scale(n0, s);
                 // zone：与面平行的生成元；面心 = c + 非 zone 生成元的支撑。
-                let zone: Vec<usize> = (0..6).filter(|&k| dot(e[k], n).abs() < 1e-12).collect();
+                let zone: Vec<usize> = (0..6)
+                    .filter(|&k| vec3_dot(e[k], n).abs() < 1e-12)
+                    .collect();
                 let mut fc = c;
                 for (k, &ek) in e.iter().enumerate() {
                     if !zone.contains(&k) {
-                        fc = add(fc, scale(ek, if dot(ek, n) >= 0.0 { 1.0 } else { -1.0 }));
+                        fc = add(
+                            fc,
+                            vec3_scale(ek, if vec3_dot(ek, n) >= 0.0 { 1.0 } else { -1.0 }),
+                        );
                     }
                 }
                 // 面法向朝外（离 c 远的一侧）。
-                let (n, fc) = if dot(n, sub(fc, c)) < 0.0 {
-                    let nf = scale(n, -1.0);
+                let (n, fc) = if vec3_dot(n, sub(fc, c)) < 0.0 {
+                    let nf = vec3_scale(n, -1.0);
                     let mut f2 = c;
                     for (k, &ek) in e.iter().enumerate() {
                         if !zone.contains(&k) {
-                            f2 = add(f2, scale(ek, if dot(ek, nf) >= 0.0 { 1.0 } else { -1.0 }));
+                            f2 = add(
+                                f2,
+                                vec3_scale(ek, if vec3_dot(ek, nf) >= 0.0 { 1.0 } else { -1.0 }),
+                            );
                         }
                     }
                     (nf, f2)
@@ -329,8 +339,8 @@ pub(crate) fn box_mtv_exact(
                 // 2D zonotope 多边形（zone 生成元排序走链）。
                 let poly = zone_polygon(&e, &zone, n, fc);
                 // 原点到该面的最近点。
-                let t = dot(n, fc);
-                let proj = scale(n, t);
+                let t = vec3_dot(n, fc);
+                let proj = vec3_scale(n, t);
                 let cand = if point_in_convex_2d(&poly, fc, n, proj) {
                     proj
                 } else {
@@ -341,7 +351,7 @@ pub(crate) fn box_mtv_exact(
                         let p0 = poly[k];
                         let p1 = poly[(k + 1) % poly.len()];
                         let qk = closest_point_on_seg3(proj, p0, p1);
-                        let d2 = dot(sub(proj, qk), sub(proj, qk));
+                        let d2 = vec3_dot(sub(proj, qk), sub(proj, qk));
                         if d2 < d2min {
                             d2min = d2;
                             q = qk;
@@ -349,7 +359,7 @@ pub(crate) fn box_mtv_exact(
                     }
                     q
                 };
-                let d2 = dot(cand, cand);
+                let d2 = vec3_dot(cand, cand);
                 if d2 < best_d2 {
                     best_d2 = d2;
                     best = cand;
@@ -363,16 +373,16 @@ pub(crate) fn box_mtv_exact(
 /// zone 生成元张成的 2D zonotope 的边界多边形（3D 点，中心对称，质心 = fc）。
 fn zone_polygon(e: &[[f64; 3]; 6], zone: &[usize], n: [f64; 3], fc: [f64; 3]) -> Vec<[f64; 3]> {
     let u = unit(e[zone[0]]);
-    let v = cross(n, u);
+    let v = vec3_cross(n, u);
     let mut g2: Vec<(f64, [f64; 3])> = zone
         .iter()
         .map(|&k| {
             let g = e[k];
-            let mut ang = dot(g, v).atan2(dot(g, u));
+            let mut ang = vec3_dot(g, v).atan2(vec3_dot(g, u));
             let mut g = g;
             if ang < 0.0 {
                 ang += std::f64::consts::PI;
-                g = scale(g, -1.0); // −g 与 g 是同一条边方向
+                g = vec3_scale(g, -1.0); // −g 与 g 是同一条边方向
             }
             (ang, g)
         })
@@ -383,14 +393,14 @@ fn zone_polygon(e: &[[f64; 3]; 6], zone: &[usize], n: [f64; 3], fc: [f64; 3]) ->
     for (_, g) in &g2 {
         sum = add(sum, *g);
     }
-    let mut chain = vec![scale(sum, -1.0)];
+    let mut chain = vec![vec3_scale(sum, -1.0)];
     for (_, g) in &g2 {
-        chain.push(add(*chain.last().unwrap(), scale(*g, 2.0)));
+        chain.push(add(*chain.last().unwrap(), vec3_scale(*g, 2.0)));
     }
     let m = chain.len() - 1;
     let mut pts: Vec<[f64; 3]> = chain.clone();
     for c in chain.iter().take(m).skip(1) {
-        pts.push(scale(*c, -1.0));
+        pts.push(vec3_scale(*c, -1.0));
     }
     pts.iter().map(|p| add(*p, fc)).collect()
 }
@@ -401,8 +411,8 @@ fn point_in_convex_2d(poly: &[[f64; 3]], fc: [f64; 3], n: [f64; 3], p: [f64; 3])
         let a = poly[k];
         let b = poly[(k + 1) % poly.len()];
         let edge = sub(b, a);
-        let side = dot(cross(edge, sub(p, a)), n);
-        let centroid_side = dot(cross(edge, sub(fc, a)), n);
+        let side = vec3_dot(vec3_cross(edge, sub(p, a)), n);
+        let centroid_side = vec3_dot(vec3_cross(edge, sub(fc, a)), n);
         if side * centroid_side < -1e-12 {
             return false;
         }
@@ -412,12 +422,12 @@ fn point_in_convex_2d(poly: &[[f64; 3]], fc: [f64; 3], n: [f64; 3], p: [f64; 3])
 
 fn closest_point_on_seg3(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     let ab = sub(b, a);
-    let len2 = dot(ab, ab);
+    let len2 = vec3_dot(ab, ab);
     if len2 < 1e-24 {
         return a;
     }
-    let t = (dot(sub(p, a), ab) / len2).clamp(0.0, 1.0);
-    add(a, scale(ab, t))
+    let t = (vec3_dot(sub(p, a), ab) / len2).clamp(0.0, 1.0);
+    add(a, vec3_scale(ab, t))
 }
 
 pub(crate) fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec<[f64; 3]> {
@@ -426,7 +436,7 @@ pub(crate) fn box_vertices(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> 
         let mut p = c;
         for (j, ax) in axes.iter().enumerate() {
             let s = if i & (1 << j) == 0 { -1.0 } else { 1.0 };
-            p = add(p, scale(*ax, s * half[j]));
+            p = add(p, vec3_scale(*ax, s * half[j]));
         }
         out.push(p);
     }
@@ -441,12 +451,12 @@ pub(crate) fn box_edges(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> Vec
         for s1 in [-1.0, 1.0] {
             for s2 in [-1.0, 1.0] {
                 let base = add(
-                    add(c, scale(axes[j], s1 * half[j])),
-                    scale(axes[k], s2 * half[k]),
+                    add(c, vec3_scale(axes[j], s1 * half[j])),
+                    vec3_scale(axes[k], s2 * half[k]),
                 );
                 out.push([
-                    add(base, scale(axes[axis], -half[axis])),
-                    add(base, scale(axes[axis], half[axis])),
+                    add(base, vec3_scale(axes[axis], -half[axis])),
+                    add(base, vec3_scale(axes[axis], half[axis])),
                 ]);
             }
         }
@@ -465,14 +475,14 @@ fn point_face_dist(
 ) -> Option<f64> {
     let j = f / 2;
     let s = if f.is_multiple_of(2) { 1.0 } else { -1.0 };
-    let n = scale(axes[j], s);
+    let n = vec3_scale(axes[j], s);
     let w = sub(v, c);
-    let d = dot(w, n) - half[j];
+    let d = vec3_dot(w, n) - half[j];
     if d <= 0.0 {
         return None;
     }
     let (u, k) = ((j + 1) % 3, (j + 2) % 3);
-    if dot(w, axes[u]).abs() <= half[u] && dot(w, axes[k]).abs() <= half[k] {
+    if vec3_dot(w, axes[u]).abs() <= half[u] && vec3_dot(w, axes[k]).abs() <= half[k] {
         Some(d)
     } else {
         None
@@ -484,9 +494,9 @@ fn seg_seg_dist(p1: [f64; 3], q1: [f64; 3], p2: [f64; 3], q2: [f64; 3]) -> f64 {
     let d1 = sub(q1, p1);
     let d2 = sub(q2, p2);
     let r = sub(p1, p2);
-    let a = dot(d1, d1);
-    let e = dot(d2, d2);
-    let f = dot(d2, r);
+    let a = vec3_dot(d1, d1);
+    let e = vec3_dot(d2, d2);
+    let f = vec3_dot(d2, r);
     let (s, t);
     if a <= 1e-12 && e <= 1e-12 {
         return norm(r);
@@ -495,12 +505,12 @@ fn seg_seg_dist(p1: [f64; 3], q1: [f64; 3], p2: [f64; 3], q2: [f64; 3]) -> f64 {
         s = 0.0;
         t = (f / e).clamp(0.0, 1.0);
     } else {
-        let c = dot(d1, r);
+        let c = vec3_dot(d1, r);
         if e <= 1e-12 {
             t = 0.0;
             s = (-c / a).clamp(0.0, 1.0);
         } else {
-            let b = dot(d1, d2);
+            let b = vec3_dot(d1, d2);
             let denom = a * e - b * b;
             let mut s0 = if denom > 1e-12 {
                 ((b * f - c * e) / denom).clamp(0.0, 1.0)
@@ -519,5 +529,5 @@ fn seg_seg_dist(p1: [f64; 3], q1: [f64; 3], p2: [f64; 3], q2: [f64; 3]) -> f64 {
             t = t0;
         }
     }
-    norm(sub(add(p1, scale(d1, s)), add(p2, scale(d2, t))))
+    norm(sub(add(p1, vec3_scale(d1, s)), add(p2, vec3_scale(d2, t))))
 }

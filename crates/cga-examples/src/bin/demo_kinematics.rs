@@ -1,6 +1,7 @@
 use cga_core::*;
 use cga_examples::{data_f32, mlx_frame_gc, save_gif};
 use cga_gpu::*;
+use cga_scene::*;
 use std::f64::consts::PI;
 
 struct KinScene {
@@ -67,7 +68,7 @@ fn frame_motor(axis: [f64; 3], angle: f64, point: [f64; 3]) -> Multivector {
 
 fn rod_motor(p: [f64; 3], q: [f64; 3]) -> (Multivector, f64) {
     let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-    let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let length = vec3_len(d);
     let u = [d[0] / length, d[1] / length, d[2] / length];
     let ax = [-u[1], u[0]];
     let an = (ax[0] * ax[0] + ax[1] * ax[1]).sqrt();

@@ -55,7 +55,10 @@ fn is_rigid(m: [f64; 16]) -> bool {
     let col = |j: usize| [m[j], m[4 + j], m[8 + j]];
     let (c0, c1, c2) = (col(0), col(1), col(2));
     let unit_ok = [c0, c1, c2].iter().all(|c| (norm(*c) - 1.0).abs() < 1e-9);
-    unit_ok && dot(c0, c1).abs() < 1e-9 && dot(c0, c2).abs() < 1e-9 && dot(c1, c2).abs() < 1e-9
+    unit_ok
+        && vec3_dot(c0, c1).abs() < 1e-9
+        && vec3_dot(c0, c2).abs() < 1e-9
+        && vec3_dot(c1, c2).abs() < 1e-9
 }
 
 /// (几何, 世界变换) → 世界空间形状。`None` = CSG / 圆片 / 环纹面 / 部分环面 /
@@ -75,12 +78,12 @@ pub(crate) fn to_shape(g: &Geometry, world: [f64; 16]) -> Option<Shape> {
     if !is_rigid(m) {
         return None;
     }
-    let e3 = |m: [f64; 16]| unit(xform_dir(m, [0.0, 0.0, 1.0]));
+    let e3 = |m: [f64; 16]| unit(transform_dir(m, [0.0, 0.0, 1.0]));
     let axes = |m: [f64; 16]| {
         [
-            unit(xform_dir(m, [1.0, 0.0, 0.0])),
-            unit(xform_dir(m, [0.0, 1.0, 0.0])),
-            unit(xform_dir(m, [0.0, 0.0, 1.0])),
+            unit(transform_dir(m, [1.0, 0.0, 0.0])),
+            unit(transform_dir(m, [0.0, 1.0, 0.0])),
+            unit(transform_dir(m, [0.0, 0.0, 1.0])),
         ]
     };
     match g {
@@ -91,12 +94,12 @@ pub(crate) fn to_shape(g: &Geometry, world: [f64; 16]) -> Option<Shape> {
         Geometry::PlaneGeometry(p) => {
             let n = p.blade.euclidean_vector();
             let nl = norm(n);
-            let (n, d) = (scale(n, 1.0 / nl), p.blade.einf_coeff() / nl);
-            let p0 = transform_point(m, scale(n, d));
-            let nw = unit(xform_dir(m, n));
+            let (n, d) = (vec3_scale(n, 1.0 / nl), p.blade.einf_coeff() / nl);
+            let p0 = transform_point(m, vec3_scale(n, d));
+            let nw = unit(transform_dir(m, n));
             Some(Shape::Plane {
                 n: nw,
-                d: dot(nw, p0),
+                d: vec3_dot(nw, p0),
             })
         }
         Geometry::BoxGeometry(b) => Some(Shape::Box {

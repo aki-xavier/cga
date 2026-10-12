@@ -5,15 +5,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use cga_core::{
-    clamp01, mat4_identity, mat4_mul, transform_point, vec3_cross, BoxGeometry, CircleGeometry,
-    ConeGeometry, CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry,
-    Multivector, PlaneGeometry, SphereGeometry, TorusGeometry,
+    clamp01, mat4_identity, mat4_mul, transform_point, vec3_cross, vec3_len, BoxGeometry,
+    CircleGeometry, ConeGeometry, CsgOp, CyclideGeometry, CylinderGeometry, EllipsoidGeometry,
+    Geometry, Multivector, PlaneGeometry, SphereGeometry, TorusGeometry,
 };
 
-use cga_gpu::shading::{Material, MaterialParams};
-use cga_scene::texture_load;
-use cga_scene::Scene;
-use cga_scene::{vec3_dot, Color};
+use cga_scene::{texture_load, vec3_dot, Color, Material, MaterialParams, Scene};
+
+use crate::jsx_gen::fmt_num;
 
 pub mod arg_value;
 pub use self::arg_value::*;
@@ -39,14 +38,6 @@ pub(crate) fn arg_truthy(v: &ArgValue) -> bool {
         ArgValue::Vec3(_) => true,
     }
 }
-fn fmt_f64(x: f64) -> String {
-    if x.is_finite() && x.fract() == 0.0 && x.abs() < 1e16 {
-        format!("{x:.1}")
-    } else {
-        format!("{x}")
-    }
-}
-
 fn val_num(v: &ArgValue, _line: i32, what: &str) -> Result<f64, String> {
     match v {
         ArgValue::Num(x) => Ok(*x),
@@ -84,10 +75,27 @@ fn val_opt_num(v: &ArgValue, def: f64) -> f64 {
     }
 }
 
-fn translate4(t: [f64; 3]) -> [f64; 16] {
+pub(crate) fn translate4(t: [f64; 3]) -> [f64; 16] {
     [
         1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2], 0.0, 0.0, 0.0, 1.0,
     ]
+}
+
+/// Rigid inverse of a row-major [R|t] 4×4（R 正交：转置 + −Rᵀt）。非刚体
+/// （含缩放）的矩阵必须用上面的通用 [`mat4_inv`]。
+pub(crate) fn rigid_inv(m: [f64; 16]) -> [f64; 16] {
+    let mut r = [0.0; 16];
+    for i in 0..3 {
+        for j in 0..3 {
+            r[i * 4 + j] = m[j * 4 + i];
+        }
+    }
+    let t = [m[3], m[7], m[11]];
+    for i in 0..3 {
+        r[i * 4 + 3] = -(r[i * 4] * t[0] + r[i * 4 + 1] * t[1] + r[i * 4 + 2] * t[2]);
+    }
+    r[15] = 1.0;
+    r
 }
 
 pub(crate) fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
@@ -110,8 +118,8 @@ pub(crate) fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
         }
         a.swap(c, p);
         let d = a[c][c];
-        for j in 0..8 {
-            a[c][j] /= d;
+        for v in a[c].iter_mut() {
+            *v /= d;
         }
         for r in 0..4 {
             if r == c {
@@ -119,8 +127,9 @@ pub(crate) fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
             }
             let f = a[r][c];
             if f != 0.0 {
-                for j in 0..8 {
-                    a[r][j] -= f * a[c][j];
+                let src = a[c];
+                for (dv, sv) in a[r].iter_mut().zip(src.iter()) {
+                    *dv -= f * sv;
                 }
             }
         }
@@ -204,7 +213,7 @@ pub(crate) fn face_local(geo: &Geometry, axis: usize, sign: f64) -> Option<([f64
                 let mut n = [0.0; 3];
                 n[axis] = sign * 2.0 * c.height;
                 n[2] = c.radius;
-                let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                let l = vec3_len(n);
                 Some((p, [n[0] / l, n[1] / l, n[2] / l]))
             }
         }
@@ -236,7 +245,7 @@ pub(crate) fn transform_normal(m: [f64; 16], n: [f64; 3]) -> [f64; 3] {
     for r in 0..3 {
         w[r] = inv[r] * n[0] + inv[4 + r] * n[1] + inv[8 + r] * n[2];
     }
-    let l = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+    let l = vec3_len(w);
     if l < 1e-12 {
         return n;
     }
@@ -295,13 +304,13 @@ fn validate_geometry_params(
                 "plane.n",
             )?;
             if vec3_dot(n, n) < 1e-24 {
-                return Err(format!("build: plane.n must not be zero"));
+                return Err("build: plane.n must not be zero".to_string());
             }
         }
         "torus" => {
             let arc = arg_num(args, "arc");
-            if !(arc > 0.0) || arc > std::f64::consts::TAU {
-                return Err(format!("build: torus.arc must be in (0, 2*pi]"));
+            if !(arc > 0.0 && arc <= std::f64::consts::TAU) {
+                return Err("build: torus.arc must be in (0, 2*pi]".to_string());
             }
         }
         "cyclide" => {
@@ -309,10 +318,10 @@ fn validate_geometry_params(
             let b = arg_num(args, "b");
             let d = arg_num(args, "d");
             if !(a > b && b > 0.0) {
-                return Err(format!("build: cyclide needs a > b > 0"));
+                return Err("build: cyclide needs a > b > 0".to_string());
             }
             if d <= 0.0 {
-                return Err(format!("build: cyclide.d must be > 0"));
+                return Err("build: cyclide.d must be > 0".to_string());
             }
         }
         _ => {}

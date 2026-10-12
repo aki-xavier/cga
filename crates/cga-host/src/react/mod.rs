@@ -573,11 +573,6 @@ impl<M> ReactSession<M> {
         self.exec(move |w| w.rpc(&call).map(|_| ()))
     }
 
-    /// 推入输入 + 重渲染 + 跑到静止（一帧，单次跨线程）。
-    pub fn apply_input(&mut self, json: &str) -> Result<DrainStats, ReactError> {
-        Ok(self.frame(FrameAction::Input { json })?.stats)
-    }
-
     /// 派发事件给某个实例（沿祖先链找第一个 `prop` 处理器），跑到静止，返回结果。
     pub fn dispatch(
         &mut self,

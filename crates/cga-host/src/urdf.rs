@@ -9,11 +9,11 @@
 //! Import: urdf-rs parses, JSX text is generated `jsx_gen`-style (flat,
 //! deterministic, parseable by construction).
 
-use cga_core::GeometryParams;
+use cga_core::{transform_dir, transform_point, vec3_len, GeometryParams};
 use cga_mesh::BakeExt;
 
 use crate::jsx::run_jsx;
-use crate::scene_build::{JointKind, Kinematics, SceneRun};
+use crate::scene_build::{rigid_inv, JointKind, Kinematics, SceneRun};
 use cga_gpu::geom_to_camera;
 
 fn uf(v: f64) -> String {
@@ -29,38 +29,6 @@ fn uf(v: f64) -> String {
 
 fn uv(v: [f64; 3]) -> String {
     format!("{} {} {}", uf(v[0]), uf(v[1]), uf(v[2]))
-}
-
-/// Rigid inverse of a row-major [R|t] 4×4.
-fn rigid_inv(m: [f64; 16]) -> [f64; 16] {
-    let mut r = [0.0; 16];
-    for i in 0..3 {
-        for j in 0..3 {
-            r[i * 4 + j] = m[j * 4 + i];
-        }
-    }
-    let t = [m[3], m[7], m[11]];
-    for i in 0..3 {
-        r[i * 4 + 3] = -(r[i * 4] * t[0] + r[i * 4 + 1] * t[1] + r[i * 4 + 2] * t[2]);
-    }
-    r[15] = 1.0;
-    r
-}
-
-fn xform_point(m: [f64; 16], p: [f64; 3]) -> [f64; 3] {
-    [
-        m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3],
-        m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7],
-        m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11],
-    ]
-}
-
-fn xform_dir(m: [f64; 16], v: [f64; 3]) -> [f64; 3] {
-    [
-        m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
-        m[4] * v[0] + m[5] * v[1] + m[6] * v[2],
-        m[8] * v[0] + m[9] * v[1] + m[10] * v[2],
-    ]
 }
 
 /// Fixed-axis rpy from a rotation 3×3: R = Rz(yaw)·Ry(pitch)·Rx(roll).
@@ -99,8 +67,8 @@ fn visual_of(
     let world = m.motor().to_matrix();
     let inv = rigid_inv(link_world);
     let p = geom_to_camera(&m.geometry, &m.motor());
-    let to_link_p = |q: [f64; 3]| xform_point(inv, q);
-    let to_link_d = |q: [f64; 3]| xform_dir(inv, q);
+    let to_link_p = |q: [f64; 3]| transform_point(inv, q);
+    let to_link_d = |q: [f64; 3]| transform_dir(inv, q);
     let (xyz, rpy, geom): ([f64; 3], [f64; 3], Option<String>) = match &p {
         GeometryParams::SphereParams(s) => (
             to_link_p(s.c),
@@ -140,7 +108,7 @@ fn visual_of(
                 z[0] * u[1] - z[1] * u[0],
             ];
             let c = z[0] * u[0] + z[1] * u[1] + z[2] * u[2];
-            let vn = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let vn = vec3_len(v);
             let rpy = if vn < 1e-12 {
                 if c > 0.0 {
                     [0.0; 3]
@@ -200,7 +168,7 @@ fn visual_of(
     let verts: Vec<[f64; 3]> = baked
         .vertices
         .iter()
-        .map(|v| xform_point(inv, *v))
+        .map(|v| transform_point(inv, *v))
         .collect();
     let data = cga_mesh::stl_binary(&verts, &baked.faces);
     let file = format!("meshes/{link}_{slot}.stl");

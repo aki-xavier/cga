@@ -369,12 +369,14 @@ crates/
                             screw-sweep CCD (certified, closed-form-checked)
   cga-mesh/                 mesh baking (watertight tessellation, certified) + STL encoding
                             (pure f64 CPU, cga-core only)
+  cga-scene/                scene model (pure CPU, zero MLX): Scene·Object·Object3D·Color·
+                            PerspectiveCamera·OrbitControls·Light·Material·CPU textures + PNG
+  cga-fastmetal/            safe wrapper over mlx-c's fast custom Metal kernel API
   cga-gpu/                  mlx-rs/Metal GPU kernels
-    mlxops / shading        scalar broadcast helpers, material lights and batched Blinn-Phong
-    scene / scene_graph     Object·Scene·PerspectiveCamera·OrbitControls, Vec3/Color
+    mlxops / shading        scalar broadcast helpers, batched Blinn-Phong, light_direction_at/light_far
     geometry_ops / geometry_extra / geom_kernels   blade analytic intersection (incl. cone/torus/ellipsoid/cyclide)
     csg / certify           recursive CSG booleans, certifiable root-finding and interval classification
-    texture / image_io / shading  textures, PNG, batched Blinn-Phong
+    texture / image_io      GPU texture sampling (GpuTexture + content-fingerprint cache), PNG encode/decode
     renderer                mlx-rs GPU batched ray tracing (SSAA/hard shadows/Whitted refraction), per-object frustum culling
   cga-host/                 scene authoring host (no mlx dependency)
     scene_build / scene_report  scene builders, kinematics registry, scene report text

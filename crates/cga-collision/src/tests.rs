@@ -726,12 +726,12 @@ fn box_box_mtv_exact_matches_brute_force() {
         };
         let t = sub(cb, ca);
         let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-            (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+            (0..3).map(|i| vec3_dot(l, axes[i]).abs() * half[i]).sum()
         };
         // 从 zonotope 端取 MTV 向量（内部可见）。
         let mtv = crate::pairs::box_mtv_exact(ca, aa, ha, cb, ab, hb);
-        let n = scale(mtv, 1.0 / exact);
-        let along = ext(n, aa, ha) + ext(n, ab, hb) - dot(t, n).abs();
+        let n = vec3_scale(mtv, 1.0 / exact);
+        let along = ext(n, aa, ha) + ext(n, ab, hb) - vec3_dot(t, n).abs();
         assert!(
             (along - exact).abs() < 1e-9,
             "MTV 方向的单向分离应恰等于 |MTV|: along={along} exact={exact}"
@@ -771,7 +771,7 @@ fn mtv_brute(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16], n_samples
     };
     let t = sub(cb, ca);
     let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+        (0..3).map(|i| vec3_dot(l, axes[i]).abs() * half[i]).sum()
     };
     let mut best = f64::INFINITY;
     let golden = std::f64::consts::PI * (3.0 - 5.0f64.sqrt());
@@ -780,7 +780,7 @@ fn mtv_brute(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16], n_samples
         let r = (1.0 - z * z).max(0.0).sqrt();
         let th = golden * i as f64;
         let n = [r * th.cos(), r * th.sin(), z];
-        best = best.min(ext(n, aa, ha) + ext(n, ab, hb) - dot(t, n).abs());
+        best = best.min(ext(n, aa, ha) + ext(n, ab, hb) - vec3_dot(t, n).abs());
     }
     best
 }
@@ -808,7 +808,7 @@ fn sat15_min(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> f64 {
     };
     let t = sub(cb, ca);
     let ext = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-        (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+        (0..3).map(|i| vec3_dot(l, axes[i]).abs() * half[i]).sum()
     };
     let mut best = f64::INFINITY;
     let mut sat = |l: [f64; 3]| {
@@ -816,15 +816,15 @@ fn sat15_min(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> f64 {
         if ll < 1e-9 {
             return;
         }
-        let l = scale(l, 1.0 / ll);
-        best = best.min(ext(l, aa, ha) + ext(l, ab, hb) - dot(t, l).abs());
+        let l = vec3_scale(l, 1.0 / ll);
+        best = best.min(ext(l, aa, ha) + ext(l, ab, hb) - vec3_dot(t, l).abs());
     };
     for ax in aa.iter().chain(ab.iter()) {
         sat(*ax);
     }
     for axa in aa {
         for axb in ab {
-            sat(cross(axa, axb));
+            sat(vec3_cross(axa, axb));
         }
     }
     best

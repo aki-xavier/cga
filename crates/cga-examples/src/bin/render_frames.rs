@@ -1,5 +1,6 @@
 //! 逐帧渲染：宿主每帧推入输入 `IN.t`，场景按 React 语义**局部**重渲染（props 监听），
 //! 然后重建场景并出图。hook 状态跨帧保留（示例场景用 useEffect 计帧数）。
+use cga_examples::load_scene;
 use cga_host::*;
 use clap::Parser;
 
@@ -26,30 +27,13 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let text =
-        std::fs::read_to_string(&args.src).unwrap_or_else(|_| panic!("cannot read {}", args.src));
-    let dir = match args.src.rfind('/') {
-        Some(i) => &args.src[..i],
-        None => ".",
-    };
+    let (text, css, dir) = load_scene(&args.src);
     let root = match dir.rfind('/') {
         Some(i) => dir[..i].to_string(),
         None => ".".to_string(),
     };
-    let mut css = String::new();
-    let mut rest = text.as_str();
-    while let Some(i) = rest.find(".css") {
-        let head = &rest[..i + 4];
-        if let Some(q) = head.rfind(['\'', '"']) {
-            let path = &head[q + 1..];
-            if path.starts_with("./") || path.starts_with("../") {
-                let p = format!("{dir}/{}", &path[2..]);
-                css.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
-            }
-        }
-        rest = &rest[i + 4..];
-    }
-    let mut sess = SceneSession::open(&text, Some(&css), &root).unwrap_or_else(|e| panic!("{e}"));
+    let mut sess =
+        SceneSession::open(&text, css.as_deref(), &root).unwrap_or_else(|e| panic!("{e}"));
     for i in 0..args.frames {
         let t = f64::from(i) / f64::from(args.frames);
         let stats = sess

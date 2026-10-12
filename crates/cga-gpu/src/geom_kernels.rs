@@ -2,11 +2,12 @@ use cga_core::{
     mat3_new, mat3_transpose, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry,
     GeometryParams, Mat3, Multivector,
 };
+use cga_scene::{identity3, vec3_unit};
 use mlx_rs::ops;
 use mlx_rs::Array;
 
 use crate::mlxops::*;
-use crate::{col, identity3, inf_like, tol, vec3_unit};
+use crate::{col, inf_like, tol};
 
 pub fn mat3_to_mlx(m: Mat3) -> Array {
     Array::from_slice(
@@ -112,11 +113,11 @@ pub(crate) fn child_ray_subset(child: &GeometryParams, o: &Array, d: &Array) -> 
         return None;
     }
     let n = o.shape()[0];
-    let to_c = ck(ck(o.negative()).add(&arr3v(c)));
+    let to_c = ck(ck(o.negative()).add(arr3v(c)));
     let proj = ck(ck(to_c.multiply(d)).sum_axes(&[-1], false));
     let perp2 =
-        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
-    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(s_ge(&proj, -r)));
     mask.eval().unwrap();
     let cnt = ck(mask.sum(None)).item_cast::<i32>();
     if cnt * 4 >= n * 3 {
@@ -152,21 +153,21 @@ fn child_crossings_subset(
     let m = idx.len() as i32;
     // 散布回全量：t/n/valid 的未选中行留 +inf / 0 / false
     let t_full = ck(ops::indexing::scatter_single(
-        &ck(ops::full::<f32>(&[b, c], &fs(f64::INFINITY))),
+        ck(ops::full::<f32>(&[b, c], &fs(f64::INFINITY))),
         &ids,
-        &ck(t_s.reshape(&[m, 1, c])),
+        ck(t_s.reshape(&[m, 1, c])),
         0,
     ));
     let n_full = ck(ops::indexing::scatter_single(
-        &ck(ops::zeros::<f32>(&[b, c, 3])),
+        ck(ops::zeros::<f32>(&[b, c, 3])),
         &ids,
-        &ck(n_s.reshape(&[m, 1, c, 3])),
+        ck(n_s.reshape(&[m, 1, c, 3])),
         0,
     ));
     let v_full_i = ck(ops::indexing::scatter_single(
-        &ck(ops::zeros::<i32>(&[b, c])),
+        ck(ops::zeros::<i32>(&[b, c])),
         &ids,
-        &ck(ck(v_s.as_type::<i32>()).reshape(&[m, 1, c])),
+        ck(ck(v_s.as_type::<i32>()).reshape(&[m, 1, c])),
         0,
     ));
     let v_full = ck(v_full_i.ne(Array::from_int(0)));
@@ -177,7 +178,7 @@ fn child_crossings_subset(
 fn child_crossings_empty(cp: &GeometryParams, o: &Array) -> (Array, Array, Array) {
     let b = o.shape()[0];
     let dummy_o = ck(ops::zeros::<f32>(&[1, 3]));
-    let dummy_d = ck(ck(ops::zeros::<f32>(&[1, 3])).add(&arr3v([0.0, 0.0, 1.0])));
+    let dummy_d = ck(ck(ops::zeros::<f32>(&[1, 3])).add(arr3v([0.0, 0.0, 1.0])));
     let (t1, _n1, _) = crate::geom_crossings(cp, &dummy_o, &dummy_d);
     let c = t1.shape()[1];
     (
@@ -292,7 +293,7 @@ fn convex_membership(child: &GeometryParams, ts: &Array, lo: i32, s: &Array) -> 
     let t_lo = ck(ops::minimum(&t0, &t1));
     let t_hi = ck(ops::maximum(&t0, &t1));
     let clean = s_gt(&ck(t_hi.subtract(&t_lo)), 1e-6); // 非退化（+inf 也在此被排除）
-    let inside = ck(ck(s.ge(&t_lo)).logical_and(&ck(s.le(&t_hi))));
+    let inside = ck(ck(s.ge(&t_lo)).logical_and(ck(s.le(&t_hi))));
     Some(ck(inside.logical_and(&clean)))
 }
 
@@ -319,9 +320,9 @@ fn child_contains_subset(
     let pts = ck(pts.reshape(&[m * k1, 3]));
     let mem = ck(ck(crate::geom_contains(child, &pts).as_type::<i32>()).reshape(&[m, k1]));
     let full_i = ck(ops::indexing::scatter_single(
-        &ck(ops::zeros::<i32>(&[b, k1])),
+        ck(ops::zeros::<i32>(&[b, k1])),
         &ids,
-        &ck(mem.reshape(&[m, 1, k1])),
+        ck(mem.reshape(&[m, 1, k1])),
         0,
     ));
     ck(full_i.ne(Array::from_int(0)))
@@ -370,7 +371,7 @@ fn csg_contains_culled(
         for m in &mems[1..] {
             rest = ck(rest.logical_or(m));
         }
-        return ck(first.logical_and(&ck(rest.logical_not())));
+        return ck(first.logical_and(ck(rest.logical_not())));
     }
     let mut acc = mems[0].clone();
     for m in &mems[1..] {
@@ -402,7 +403,7 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     let k1 = (k + 1) as i32;
 
     let ahead = ck(ck(ts.is_finite()).logical_and(s_gt(&ts, tol::T_MIN)));
-    let tf = ck(ops::select(&ahead, &ts, &inf_like(&ts)));
+    let tf = ck(ops::select(&ahead, &ts, inf_like(&ts)));
     let order = ck(ops::argsort_axis(&tf, 1));
     let tf = ck(tf.take_along_axis(&order, 1));
     let ns_s = ck(ns.take_along_axis(ck(order.expand_dims(2)), 1));
@@ -427,7 +428,7 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
         s_eq(&Array::from_slice(&last, &[1, k1]), 1.0),
         &[b, k1],
     ));
-    bc = ck(ops::select(&last, &inf_like(&bc), &bc));
+    bc = ck(ops::select(&last, inf_like(&bc), &bc));
 
     let a_fin = ck(a.is_finite());
     let b_fin = ck(bc.is_finite());
@@ -435,13 +436,13 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     let tail = ck(a_fin.logical_and(ck(b_fin.logical_not())));
     let mid = ck(ops::select(
         &both,
-        &ck(ck(a.add(&bc)).multiply(fs(0.5))),
-        &ck(ops::zeros_like(&a)),
+        ck(ck(a.add(&bc)).multiply(fs(0.5))),
+        ck(ops::zeros_like(&a)),
     ));
     let tail_s = ck(ck(a.add(fs(1.0))).multiply(fs(2.0)));
     let own_val = ck(ops::select(&tail, &tail_s, &mid));
     let gap = ck(bc.subtract(&a));
-    let wide = ck(both.logical_and(s_gt(&ck(gap.subtract(&tol::tol_arr(&a))), 0.0)));
+    let wide = ck(both.logical_and(s_gt(&ck(gap.subtract(tol::tol_arr(&a))), 0.0)));
     let own = ck(wide.logical_or(&tail));
 
     let mut s_cols: Vec<Array> = Vec::with_capacity(k + 1);
@@ -485,7 +486,7 @@ fn csg_nearest_surface(p: &CsgParams, o: &Array, d: &Array) -> (Array, Array, Ar
     ));
     let m0 = ck(mem.take_along_axis(&ga, 1));
     let m1 = ck(mem.take_along_axis(&gb, 1));
-    let near = ck(ck(tf.is_finite()).logical_and(s_gt(&ck(tf.subtract(&tol::tol_arr(&tf))), 0.0)));
+    let near = ck(ck(tf.is_finite()).logical_and(s_gt(&ck(tf.subtract(tol::tol_arr(&tf))), 0.0)));
     let flip = ck(ck(m0.ne(&m1)).logical_and(&near));
     let cand = ck(ops::select(&flip, &tf, inf_like(&tf)));
     let t = ck(cand.min_axes(&[1], false));
@@ -722,46 +723,18 @@ pub fn csg_bounds(p: &CsgParams) -> Option<[[f64; 3]; 2]> {
     Some([bmin, bmax])
 }
 
-#[allow(dead_code)]
-pub(crate) fn to_f32_3(v: &[[f64; 3]]) -> Vec<f32> {
-    let mut out = vec![0.0f32; v.len() * 3];
-    for i in 0..v.len() {
-        out[i * 3] = v[i][0] as f32;
-        out[i * 3 + 1] = v[i][1] as f32;
-        out[i * 3 + 2] = v[i][2] as f32;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{test_contains, test_ray};
     use cga_core::{
         decompose_rigid, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry, Multivector,
     };
 
-    fn tf_ray(x: f64, y: f64, z: f64) -> Array {
-        Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
-    }
-
-    fn tf_contains(g: &Geometry, m: &Multivector, pts: &[[f64; 3]]) -> Vec<bool> {
-        let p = geom_to_camera(g, m);
-        let mut flat: Vec<f32> = Vec::with_capacity(pts.len() * 3);
-        for q in pts {
-            flat.push(q[0] as f32);
-            flat.push(q[1] as f32);
-            flat.push(q[2] as f32);
-        }
-        let pos = Array::from_slice(&flat, &[pts.len() as i32, 3]);
-        let got = crate::geom_contains(&p, &pos);
-        got.eval().unwrap();
-        got.as_slice::<bool>().to_vec()
-    }
-
     fn tf_hit(g: &Geometry, m: &Multivector, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
         let p = geom_to_camera(g, m);
         let (t, n, mask) =
-            crate::geom_intersect(&p, &tf_ray(o[0], o[1], o[2]), &tf_ray(d[0], d[1], d[2]));
+            crate::geom_intersect(&p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
         n.eval().unwrap();
         t.eval().unwrap();
         mask.eval().unwrap();
@@ -778,7 +751,7 @@ mod tests {
         let g = Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0));
 
         assert_eq!(
-            tf_contains(
+            test_contains(
                 &g,
                 &Multivector::translator([1.0, 0.0, 0.0]),
                 &[[1.2, 0.0, 0.0], [1.6, 0.0, 0.0]]
@@ -787,7 +760,7 @@ mod tests {
         );
 
         assert_eq!(
-            tf_contains(
+            test_contains(
                 &g,
                 &Multivector::identity(),
                 &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]
@@ -805,7 +778,7 @@ mod tests {
             ],
         ));
         assert_eq!(
-            tf_contains(
+            test_contains(
                 &g,
                 &Multivector::translator([1.0, 0.0, 0.0]),
                 &[[1.2, 0.0, 0.0], [1.6, 0.0, 0.0]]
@@ -857,14 +830,10 @@ mod tests {
         assert!((f64::from(n[2]) - 1.0).abs() < 1e-2);
     }
 
-    fn em_ray(x: f64, y: f64, z: f64) -> Array {
-        Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
-    }
-
     fn em_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
         let p = geom_to_camera(g, &Multivector::identity());
         let (t, n, mask) =
-            crate::geom_intersect(&p, &em_ray(o[0], o[1], o[2]), &em_ray(d[0], d[1], d[2]));
+            crate::geom_intersect(&p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
         n.eval().unwrap();
         t.eval().unwrap();
         mask.eval().unwrap();
@@ -874,20 +843,6 @@ mod tests {
             [nd[0], nd[1], nd[2]],
             mask.as_slice::<bool>()[0],
         )
-    }
-
-    fn em_contains(g: &Geometry, pts: &[[f64; 3]]) -> Vec<bool> {
-        let p = geom_to_camera(g, &Multivector::identity());
-        let mut flat: Vec<f32> = Vec::with_capacity(pts.len() * 3);
-        for q in pts {
-            flat.push(q[0] as f32);
-            flat.push(q[1] as f32);
-            flat.push(q[2] as f32);
-        }
-        let pos = Array::from_slice(&flat, &[pts.len() as i32, 3]);
-        let got = crate::geom_contains(&p, &pos);
-        got.eval().unwrap();
-        got.as_slice::<bool>().to_vec()
     }
 
     #[test]
@@ -940,7 +895,11 @@ mod tests {
     fn test_cone_contains() {
         let g = Geometry::ConeGeometry(ConeGeometry::new(1.0, 2.0));
         assert_eq!(
-            em_contains(&g, &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]),
+            test_contains(
+                &g,
+                &Multivector::identity(),
+                &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.0]]
+            ),
             [true, false]
         );
     }
@@ -962,7 +921,11 @@ mod tests {
     fn test_torus_contains() {
         let g = Geometry::TorusGeometry(cga_core::TorusGeometry::new(1.0, 0.3));
         assert_eq!(
-            em_contains(&g, &[[1.0, 0.0, 0.1], [0.0, 0.0, 0.0]]),
+            test_contains(
+                &g,
+                &Multivector::identity(),
+                &[[1.0, 0.0, 0.1], [0.0, 0.0, 0.0]]
+            ),
             [true, false]
         );
     }
@@ -991,7 +954,11 @@ mod tests {
             std::f64::consts::PI,
         ));
         assert_eq!(
-            em_contains(&g, &[[0.0, 1.0, 0.1], [0.0, -1.0, 0.1], [1.0, 0.0, 0.1]]),
+            test_contains(
+                &g,
+                &Multivector::identity(),
+                &[[0.0, 1.0, 0.1], [0.0, -1.0, 0.1], [1.0, 0.0, 0.1]]
+            ),
             [true, false, true]
         );
     }

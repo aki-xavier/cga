@@ -64,40 +64,19 @@ pub struct Contact {
 }
 
 // ---- 小向量工具（本模块内的全部计算都是 CPU f64 标量） ----
+//
+// 定义全在 cga-core（canonical，唯一一份）；本模块的几何公式很密（`sub`/`add`/
+// `norm` 共 130+ 处），故以短别名引入，而不是把调用点全改成 `vec3_*`——纯粹为
+// 可读性。`unit` 保留为本地派生助手：它没有近零兜底（除以零得 inf），与
+// `cga_scene::vec3_unit` 的 `[0,0,1]` 兜底不是同一语义。
 
-pub(crate) fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-pub(crate) fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-pub(crate) fn scale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-pub(crate) fn norm(a: [f64; 3]) -> f64 {
-    dot(a, a).sqrt()
-}
+pub(crate) use cga_core::{
+    transform_dir, vec3_add as add, vec3_cross, vec3_dot, vec3_len as norm, vec3_scale,
+    vec3_sub as sub,
+};
+
 pub(crate) fn unit(a: [f64; 3]) -> [f64; 3] {
-    scale(a, 1.0 / norm(a))
-}
-pub(crate) fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-/// 方向向量的 3×3 变换（不含平移）。
-pub(crate) fn xform_dir(m: [f64; 16], v: [f64; 3]) -> [f64; 3] {
-    [
-        m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
-        m[4] * v[0] + m[5] * v[1] + m[6] * v[2],
-        m[8] * v[0] + m[9] * v[1] + m[10] * v[2],
-    ]
+    vec3_scale(a, 1.0 / norm(a))
 }
 
 /// 仿射 4×4 的逆（decompose_rigid 的极分解 + mat3_inv；奇异线性部分会 panic，
@@ -154,7 +133,7 @@ fn local_contains(g: &Geometry, p: [f64; 3]) -> Hit {
         Geometry::PlaneGeometry(pl) => {
             let n = pl.blade.euclidean_vector();
             let nl = norm(n);
-            bool_hit(dot(p, n) / nl <= pl.blade.einf_coeff() / nl)
+            bool_hit(vec3_dot(p, n) / nl <= pl.blade.einf_coeff() / nl)
         }
         Geometry::BoxGeometry(b) => {
             bool_hit(p.iter().zip(b.half.iter()).all(|(x, h)| x.abs() <= *h))

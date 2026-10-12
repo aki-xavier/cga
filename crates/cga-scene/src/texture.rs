@@ -92,18 +92,6 @@ pub fn texture_load(path: &str) -> Result<Texture, String> {
     Ok(Texture::from_u8_rgba(&rgba, w, h))
 }
 
-pub fn texture_from_png_bytes(data: &[u8]) -> Result<Texture, String> {
-    let (rgba, w, h) = decode_png_rgba(data)?;
-    Ok(Texture::from_u8_rgba(&rgba, w, h))
-}
-
-pub fn texture_from_bytes(data: &[u8]) -> Result<Texture, String> {
-    let img = image::load_from_memory(data).map_err(|e| format!("image decode failed: {e}"))?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Ok(Texture::from_u8_rgba(&rgba.into_raw(), w as i32, h as i32))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

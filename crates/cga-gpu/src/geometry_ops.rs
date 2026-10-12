@@ -12,7 +12,23 @@ pub(crate) fn col(a: &Array, i: i32) -> Array {
     ck(a.take_axis(Array::from_slice(&[i], &[]), -1))
 }
 
-pub fn sphere_intersect(p: SphereParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+/// 二元二次式的根选择：近根落在原点前方（`> 1e-6`）时取近根，否则退回远根，
+/// 全程受 `valid` 掩码约束。`sphere_intersect`/`sphere_shadow`、
+/// `cylinder_side`、`ellipsoid_intersect`/`ellipsoid_shadow` 五处逐字相同。
+#[inline]
+pub(crate) fn near_root(valid: &Array, t1: &Array, t2: &Array) -> Array {
+    ck(ops::select(ck(valid.logical_and(s_gt(t1, 1e-6))), t1, t2))
+}
+
+/// 球面射线求交的公共前导：把光线局部化到球心，给出二次式系数与两根。
+/// `sphere_intersect`、`sphere_shadow`、`csg::sphere_crossings` 的这段算子
+/// 序列逐字相同（含 `1e-12` 判别式阈值），故三者共用。
+#[inline]
+pub(crate) fn sphere_ray_quad(
+    p: SphereParams,
+    o: &Array,
+    d: &Array,
+) -> (Array, Array, Array, Array, Array, Array, Array) {
     let c = arr3v(p.c);
     let oc = ck(o.subtract(&c));
     let b = s_mul(&ck(ck(oc.multiply(d)).sum_axes(&[-1], false)), 2.0);
@@ -22,11 +38,12 @@ pub fn sphere_intersect(p: SphereParams, o: &Array, d: &Array) -> (Array, Array,
     let sq = ck(s_max(&disc, 0.0).sqrt());
     let t1 = s_div(&ck(ck(b.negative()).subtract(&sq)), 2.0);
     let t2 = s_div(&ck(ck(b.negative()).add(&sq)), 2.0);
-    let t = ck(ops::select(
-        ck(valid.logical_and(s_gt(&t1, 1e-6))),
-        &t1,
-        &t2,
-    ));
+    (c, b, cq, disc, valid, t1, t2)
+}
+
+pub fn sphere_intersect(p: SphereParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (c, _b, _cq, _disc, valid, t1, t2) = sphere_ray_quad(p, o, d);
+    let t = near_root(&valid, &t1, &t2);
     let mask = ck(valid.logical_and(s_gt(&t, 1e-6)));
     let hit = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
     let mut n = s_div(&ck(hit.subtract(&c)), p.r);
@@ -41,20 +58,8 @@ pub fn sphere_intersect(p: SphereParams, o: &Array, d: &Array) -> (Array, Array,
 }
 
 pub fn sphere_shadow(p: SphereParams, o: &Array, d: &Array) -> (Array, Array) {
-    let c = arr3v(p.c);
-    let oc = ck(o.subtract(&c));
-    let b = s_mul(&ck(ck(oc.multiply(d)).sum_axes(&[-1], false)), 2.0);
-    let cq = s_sub(&ck(ck(oc.multiply(&oc)).sum_axes(&[-1], false)), p.r * p.r);
-    let disc = ck(ck(b.multiply(&b)).subtract(s_mul(&cq, 4.0)));
-    let valid = s_gt(&disc, 1e-12);
-    let sq = ck(s_max(&disc, 0.0).sqrt());
-    let t1 = s_div(&ck(ck(b.negative()).subtract(&sq)), 2.0);
-    let t2 = s_div(&ck(ck(b.negative()).add(&sq)), 2.0);
-    let t = ck(ops::select(
-        ck(valid.logical_and(s_gt(&t1, 1e-6))),
-        &t1,
-        &t2,
-    ));
+    let (_c, _b, _cq, _disc, valid, t1, t2) = sphere_ray_quad(p, o, d);
+    let t = near_root(&valid, &t1, &t2);
     (t.clone(), ck(valid.logical_and(s_gt(&t, 1e-6))))
 }
 
@@ -85,11 +90,20 @@ pub fn sphere_uv(p: SphereParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-pub fn plane_intersect(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+/// 平面射线求交的公共前导：法与面、分母、`t` 与命中掩码。
+/// `plane_intersect` 与 `plane_shadow` 逐字相同；`csg::plane_crossings`
+/// 用了被夹进 `1e-9` 的 `safe` 分母与形状不同的 `valid`，**不**共用。
+#[inline]
+pub(crate) fn plane_ray(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let n = arr3v(p.n);
     let denom = ck(ck(n.multiply(d)).sum_axes(&[-1], false));
     let t = ck(s_rsub(&ck(ck(n.multiply(o)).sum_axes(&[-1], false)), p.d).divide(&denom));
     let mask = ck(s_gt(&ck(denom.abs()), 1e-9).logical_and(s_gt(&t, 1e-6)));
+    (n, t, mask)
+}
+
+pub fn plane_intersect(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (n, t, mask) = plane_ray(p, o, d);
     let n_rep = ck(ops::broadcast_to(&n, o.shape()));
     let n_out = ck(ops::select(
         ck(mask.expand_dims(1)),
@@ -100,10 +114,7 @@ pub fn plane_intersect(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array, A
 }
 
 pub fn plane_shadow(p: PlaneParams, o: &Array, d: &Array) -> (Array, Array) {
-    let n = arr3v(p.n);
-    let denom = ck(ck(n.multiply(d)).sum_axes(&[-1], false));
-    let t = ck(s_rsub(&ck(ck(n.multiply(o)).sum_axes(&[-1], false)), p.d).divide(&denom));
-    let mask = ck(s_gt(&ck(denom.abs()), 1e-9).logical_and(s_gt(&t, 1e-6)));
+    let (_n, t, mask) = plane_ray(p, o, d);
     (t, mask)
 }
 
@@ -111,7 +122,14 @@ pub fn plane_uv(_p: PlaneParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&col(pos, 0), &col(pos, 2)], -1))
 }
 
-fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array, Array) {
+/// 柱面射线求交的局部坐标系分解：把 `o`、`d` 拆成轴向与径向分量。
+/// `geometry_ops::cylinder_side` 与 `csg::cylinder_crossings` 逐字相同。
+#[inline]
+pub(crate) fn cylinder_local(
+    p: CylinderParams,
+    o: &Array,
+    d: &Array,
+) -> (Array, Array, Array, Array, Array, Array) {
     let q = arr3v(p.q);
     let u = arr3v(p.u);
     let oc = ck(o.subtract(&q));
@@ -119,22 +137,33 @@ fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Arra
     let o_par = ck(ck(oc.multiply(&u)).sum_axes(&[-1], true));
     let d_p = ck(d.subtract(ck(d_par.multiply(&u))));
     let o_p = ck(oc.subtract(ck(o_par.multiply(&u))));
-    let a = ck(ck(d_p.multiply(&d_p)).sum_axes(&[-1], false));
-    let b = s_mul(&ck(ck(o_p.multiply(&d_p)).sum_axes(&[-1], false)), 2.0);
-    let cq = s_sub(
-        &ck(ck(o_p.multiply(&o_p)).sum_axes(&[-1], false)),
-        p.r * p.r,
-    );
+    (q, u, d_par, o_par, d_p, o_p)
+}
+
+/// 柱面径向二次式：系数、判别式、有效性掩码与两根。
+/// `geometry_ops::cylinder_side` 与 `csg::cylinder_crossings` 逐字相同
+/// （两处本来就都要两根，合并不会多算）。
+#[inline]
+pub(crate) fn cylinder_quad(
+    d_p: &Array,
+    o_p: &Array,
+    r: f64,
+) -> (Array, Array, Array, Array, Array, Array, Array) {
+    let a = ck(ck(d_p.multiply(d_p)).sum_axes(&[-1], false));
+    let b = s_mul(&ck(ck(o_p.multiply(d_p)).sum_axes(&[-1], false)), 2.0);
+    let cq = s_sub(&ck(ck(o_p.multiply(o_p)).sum_axes(&[-1], false)), r * r);
     let disc = ck(ck(b.multiply(&b)).subtract(s_mul(&ck(a.multiply(&cq)), 4.0)));
     let valid = ck(s_gt(&a, 1e-12).logical_and(s_gt(&disc, 1e-12)));
     let sq = ck(s_max(&disc, 0.0).sqrt());
     let t1 = ck(ck(ck(b.negative()).subtract(&sq)).divide(s_mul(&a, 2.0)));
     let t2 = ck(ck(ck(b.negative()).add(&sq)).divide(s_mul(&a, 2.0)));
-    let t = ck(ops::select(
-        ck(valid.logical_and(s_gt(&t1, 1e-6))),
-        &t1,
-        &t2,
-    ));
+    (a, b, cq, disc, valid, t1, t2)
+}
+
+fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array, Array) {
+    let (_q, _u, _d_par, o_par, d_p, o_p) = cylinder_local(p, o, d);
+    let (_a, _b, _cq, _disc, valid, t1, t2) = cylinder_quad(&d_p, &o_p, p.r);
+    let t = near_root(&valid, &t1, &t2);
     let mask = ck(valid.logical_and(s_gt(&t, 1e-6)));
     let hit = ck(o_p.add(ck(ck(t.expand_dims(1)).multiply(&d_p))));
     let mut n = s_div(&hit, p.r);
@@ -143,16 +172,21 @@ fn cylinder_side(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Arra
     (t, n, mask, o_par)
 }
 
-pub fn cylinder_intersect(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    let (t, mut n, mask, o_par) = cylinder_side(p, o, d);
-    n = ck(ops::select(
-        ck(mask.expand_dims(1)),
-        &n,
-        ck(ops::zeros_like(&n)),
-    ));
-    if p.h < 0.0 {
-        return (t, n, mask);
-    }
+/// 有限柱面（`h >= 0`）的两端盖处理：端盖交点、侧面/端盖混合候选与最近
+/// 有效 `t`。`cylinder_intersect` 与 `cylinder_shadow` 的这 29 行逐字相同
+/// （含 `1e-9`/`1e-6` 常量与 `cap_ok` 的与运算顺序），故两者共用。
+///
+/// 局部法线 `n_cap` 只被 `*_intersect` 用到，留在调用方算，避免给
+/// `*_shadow` 增加额外算子。
+#[inline]
+fn cylinder_caps(
+    p: CylinderParams,
+    o: &Array,
+    d: &Array,
+    o_par: &Array,
+    t: &Array,
+    mask: &Array,
+) -> (Array, Array, Array, Array) {
     let h = p.h;
     let u = arr3v(p.u);
     let q = arr3v(p.q);
@@ -162,8 +196,8 @@ pub fn cylinder_intersect(p: CylinderParams, o: &Array, d: &Array) -> (Array, Ar
     let denom = col(&d_par, 0);
     let cap_t = ck(ops::stack(
         &[
-            &ck(s_rsub(&col(&o_par, 0), h).divide(&denom)),
-            &ck(s_rsub(&col(&o_par, 0), -h).divide(&denom)),
+            &ck(s_rsub(&col(o_par, 0), h).divide(&denom)),
+            &ck(s_rsub(&col(o_par, 0), -h).divide(&denom)),
         ],
         -1,
     ));
@@ -183,17 +217,31 @@ pub fn cylinder_intersect(p: CylinderParams, o: &Array, d: &Array) -> (Array, Ar
         &ck(ck(lat.multiply(&lat)).sum_axes(&[-1], false)),
         p.r * p.r,
     )));
-    let n_cap1 =
-        ck(ck(ck(ck(ops::sign(&denom)).negative()).expand_dims(1)).multiply(ck(u.expand_dims(0))));
-    let n_cap = ck(ops::stack(&[&n_cap1, &n_cap1], 1));
-    let t_all = ck(ops::stack(&[&t, &col(&cap_t, 0), &col(&cap_t, 1)], -1));
+    let t_all = ck(ops::stack(&[t, &col(&cap_t, 0), &col(&cap_t, 1)], -1));
     let ok_all = ck(ops::stack(
         &[&side_ok, &col(&cap_ok, 0), &col(&cap_ok, 1)],
         -1,
     ));
     let t_eff = ck(ops::select(&ok_all, &t_all, crate::inf_like(&t_all)));
     let t_min = ck(t_eff.min_axes(&[-1], false));
+    (u, denom, t_eff, t_min)
+}
+
+pub fn cylinder_intersect(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (t, mut n, mask, o_par) = cylinder_side(p, o, d);
+    n = ck(ops::select(
+        ck(mask.expand_dims(1)),
+        &n,
+        ck(ops::zeros_like(&n)),
+    ));
+    if p.h < 0.0 {
+        return (t, n, mask);
+    }
+    let (u, denom, t_eff, t_min) = cylinder_caps(p, o, d, &o_par, &t, &mask);
     let idx = ck(ops::indexing::argmin_axis(&t_eff, -1, false));
+    let n_cap1 =
+        ck(ck(ck(ck(ops::sign(&denom)).negative()).expand_dims(1)).multiply(ck(u.expand_dims(0))));
+    let n_cap = ck(ops::stack(&[&n_cap1, &n_cap1], 1));
     let n_all = ck(ops::stack(
         &[
             &n,
@@ -227,43 +275,7 @@ pub fn cylinder_shadow(p: CylinderParams, o: &Array, d: &Array) -> (Array, Array
     if p.h < 0.0 {
         return (t, mask);
     }
-    let h = p.h;
-    let u = arr3v(p.u);
-    let q = arr3v(p.q);
-    let d_par = ck(ck(d.multiply(&u)).sum_axes(&[-1], true));
-    let s = ck(o_par.add(ck(ck(t.expand_dims(1)).multiply(&d_par))));
-    let side_ok = ck(mask.logical_and(s_le(&col(&ck(s.abs()), 0), h)));
-    let denom = col(&d_par, 0);
-    let cap_t = ck(ops::stack(
-        &[
-            &ck(s_rsub(&col(&o_par, 0), h).divide(&denom)),
-            &ck(s_rsub(&col(&o_par, 0), -h).divide(&denom)),
-        ],
-        -1,
-    ));
-    let mut cap_ok = ck(ops::broadcast_to(
-        ck(s_gt(&ck(denom.abs()), 1e-9).expand_dims(1)),
-        &[o.shape()[0], 2],
-    ));
-    cap_ok = ck(cap_ok.logical_and(s_gt(&cap_t, 1e-6)));
-    let p_cap =
-        ck(ck(o.expand_dims(1)).add(ck(ck(cap_t.expand_dims(2)).multiply(ck(d.expand_dims(1))))));
-    let rel = ck(p_cap.subtract(ck(ck(q.expand_dims(0)).expand_dims(0))));
-    let u00 = ck(ck(u.expand_dims(0)).expand_dims(0));
-    let lat = ck(rel.subtract(ck(
-        ck(ck(rel.multiply(&u00)).sum_axes(&[-1], true)).multiply(&u00)
-    )));
-    cap_ok = ck(cap_ok.logical_and(s_le(
-        &ck(ck(lat.multiply(&lat)).sum_axes(&[-1], false)),
-        p.r * p.r,
-    )));
-    let t_all = ck(ops::stack(&[&t, &col(&cap_t, 0), &col(&cap_t, 1)], -1));
-    let ok_all = ck(ops::stack(
-        &[&side_ok, &col(&cap_ok, 0), &col(&cap_ok, 1)],
-        -1,
-    ));
-    let t_eff = ck(ops::select(&ok_all, &t_all, crate::inf_like(&t_all)));
-    let t_min = ck(t_eff.min_axes(&[-1], false));
+    let (_u, _denom, _t_eff, t_min) = cylinder_caps(p, o, d, &o_par, &t, &mask);
     let fin = ck(ck(t_min.is_finite()).logical_and(s_gt(&t_min, 1e-6)));
     (ck(ops::select(&fin, &t_min, &t)), fin)
 }
@@ -313,7 +325,15 @@ pub fn cylinder_uv(p: CylinderParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+/// 盒体射线求交的公共前导：把光线变换到盒的局部轴、算三对平板交点的
+/// `tmin/tmax` 与其最大/最小值。`box_intersect`、`box_shadow`、
+/// `csg::box_crossings` 三处的这段算子序列逐字相同（三处**都**已经算了
+/// `tmin/tmax/dp`，故合并不会多算）。
+///
+/// 注意：三处的 `valid` **不同**（前两者要 `t_exit > 1e-6`，`box_crossings`
+/// 只判 `t_entry < t_exit`），法线提取方式也不同，因此不并入本 helper。
+#[inline]
+pub(crate) fn box_slab(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array, Array, Array) {
     let c = arr3v(p.c);
     let oc = ck(o.subtract(&c));
     let ax0 = arr3v(p.axes[0]);
@@ -343,15 +363,29 @@ pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array
     let tmax = ck(ops::maximum(&t0, &t1));
     let t_entry = ck(tmin.max_axes(&[-1], false));
     let t_exit = ck(tmax.min_axes(&[-1], false));
-    let valid = ck(ck(t_entry.lt(&t_exit)).logical_and(s_gt(&t_exit, 1e-6)));
-    let i_entry = ck(ops::indexing::argmax_axis(&tmin, -1, false));
-    let i_exit = ck(ops::indexing::argmin_axis(&tmax, -1, false));
-    let inside_hit = ck(valid.logical_and(s_le(&t_entry, 1e-6)));
+    (tmin, tmax, t_entry, t_exit, dp)
+}
+
+/// 盒体命中根选择：`valid` 判据 + 「从外面看取入射面、从里面看取出射面」。
+/// `box_intersect` 与 `box_shadow` 逐字相同；`csg::box_crossings` 有自己的
+/// `valid`（不含 `t_exit > 1e-6`），**不**共用。
+#[inline]
+fn box_hit_root(t_entry: &Array, t_exit: &Array) -> (Array, Array, Array) {
+    let valid = ck(ck(t_entry.lt(t_exit)).logical_and(s_gt(t_exit, 1e-6)));
+    let inside_hit = ck(valid.logical_and(s_le(t_entry, 1e-6)));
     let t = ck(ops::select(
         ck(valid.logical_and(ck(inside_hit.logical_not()))),
-        &t_entry,
-        &t_exit,
+        t_entry,
+        t_exit,
     ));
+    (valid, inside_hit, t)
+}
+
+pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (tmin, tmax, t_entry, t_exit, dp) = box_slab(p, o, d);
+    let i_entry = ck(ops::indexing::argmax_axis(&tmin, -1, false));
+    let i_exit = ck(ops::indexing::argmin_axis(&tmax, -1, false));
+    let (valid, inside_hit, t) = box_hit_root(&t_entry, &t_exit);
     let eye = ck(ops::eye::<f32>(3, Some(3), Some(0)));
 
     let n_e = ck(
@@ -381,42 +415,8 @@ pub fn box_intersect(p: BoxParams, o: &Array, d: &Array) -> (Array, Array, Array
 }
 
 pub fn box_shadow(p: BoxParams, o: &Array, d: &Array) -> (Array, Array) {
-    let c = arr3v(p.c);
-    let oc = ck(o.subtract(&c));
-    let ax0 = arr3v(p.axes[0]);
-    let ax1 = arr3v(p.axes[1]);
-    let ax2 = arr3v(p.axes[2]);
-    let op = ck(ops::stack(
-        &[
-            &ck(ck(oc.multiply(&ax0)).sum_axes(&[-1], false)),
-            &ck(ck(oc.multiply(&ax1)).sum_axes(&[-1], false)),
-            &ck(ck(oc.multiply(&ax2)).sum_axes(&[-1], false)),
-        ],
-        -1,
-    ));
-    let dp = ck(ops::stack(
-        &[
-            &ck(ck(d.multiply(&ax0)).sum_axes(&[-1], false)),
-            &ck(ck(d.multiply(&ax1)).sum_axes(&[-1], false)),
-            &ck(ck(d.multiply(&ax2)).sum_axes(&[-1], false)),
-        ],
-        -1,
-    ));
-    let inv = s_rdiv(&dp, 1.0);
-    let half_a = arr3v(p.half);
-    let t0 = ck(ck(inv.negative()).multiply(ck(op.add(&half_a))));
-    let t1 = ck(ck(inv.negative()).multiply(ck(op.subtract(&half_a))));
-    let tmin = ck(ops::minimum(&t0, &t1));
-    let tmax = ck(ops::maximum(&t0, &t1));
-    let t_entry = ck(tmin.max_axes(&[-1], false));
-    let t_exit = ck(tmax.min_axes(&[-1], false));
-    let valid = ck(ck(t_entry.lt(&t_exit)).logical_and(s_gt(&t_exit, 1e-6)));
-    let inside_hit = ck(valid.logical_and(s_le(&t_entry, 1e-6)));
-    let t = ck(ops::select(
-        ck(valid.logical_and(ck(inside_hit.logical_not()))),
-        &t_entry,
-        &t_exit,
-    ));
+    let (_tmin, _tmax, t_entry, t_exit, _dp) = box_slab(p, o, d);
+    let (valid, _inside_hit, t) = box_hit_root(&t_entry, &t_exit);
     (t, valid)
 }
 
@@ -464,12 +464,14 @@ pub fn box_uv(p: BoxParams, pos: &Array, _n: &Array) -> Array {
     ))
 }
 
-pub fn circle_intersect(p: CircleParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+/// 圆盘射线求交的公共前导。`circle_intersect` 与 `circle_shadow` 逐字相同；
+/// 圆不是实体，没有 `*_crossings` 版本。
+#[inline]
+pub(crate) fn circle_ray(p: CircleParams, o: &Array, d: &Array) -> (Array, Array, Array, Array) {
     let c = arr3v(p.c);
     let n = arr3v(p.n);
     let denom = ck(ck(n.multiply(d)).sum_axes(&[-1], false));
     let t = ck(ck(ck(n.multiply(ck(c.subtract(o)))).sum_axes(&[-1], false)).divide(&denom));
-    let front = s_lt(&denom, 0.0);
     let hit = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
     let diff = ck(hit.subtract(&c));
     let in_disc = s_le(
@@ -478,6 +480,12 @@ pub fn circle_intersect(p: CircleParams, o: &Array, d: &Array) -> (Array, Array,
     );
     let mask =
         ck(ck(s_gt(&ck(denom.abs()), 1e-9).logical_and(s_gt(&t, 1e-6))).logical_and(&in_disc));
+    (n, denom, t, mask)
+}
+
+pub fn circle_intersect(p: CircleParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (n, denom, t, mask) = circle_ray(p, o, d);
+    let front = s_lt(&denom, 0.0);
     let n2 = ck(ops::select(ck(front.expand_dims(1)), &n, ck(n.negative())));
     let n_out = ck(ops::select(
         ck(mask.expand_dims(1)),
@@ -488,18 +496,7 @@ pub fn circle_intersect(p: CircleParams, o: &Array, d: &Array) -> (Array, Array,
 }
 
 pub fn circle_shadow(p: CircleParams, o: &Array, d: &Array) -> (Array, Array) {
-    let c = arr3v(p.c);
-    let n = arr3v(p.n);
-    let denom = ck(ck(n.multiply(d)).sum_axes(&[-1], false));
-    let t = ck(ck(ck(n.multiply(ck(c.subtract(o)))).sum_axes(&[-1], false)).divide(&denom));
-    let hit = ck(o.add(ck(ck(t.expand_dims(1)).multiply(d))));
-    let diff = ck(hit.subtract(&c));
-    let in_disc = s_le(
-        &ck(ck(diff.multiply(&diff)).sum_axes(&[-1], false)),
-        p.r * p.r,
-    );
-    let mask =
-        ck(ck(s_gt(&ck(denom.abs()), 1e-9).logical_and(s_gt(&t, 1e-6))).logical_and(&in_disc));
+    let (_n, _denom, t, mask) = circle_ray(p, o, d);
     (t, mask)
 }
 

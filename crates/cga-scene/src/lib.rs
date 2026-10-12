@@ -11,7 +11,7 @@ use cga_core::Mat3;
 
 // 场景模型的公开 API 里嵌着这些类型（Object.geometry、PerspectiveCamera.motor、
 // Light::to_camera…），随本 crate 一并重导出。
-pub use cga_core::{clamp01, vec3_cross, Geometry, Multivector};
+pub use cga_core::{clamp01, vec3_cross, vec3_dot, vec3_len, Geometry, Multivector};
 
 pub mod color;
 pub use self::color::*;
@@ -45,15 +45,11 @@ pub mod scene;
 pub use self::scene::*;
 
 pub fn vec3_unit(a: [f64; 3]) -> [f64; 3] {
-    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    let n = vec3_len(a);
     if n < 1e-12 {
         return [0.0, 0.0, 1.0];
     }
     [a[0] / n, a[1] / n, a[2] / n]
-}
-
-pub fn vec3_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 pub fn srgb_to_linear(c: f64) -> f64 {

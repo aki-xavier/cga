@@ -5,12 +5,12 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use cga_core::Multivector;
+use cga_core::{mat4_mul, Multivector};
 use cga_scene::Color;
 
-use crate::scene_build::JointKind;
+use crate::scene_build::{translate4, JointKind};
+use crate::test_util::fnv1a;
 
-use super::builder::{mat4_mul, translate4};
 use super::session::build_scene_run;
 use super::*;
 
@@ -120,20 +120,11 @@ fn gallery_render_golden() {
 
 fn render_png(run: &crate::SceneRun) -> Vec<u8> {
     let mut r = cga_gpu::Renderer::new(96, 72, 1, 3);
-    let img = r.render(run.scene.clone(), run.camera.clone());
+    let img = r.render(run.scene.clone(), run.camera);
     cga_gpu::frame_to_png_bytes(&img)
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
-
-/// ---- P2：宿主输入（props 监听）与事件派发 → 动态局部重渲染 ----
+// ---- P2：宿主输入（props 监听）与事件派发 → 动态局部重渲染 ----
 
 const DIAL_SCENE: &str = r#"
 const { useContext, useState } = React;
@@ -351,12 +342,8 @@ fn session_drag_pick_grabs_hit_point() {
         .expect("命中 l2");
     assert_eq!(d.link, "l2");
     assert!(d.residual < 1e-6, "残差 {}", d.residual);
-    for i in 0..3 {
-        assert!(
-            (d.grab[i] - to[i]).abs() < 1e-6,
-            "抓取点应达目标: {:?}",
-            d.grab
-        );
+    for (g, t) in d.grab.iter().zip(to.iter()) {
+        assert!((g - t).abs() < 1e-6, "抓取点应达目标: {:?}", d.grab);
     }
     // 命中静态物体（base 不在路径上也有 pair，但 ground 类无 link 的对象 → None）：
     // 本场景全部对象都在 link 下，改用未命中像素断言 None。
@@ -534,7 +521,7 @@ fn scene_session_dispatch_updates_state_across_frames() {
     );
 }
 
-/// ---- .jsx 模块导入（编译期打包：globalThis.__exp_N + 别名）----
+// ---- .jsx 模块导入（编译期打包：globalThis.__exp_N + 别名）----
 
 fn object_xs(s: &SceneSession) -> Vec<f64> {
     s.run()
@@ -1648,9 +1635,7 @@ fn test_css_attribute_selector() {
     assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
     let run = run_jsx(src, Some("[id=\"other\"] { color: #0D0D0D; }"), "").expect("run");
     assert_eq!(hx(&run.scene.objects[0].material.color), 0xFFFFFF);
-    let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some("[id^=\"s\"] { color: red; }"), "").expect_err("should fail");
     assert!(e.contains("unsupported attribute"), "{e}");
 }
 
@@ -1661,9 +1646,7 @@ fn test_css_selector_list_split() {
     let run = run_jsx(src, Some("[class=\"a,b\"], #zz { color: #0D0D0D; }"), "").expect("run");
     assert_eq!(hx(&run.scene.objects[0].material.color), 0x0D0D0D);
     // 尾逗号 → 空选择器，必须报错而不是被吞掉。
-    let e = run_jsx(src, Some(".a, { color: red; }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".a, { color: red; }"), "").expect_err("should fail");
     assert!(e.contains("CSS:"), "{e}");
 }
 
@@ -1810,7 +1793,7 @@ fn test_css_values() {
     let run = run_one("c", ".c { unlit: true; }");
     assert_eq!(
         run.scene.objects[0].material.kind,
-        cga_gpu::shading::MaterialKind::Basic
+        cga_scene::MaterialKind::Basic
     );
 
     // var() 替换 + fallback
@@ -1834,25 +1817,15 @@ fn test_css_values() {
 #[test]
 fn test_css_value_errors() {
     let src = r#"export default <sphere r={1} class="c" />;"#;
-    let e = run_jsx(src, Some(".c { roughness: blorble; }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".c { roughness: blorble; }"), "").expect_err("should fail");
     assert!(e.contains("CSS:") && e.contains("blorble"), "{e}");
-    let e = run_jsx(src, Some(".c { roughness: 2px; }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".c { roughness: 2px; }"), "").expect_err("should fail");
     assert!(e.contains("CSS:") && e.contains("unit"), "{e}");
-    let e = run_jsx(src, Some(".c { color: var(--missing); }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".c { color: var(--missing); }"), "").expect_err("should fail");
     assert!(e.contains("CSS:") && e.contains("--missing"), "{e}");
-    let e = run_jsx(src, Some(".c { color: currentcolor; }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".c { color: currentcolor; }"), "").expect_err("should fail");
     assert!(e.contains("CSS:") && e.contains("not supported"), "{e}");
-    let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx(src, Some(".c { roughness: calc(1 + 1); }"), "").expect_err("should fail");
     assert!(e.contains("CSS:") && e.contains("calc"), "{e}");
 }
 
@@ -1867,13 +1840,12 @@ fn test_css_unsupported_constructs_error() {
         ("@keyframes spin { from { opacity: 1; } }", "@keyframes"),
     ];
     for (css, want) in cases {
-        let e = run_jsx(src, Some(css), "").err().expect("should fail");
+        let e = run_jsx(src, Some(css), "").expect_err("should fail");
         assert!(e.contains("CSS:") && e.contains(want), "css={css} err={e}");
     }
     // 嵌套规则：lightningcss 能解析，但我们不支持 → 必须报错而不是静默丢弃。
-    let e = run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "")
-        .err()
-        .expect("should fail");
+    let e =
+        run_jsx(src, Some(".c { color: red; .d { color: blue; } }"), "").expect_err("should fail");
     assert!(e.contains("CSS:"), "{e}");
 }
 
@@ -1988,7 +1960,7 @@ fn test_settle_pendulum_and_double() {
     assert!(get("j2").abs() < 1e-5, "{out2:?}");
 }
 
-/// ---- B：速度级运动学（twist/雅可比/活动度/奇异性） ----
+// ---- B：速度级运动学（twist/雅可比/活动度/奇异性） ----
 
 /// 每种副类型一个场景：base → l，副 at=[1,0,0]，带给定 q。
 fn twist_run(kind: &str, extra: &str, q: &str) -> crate::SceneRun {
@@ -2327,22 +2299,14 @@ fn test_jsx_link_pair_gear() {
 
 #[test]
 fn test_jsx_errors() {
-    let e = run_jsx("export default <sphere", None, "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx("export default <sphere", None, "").expect_err("should fail");
     assert!(e.starts_with("JSX line 1: "), "{e}");
-    let e = run_jsx("export default <frob />;", None, "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx("export default <frob />;", None, "").expect_err("should fail");
     assert!(e.contains("unknown primitive frob"), "{e}");
     // 带未知参数的未知元素先报参数错。
-    let e = run_jsx("export default <frob r={1} />;", None, "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx("export default <frob r={1} />;", None, "").expect_err("should fail");
     assert!(e.contains("frob has no parameter r"), "{e}");
-    let e = run_jsx("const a = 1;", None, "")
-        .err()
-        .expect("should fail");
+    let e = run_jsx("const a = 1;", None, "").expect_err("should fail");
     assert_eq!(e, "JSX: scene file must end with export default <element>");
 }
 
@@ -2366,8 +2330,7 @@ export default <sphere r={0.1} />;"#,
         None,
         "",
     )
-    .err()
-    .expect("should fail");
+    .expect_err("should fail");
     assert!(e.contains("did not converge"), "{e}");
 
     // pose：pair 级覆盖 + 报告 pose 行。
@@ -2448,8 +2411,7 @@ fn test_jsx_pair_components() {
         None,
         "",
     )
-    .err()
-    .expect("should fail");
+    .expect_err("should fail");
     assert!(
         e.contains("cam 引用未知 link"),
         "Cam 组件应进入 cam 校验: {e}"
@@ -2489,7 +2451,6 @@ fn test_jsx_multi_dof_pair_q_arrays() {
         None,
         "",
     )
-    .err()
-    .expect("should fail");
+    .expect_err("should fail");
     assert!(e.contains("q must be [qr, qp]"), "{e}");
 }

@@ -3,8 +3,8 @@
 //! 与增量渲染同一套失效哲学）。
 
 use cga_collision::{probe, Contact, Hit};
-use cga_gpu::shading::{Material, MaterialParams};
-use cga_scene::Color;
+use cga_core::{vec3_add, vec3_cross, vec3_len, vec3_scale};
+use cga_scene::{Color, Material, MaterialParams};
 use cga_scene::{Object, ObjectParams, Scene};
 use std::collections::HashMap;
 
@@ -94,7 +94,7 @@ impl CollisionScan {
     /// AABB 不相交 ⇒ 几何不相交（认证的 No，`separation = None` 未算精确距离），
     /// 跳过指纹缓存查询与窄相 probe。小场景保持全对精确距离（报告/金标不变）。
     /// 无界几何（平面）的 AABB 为 None，宽相中与一切相交（不剪）。
-    pub fn scan(&mut self, scene: &cga_gpu::scene::Scene) -> Vec<PairHit> {
+    pub fn scan(&mut self, scene: &Scene) -> Vec<PairHit> {
         self.cache_hits = 0;
         self.computed = 0;
         let objs = &scene.objects;
@@ -403,7 +403,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
                 f[4] * p.axis[0] + f[5] * p.axis[1] + f[6] * p.axis[2],
                 f[8] * p.axis[0] + f[9] * p.axis[1] + f[10] * p.axis[2],
             ];
-            let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            let n = vec3_len(a);
             if n < 1e-12 {
                 return skip("degenerate pair axis");
             }
@@ -411,13 +411,13 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
         };
         let rate_p = dp * rate_x;
         let (w, v) = match p.kind {
-            crate::scene_build::JointKind::Prismatic => ([0.0; 3], v3scale(dir, rate_p)),
+            crate::scene_build::JointKind::Prismatic => ([0.0; 3], vec3_scale(dir, rate_p)),
             _ => {
-                let w = v3scale(dir, rate_p);
+                let w = vec3_scale(dir, rate_p);
                 // ṗ = ω×(p−o) ⇒ v = o×ω；helical 再加节距平移 pitch·rate 沿轴。
-                let mut v = v3cross(o, w);
+                let mut v = vec3_cross(o, w);
                 if p.kind == crate::scene_build::JointKind::Helical {
-                    v = v3add(v, v3scale(dir, pitch * rate_p));
+                    v = vec3_add(v, vec3_scale(dir, pitch * rate_p));
                 }
                 (w, v)
             }
@@ -495,7 +495,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
             let coaxial = {
                 let dp = ma.dir[0] * mb.dir[0] + ma.dir[1] * mb.dir[1] + ma.dir[2] * mb.dir[2];
                 let oo = [mb.o[0] - ma.o[0], mb.o[1] - ma.o[1], mb.o[2] - ma.o[2]];
-                let cr = v3cross(oo, ma.dir);
+                let cr = vec3_cross(oo, ma.dir);
                 dp.abs() > 1.0 - 1e-9 && cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2] < 1e-12
             };
             let xi_rel = [
@@ -539,7 +539,9 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
                             (Hit::No, Some(d0)) => {
                                 let sa = speed_bound(ma.o, ma.xi, oa, wa);
                                 let sb = speed_bound(mb.o, mb.xi, ob, wb);
-                                if !(d0 > sa + sb) {
+                                let reach = sa + sb;
+                                // d0 或 reach 为 NaN 时也必须走保守分支（认证不了）。
+                                if d0.is_nan() || reach.is_nan() || d0 <= reach {
                                     out.unknown.push(mi);
                                     out.unknown.push(mj);
                                 }
@@ -579,31 +581,18 @@ fn speed_bound(mv_o: [f64; 3], mv_xi: [f64; 6], obj: &Object, w: [f64; 16]) -> f
     let oc = [c_w[0] - mv_o[0], c_w[1] - mv_o[1], c_w[2] - mv_o[2]];
     let om = [mv_xi[0], mv_xi[1], mv_xi[2]];
     let vv = [mv_xi[3], mv_xi[4], mv_xi[5]];
-    let om_n = (om[0] * om[0] + om[1] * om[1] + om[2] * om[2]).sqrt();
-    let vv_n = (vv[0] * vv[0] + vv[1] * vv[1] + vv[2] * vv[2]).sqrt();
+    let om_n = vec3_len(om);
+    let vv_n = vec3_len(vv);
     // 轴到点距 = |oc × dir|，dir = ω/|ω|（纯平移 |ω|=0 时无转动项）
     let d_axis = if om_n > 1e-12 {
-        let cr = v3cross(oc, [om[0] / om_n, om[1] / om_n, om[2] / om_n]);
-        (cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]).sqrt()
+        let cr = vec3_cross(oc, [om[0] / om_n, om[1] / om_n, om[2] / om_n]);
+        vec3_len(cr)
     } else {
         0.0
     };
     vv_n + om_n * (d_axis + r)
 }
 
-fn v3scale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-fn v3add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn v3cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
 /// 螺旋扫掠场景版（C3）：对象 `a` 以螺旋速度 `xi`（物理角速度 + 线速度）运动，
 /// 对场景其余对象逐一求 TOI。同组（`group` 非 0 且相等）跳过——同组是刚体
 /// 绑定，理应一起动。
@@ -737,8 +726,8 @@ fn motor_from_z_to(n: [f64; 3]) -> cga_core::Multivector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::fnv1a;
     use cga_core::{Geometry, SphereGeometry};
-    use cga_gpu::shading::{Material, MaterialParams};
     use cga_scene::Color;
     use cga_scene::{Object, ObjectParams, Scene};
 
@@ -776,15 +765,6 @@ mod tests {
         assert_eq!(h23.hit, Hit::Yes);
         assert!((h23.separation.unwrap() + 0.8).abs() < 1e-9, "{h23:?}");
         assert_eq!(find(0, 2).unwrap().hit, Hit::No);
-    }
-
-    fn fnv1a(bytes: &[u8]) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in bytes {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        h
     }
 
     #[test]
@@ -976,7 +956,7 @@ export default (
     #[test]
     fn contact_markers_render_golden() {
         use cga_core::{BoxGeometry, PlaneGeometry};
-        use cga_gpu::shading::Light;
+        use cga_scene::Light;
         use cga_scene::PerspectiveCamera;
 
         let mut sc = Scene::new(None);
@@ -1069,7 +1049,7 @@ export default (
         pl.position = [0.0, 0.0, 0.0];
         sc.add_object(pl);
         let n = sc.objects.len();
-        assert!(n > SPATIAL_INDEX_THRESHOLD as usize, "{n}");
+        assert!(n > SPATIAL_INDEX_THRESHOLD, "{n}");
 
         let mut scan = CollisionScan::new();
         let hits = scan.scan(&sc);

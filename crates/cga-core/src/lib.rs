@@ -4,6 +4,9 @@ pub use util::*;
 pub mod mat4;
 pub use mat4::*;
 
+pub mod vec3;
+pub use vec3::*;
+
 #[allow(dead_code)]
 pub(crate) mod tables;
 

@@ -1,5 +1,6 @@
 use cga_core::*;
 use cga_gpu::*;
+use cga_scene::*;
 use std::fs;
 
 use rand::rngs::StdRng;

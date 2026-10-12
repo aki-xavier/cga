@@ -1,4 +1,5 @@
 use super::*;
+use cga_core::{vec3_add, vec3_dot, vec3_len, vec3_scale, vec3_sub};
 
 /// 遮挡物的**透过率**（着色端乘在可见性上：1 = 不遮挡，0 = 全遮）。
 /// 正常模式取 `1 - opacity`；忽略透明度模式一律 0（当作不透明遮挡物）。
@@ -35,13 +36,13 @@ fn shadow_ray_indices(
     } else {
         ck(ops::broadcast_to(fs(1e30), &[n_rays]))
     };
-    let to_c = ck(ck(p.negative()).add(&arr3v(c))); // c - p  (n,3)
+    let to_c = ck(ck(p.negative()).add(arr3v(c))); // c - p  (n,3)
     let proj = ck(ck(to_c.multiply(ld)).sum_axes(&[-1], false)); // (n,)
     let perp2 =
-        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
-    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
-    let lim = ck(far_lim.add(&fs(r)));
-    let mask = ck(mask.logical_and(&ck(lim.gt(&proj))));
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(s_ge(&proj, -r)));
+    let lim = ck(far_lim.add(fs(r)));
+    let mask = ck(mask.logical_and(ck(lim.gt(&proj))));
     mask.eval().unwrap();
     let cnt = ck(mask.sum(None)).item_cast::<i32>();
     if cnt * 2 >= n_rays {
@@ -76,11 +77,11 @@ fn ray_object_subset(params: &GeometryParams, o: &Array, d: &Array) -> Option<Ve
         return None;
     }
     let n = o.shape()[0];
-    let to_c = ck(ck(o.negative()).add(&arr3v(c)));
+    let to_c = ck(ck(o.negative()).add(arr3v(c)));
     let proj = ck(ck(to_c.multiply(d)).sum_axes(&[-1], false));
     let perp2 =
-        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(&ck(proj.multiply(&proj))));
-    let mask = ck(s_le(&perp2, r * r).logical_and(&s_ge(&proj, -r)));
+        ck(ck(ck(to_c.multiply(&to_c)).sum_axes(&[-1], false)).subtract(ck(proj.multiply(&proj))));
+    let mask = ck(s_le(&perp2, r * r).logical_and(s_ge(&proj, -r)));
     mask.eval().unwrap();
     let cnt = ck(mask.sum(None)).item_cast::<i32>();
     if cnt * 2 >= n {
@@ -192,24 +193,6 @@ fn sphere_ray_indices(
     )
 }
 
-// ---- 相机空间小向量工具（增量渲染的脏集计算，全在 CPU f64 上做） ----
-
-fn v3_sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn v3_add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn v3_scale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-fn v3_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn v3_len(a: [f64; 3]) -> f64 {
-    v3_dot(a, a).sqrt()
-}
-
 /// AABB → 包围球。
 fn aabb_sphere(b: &[[f64; 3]; 2]) -> ([f64; 3], f64) {
     let c = [
@@ -218,7 +201,7 @@ fn aabb_sphere(b: &[[f64; 3]; 2]) -> ([f64; 3], f64) {
         0.5 * (b[0][2] + b[1][2]),
     ];
     let d = [b[1][0] - b[0][0], b[1][1] - b[0][1], b[1][2] - b[0][2]];
-    (c, 0.5 * v3_len(d))
+    (c, 0.5 * vec3_len(d))
 }
 
 /// 遮挡物包围球 `occ` 在灯光下是否可能把阴影投到接收者包围球 `rcv` 上（保守：
@@ -231,21 +214,21 @@ fn shadow_reaches(light: &Light, occ: ([f64; 3], f64), rcv: ([f64; 3], f64)) -> 
         LightKind::Ambient => false,
         LightKind::Directional => {
             let d = light.direction;
-            let ab = v3_sub(rc, oc);
-            let u = v3_dot(ab, d); // 接收者中心朝光源方向超出遮挡物多少
+            let ab = vec3_sub(rc, oc);
+            let u = vec3_dot(ab, d); // 接收者中心朝光源方向超出遮挡物多少
             if u > rr * SLACK {
                 return false; // 整体在遮挡物的迎光面之外
             }
-            let perp2 = (v3_dot(ab, ab) - u * u).max(0.0);
+            let perp2 = (vec3_dot(ab, ab) - u * u).max(0.0);
             let rsum = (or_ + rr) * SLACK;
             perp2 <= rsum * rsum
         }
         LightKind::Point => {
             let pl = light.position;
-            let vo = v3_sub(oc, pl);
-            let vb = v3_sub(rc, pl);
-            let do_ = v3_len(vo);
-            let db = v3_len(vb);
+            let vo = vec3_sub(oc, pl);
+            let vb = vec3_sub(rc, pl);
+            let do_ = vec3_len(vo);
+            let db = vec3_len(vb);
             if do_ < 1e-9 || db < 1e-9 {
                 return true; // 光源贴着包围球：无法界定，按可能投影处理
             }
@@ -255,7 +238,7 @@ fn shadow_reaches(light: &Light, occ: ([f64; 3], f64), rcv: ([f64; 3], f64)) -> 
             // 夹角 ≤ asin(or/do) + asin(rr/db)
             let sin_o = (or_ * SLACK / do_).min(1.0);
             let sin_b = (rr * SLACK / db).min(1.0);
-            let cos_ang = v3_dot(vo, vb) / (do_ * db);
+            let cos_ang = vec3_dot(vo, vb) / (do_ * db);
             let cos_lim =
                 (1.0 - sin_o * sin_o).sqrt() * (1.0 - sin_b * sin_b).sqrt() - sin_o * sin_b;
             cos_ang >= cos_lim
@@ -278,30 +261,30 @@ fn shadow_on_plane(
         LightKind::Ambient => None,
         LightKind::Directional => {
             let ld = light.direction; // 指向光源；阴影沿 -ld 延伸
-            let dn = v3_dot(ld, n);
+            let dn = vec3_dot(ld, n);
             if dn.abs() < 0.05 {
                 return None; // 光近平行平面：阴影拉得极长
             }
             // oc - t·ld 落在平面上：n·(oc - t·ld) = d
-            let t = (v3_dot(oc, n) - d) / dn;
-            let c = v3_sub(oc, v3_scale(ld, t));
+            let t = (vec3_dot(oc, n) - d) / dn;
+            let c = vec3_sub(oc, vec3_scale(ld, t));
             // 斜射把圆拉成椭圆，用 r/|n·ld| 保守覆盖
             Some((c, r / dn.abs() * SLACK + 0.02))
         }
         LightKind::Point => {
             let pl = light.position;
-            let v = v3_sub(oc, pl);
-            let dist_o = v3_len(v);
-            let vn = v3_dot(v, n);
+            let v = vec3_sub(oc, pl);
+            let dist_o = vec3_len(v);
+            let vn = vec3_dot(v, n);
             if dist_o < 1e-9 || vn.abs() < 1e-9 {
                 return None;
             }
             // pl + s·v 落在平面上
-            let s = (d - v3_dot(pl, n)) / vn;
+            let s = (d - vec3_dot(pl, n)) / vn;
             if s <= 1.0 {
                 return None; // 平面不在遮挡物的背光侧
             }
-            let c = v3_add(pl, v3_scale(v, s));
+            let c = vec3_add(pl, vec3_scale(v, s));
             let dist = (dist_o * s).max(1e-6);
             // 锥体放大：半径随距离线性扩张
             let cone_r = r * SLACK * dist / (dist_o - r).max(1e-6);
@@ -339,7 +322,7 @@ pub fn pick(
     let cx = (w - 1.0) / 2.0;
     let cy = (h - 1.0) / 2.0;
     let d = [(x - cx) / fx, (y - cy) / fy, 1.0];
-    let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let dl = vec3_len(d);
     let d = [d[0] / dl, d[1] / dl, d[2] / dl];
     let o = ck(ops::zeros::<f32>(&[1, 3]));
     let d_a = ck(ops::broadcast_to(arr3v([d[0], d[1], d[2]]), &[1, 3]));
@@ -768,7 +751,7 @@ impl Renderer {
                         &[hh, ww, 3],
                     ));
                     let n = ck(ck(ck(d.multiply(&d)).sum_axes(&[-1], true)).sqrt());
-                    let pf = ck(ck(d.divide(&n)).multiply(&fs(focal)));
+                    let pf = ck(ck(d.divide(&n)).multiply(fs(focal)));
                     let dd = ck(pf.subtract(&o));
                     let nn = ck(ck(ck(dd.multiply(&dd)).sum_axes(&[-1], true)).sqrt());
                     dirs.push(ck(dd.divide(&nn)));
@@ -1069,7 +1052,7 @@ impl Renderer {
                     Some(id) => ck(ops::indexing::scatter_single(
                         &result,
                         id,
-                        &ck(glass.reshape(&[idx.len() as i32, 1, 3])),
+                        ck(glass.reshape(&[idx.len() as i32, 1, 3])),
                         0,
                     )),
                 };
@@ -1129,7 +1112,7 @@ impl Renderer {
                 t.clone(),
                 n.clone(),
                 ck(ops::zeros::<f32>(&[n_rays, 2])),
-                ck(ops::maximum(idx, &ck(ops::zeros::<i32>(&[n_rays])))),
+                ck(ops::maximum(idx, ck(ops::zeros::<i32>(&[n_rays])))),
             ),
             None => (
                 ck(ops::full::<f32>(&[n_rays], &fs(f64::INFINITY))),
@@ -1201,27 +1184,27 @@ impl Renderer {
                     best_t = ck(ops::indexing::scatter_single(
                         &best_t,
                         ids_a,
-                        &ck(ck(ops::select(&nearer, &t, &bt_s)).reshape(&[len, 1])),
+                        ck(ck(ops::select(&nearer, &t, &bt_s)).reshape(&[len, 1])),
                         0,
                     ));
                     best_n = ck(ops::indexing::scatter_single(
                         &best_n,
                         ids_a,
-                        &ck(ck(ops::select(&ne1, &n_i, &bn_s)).reshape(&[len, 1, 3])),
+                        ck(ck(ops::select(&ne1, &n_i, &bn_s)).reshape(&[len, 1, 3])),
                         0,
                     ));
                     best_uv = ck(ops::indexing::scatter_single(
                         &best_uv,
                         ids_a,
-                        &ck(ck(ops::select(&ne1, &uv_i, &bu_s)).reshape(&[len, 1, 2])),
+                        ck(ck(ops::select(&ne1, &uv_i, &bu_s)).reshape(&[len, 1, 2])),
                         0,
                     ));
                     best_idx = ck(ops::indexing::scatter_single(
                         &best_idx,
                         ids_a,
-                        &ck(ck(ops::select(
+                        ck(ck(ops::select(
                             &nearer,
-                            &ck(ops::full::<i32>(&[len], &Array::from_int(i as i32))),
+                            ck(ops::full::<i32>(&[len], &Array::from_int(i as i32))),
                             &bi_s,
                         ))
                         .reshape(&[len, 1])),
@@ -1319,12 +1302,12 @@ impl Renderer {
                         ));
                         // 合并回全量：v *= (1 + 散布(f_s - 1))
                         let delta = ck(ops::indexing::scatter_single(
-                            &ck(ops::zeros::<f32>(&[n_rays])),
+                            ck(ops::zeros::<f32>(&[n_rays])),
                             &ids,
-                            &ck(ck(f_s.subtract(fs(1.0))).reshape(&[len, 1])),
+                            ck(ck(f_s.subtract(fs(1.0))).reshape(&[len, 1])),
                             0,
                         ));
-                        v = ck(v.multiply(&ck(delta.add(fs(1.0)))));
+                        v = ck(v.multiply(ck(delta.add(fs(1.0)))));
                     }
                     None => {
                         let (st, m) = geom_shadow(&params_list[j], &p_s, &ld);
@@ -1408,7 +1391,7 @@ fn fp<T: std::fmt::Debug>(x: &T) -> u64 {
 
 /// 材质指纹。纹理只取尺寸/色彩空间签名：同一会话内资产文件不变；
 /// 纹理内容真的变了请调用 [`IncrementalRenderer::invalidate`]。
-fn material_fp(m: &crate::shading::Material) -> u64 {
+fn material_fp(m: &cga_scene::Material) -> u64 {
     let map_sig = m.map.as_ref().map(|t| (t.width, t.height, t.is_linear));
     fp(&(
         m.kind,

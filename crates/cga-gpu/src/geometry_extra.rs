@@ -1,4 +1,4 @@
-use cga_core::{mat3_transpose, ConeParams, CyclideParams, EllipsoidParams, TorusParams};
+use cga_core::{mat3_transpose, ConeParams, CyclideParams, EllipsoidParams, Mat3, TorusParams};
 use mlx_rs::complex64;
 use mlx_rs::ops;
 use mlx_rs::Array;
@@ -72,20 +72,20 @@ fn dk_roots(c3: &Array, c2: &Array, c1: &Array, c0: &Array) -> (Array, Array) {
     let d3 = ck(ck(ck(c3e.abs()).multiply(&at2)).multiply(&at));
     let d4 = ck(at2.multiply(&at2));
     let denom = ck(ck(ck(ck(d0.add(&d1)).add(&d2)).add(&d3)).add(&d4));
-    let resid = ck(ck(pt.abs()).divide(&ck(ops::maximum(&denom, fs(1e-30)))));
+    let resid = ck(ck(pt.abs()).divide(ck(ops::maximum(&denom, fs(1e-30)))));
     let kept = ck(roots.is_finite());
-    let bad_resid = ck(ck(kept.logical_and(&s_gt(&resid, 1e-3))).any_axis(-1, false));
+    let bad_resid = ck(ck(kept.logical_and(s_gt(&resid, 1e-3))).any_axis(-1, false));
     // 2. near-coincident kept pair (merged double root).
     let mut pair_close = ck(ops::zeros_dtype(&[roots.shape()[0]], mlx_rs::Dtype::Bool));
     for j in 0..3 {
         let tj = col(&roots, j);
         let tk = col(&roots, j + 1);
         let both = ck(tj.is_finite());
-        let close = ck(ck(tk.subtract(&tj)).le(&crate::tol::tol_arr(&tk)));
-        pair_close = ck(pair_close.logical_or(&ck(both.logical_and(&close))));
+        let close = ck(ck(tk.subtract(&tj)).le(crate::tol::tol_arr(&tk)));
+        pair_close = ck(pair_close.logical_or(ck(both.logical_and(&close))));
     }
     // 3. discarded root in the near-real gray zone.
-    let gray = ck(ck(ck(im.abs()).gt(&thr)).logical_and(&ck(ck(im.abs()).le(&s_mul(&thr, 8.0)))));
+    let gray = ck(ck(ck(im.abs()).gt(&thr)).logical_and(ck(ck(im.abs()).le(s_mul(&thr, 8.0)))));
     let gray = ck(gray.any_axis(-1, false));
     let amb = ck(ck(bad_resid.logical_or(&pair_close)).logical_or(&gray));
     (roots, amb)
@@ -165,17 +165,17 @@ pub(crate) fn cone_local_interval(
     // subtraction cancels) or the discriminant is inside its cancellation band.
     let a_band = s_mul(
         &ck(ops::maximum(
-            &ck(ops::ones_like(&a)),
-            &s_mul(&ck(dz.multiply(&dz)), k2),
+            ck(ops::ones_like(&a)),
+            s_mul(&ck(dz.multiply(&dz)), k2),
         )),
         (crate::tol::DEGENERATE_ULPS as f64) * (f32::EPSILON as f64),
     );
     let amb = ck(
-        ck(ck(a.abs()).le(&a_band)).logical_or(&crate::fallback::quad_ambig(
+        ck(ck(a.abs()).le(&a_band)).logical_or(crate::fallback::quad_ambig(
             &disc,
             &ck(ops::maximum(
-                &ck(b.multiply(&b)),
-                &s_mul(&ck(ck(a.multiply(&c)).abs()), 4.0),
+                ck(b.multiply(&b)),
+                s_mul(&ck(ck(a.multiply(&c)).abs()), 4.0),
             )),
         )),
     );
@@ -291,20 +291,29 @@ pub fn cone_uv(p: ConeParams, pos: &Array, _n: &Array) -> Array {
     ck(ops::stack(&[&u, &v], -1))
 }
 
-pub fn ellipsoid_intersect(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let b = s_mul(&ck(ck(o_l.multiply(&d_u)).sum_axes(&[-1], false)), 2.0);
-    let cq = s_sub(&ck(ck(o_l.multiply(&o_l)).sum_axes(&[-1], false)), 1.0);
+/// 椭球（局部坐标下的单位球）射线求交的公共前导：二次式系数、判别式、
+/// 有效性掩码与两根。`ellipsoid_intersect`、`ellipsoid_shadow`、
+/// `csg::ellipsoid_crossings` 三处逐字相同（含 `1e-12` 阈值与 `4.0`/`2.0`
+/// 常量），故三者共用。
+#[inline]
+pub(crate) fn ellipsoid_ray_quad(
+    o_l: &Array,
+    d_u: &Array,
+) -> (Array, Array, Array, Array, Array, Array) {
+    let b = s_mul(&ck(ck(o_l.multiply(d_u)).sum_axes(&[-1], false)), 2.0);
+    let cq = s_sub(&ck(ck(o_l.multiply(o_l)).sum_axes(&[-1], false)), 1.0);
     let disc = ck(ck(b.multiply(&b)).subtract(s_mul(&cq, 4.0)));
     let valid = s_gt(&disc, 1e-12);
     let sq = ck(s_max(&disc, 0.0).sqrt());
     let t1 = s_div(&ck(ck(b.negative()).subtract(&sq)), 2.0);
     let t2 = s_div(&ck(ck(b.negative()).add(&sq)), 2.0);
-    let t_l = ck(ops::select(
-        ck(valid.logical_and(s_gt(&t1, 1e-6))),
-        &t1,
-        &t2,
-    ));
+    (b, cq, disc, valid, t1, t2)
+}
+
+pub fn ellipsoid_intersect(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
+    let (_b, _cq, _disc, valid, t1, t2) = ellipsoid_ray_quad(&o_l, &d_u);
+    let t_l = crate::near_root(&valid, &t1, &t2);
     let mask = ck(valid.logical_and(s_gt(&t_l, 1e-6)));
     let mut n_l = ck(o_l.add(ck(ck(t_l.expand_dims(1)).multiply(&d_u))));
     let inside = ck(mask.logical_and(s_le(&t1, 1e-6)));
@@ -325,18 +334,8 @@ pub fn ellipsoid_intersect(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, 
 
 pub fn ellipsoid_shadow(p: EllipsoidParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let b = s_mul(&ck(ck(o_l.multiply(&d_u)).sum_axes(&[-1], false)), 2.0);
-    let cq = s_sub(&ck(ck(o_l.multiply(&o_l)).sum_axes(&[-1], false)), 1.0);
-    let disc = ck(ck(b.multiply(&b)).subtract(s_mul(&cq, 4.0)));
-    let valid = s_gt(&disc, 1e-12);
-    let sq = ck(s_max(&disc, 0.0).sqrt());
-    let t1 = s_div(&ck(ck(b.negative()).subtract(&sq)), 2.0);
-    let t2 = s_div(&ck(ck(b.negative()).add(&sq)), 2.0);
-    let t_l = ck(ops::select(
-        ck(valid.logical_and(s_gt(&t1, 1e-6))),
-        &t1,
-        &t2,
-    ));
+    let (_b, _cq, _disc, valid, t1, t2) = ellipsoid_ray_quad(&o_l, &d_u);
+    let t_l = crate::near_root(&valid, &t1, &t2);
     (
         ck(t_l.divide(col(&lam, 0))),
         ck(valid.logical_and(s_gt(&t_l, 1e-6))),
@@ -400,11 +399,11 @@ pub(crate) fn torus_local_crossings(
     let p2 = ck(p.take_axis(Array::from_slice(&[2], &[]), 2));
     let theta = ck(ops::atan2(&p1, &p0));
     let turned = ck(ops::select(
-        &s_lt(&theta, 0.0),
-        &s_add(&theta, std::f64::consts::TAU),
+        s_lt(&theta, 0.0),
+        s_add(&theta, std::f64::consts::TAU),
         &theta,
     ));
-    let valid = ck(valid.logical_and(&s_le(&turned, arc)));
+    let valid = ck(valid.logical_and(s_le(&turned, arc)));
     let fac = s_sub(&s1, 2.0 * r2);
     let grad = ck(ops::stack(
         &[
@@ -441,18 +440,29 @@ pub(crate) fn torus_local_contains(major: f64, minor: f64, arc: f64, p: &Array) 
     )));
     let theta = ck(ops::atan2(col(p, 1), col(p, 0)));
     let turned = ck(ops::select(
-        &s_lt(&theta, 0.0),
-        &s_add(&theta, std::f64::consts::TAU),
+        s_lt(&theta, 0.0),
+        s_add(&theta, std::f64::consts::TAU),
         &theta,
     ));
-    ck(s_lt(&f, 0.0).logical_and(&s_le(&turned, arc)))
+    ck(s_lt(&f, 0.0).logical_and(s_le(&turned, arc)))
 }
 
-pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
-    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
-    let (ts, ns, valid, _amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
-    let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
-    let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
+/// `torus_intersect` / `cyclide_intersect` 的公共收尾：从局部交点里取最近的
+/// 正根、按最近根挑局部法线、用 `contains`（`*_local_contains`，闭包传入）
+/// 判内部并反号，最后变回世界系、把未命中项清零。
+/// 两者的算子序列逐字相同，差异只在 `*_local_contains` 与 `*_local_crossings`。
+#[inline]
+fn local_nearest_hit(
+    ts: &Array,
+    ns: &Array,
+    valid: &Array,
+    o_l: &Array,
+    lam: &Array,
+    a_inv3: Mat3,
+    contains: impl Fn(&Array) -> Array,
+) -> (Array, Array, Array) {
+    let pos = ck(valid.logical_and(s_gt(ts, 1e-6)));
+    let cand = ck(ops::select(&pos, ts, inf_like(ts)));
     let t_l = ck(cand.min_axes(&[-1], false));
     let mask = ck(t_l.is_finite());
     let idx = ck(ops::indexing::argmin_axis(&cand, -1, false));
@@ -464,14 +474,14 @@ pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, A
         1,
     ))
     .take_axis(Array::from_slice(&[0], &[]), 1));
-    let inside = ck(mask.logical_and(torus_local_contains(p.major, p.minor, p.arc, &o_l)));
+    let inside = ck(mask.logical_and(contains(o_l)));
     n_l = ck(ops::select(
         ck(inside.expand_dims(1)),
         ck(n_l.negative()),
         &n_l,
     ));
-    let t = ck(t_l.divide(col(&lam, 0)));
-    let mut n = affine_normal(&n_l, p.a_inv3);
+    let t = ck(t_l.divide(col(lam, 0)));
+    let mut n = affine_normal(&n_l, a_inv3);
     n = ck(ops::select(
         ck(mask.expand_dims(1)),
         &n,
@@ -480,13 +490,27 @@ pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, A
     (t, n, mask)
 }
 
+/// `torus_shadow` / `cyclide_shadow` 的公共收尾：取最近正根并变回世界系。
+#[inline]
+fn local_shadow_hit(ts: &Array, valid: &Array, lam: &Array) -> (Array, Array) {
+    let pos = ck(valid.logical_and(s_gt(ts, 1e-6)));
+    let cand = ck(ops::select(&pos, ts, inf_like(ts)));
+    let t_l = ck(cand.min_axes(&[-1], false));
+    (ck(t_l.divide(col(lam, 0))), ck(t_l.is_finite()))
+}
+
+pub fn torus_intersect(p: TorusParams, o: &Array, d: &Array) -> (Array, Array, Array) {
+    let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
+    let (ts, ns, valid, _amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
+    local_nearest_hit(&ts, &ns, &valid, &o_l, &lam, p.a_inv3, |q| {
+        torus_local_contains(p.major, p.minor, p.arc, q)
+    })
+}
+
 pub fn torus_shadow(p: TorusParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (ts, _, valid, _amb) = torus_local_crossings(p.major, p.minor, p.arc, &o_l, &d_u);
-    let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
-    let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
-    let t_l = ck(cand.min_axes(&[-1], false));
-    (ck(t_l.divide(col(&lam, 0))), ck(t_l.is_finite()))
+    local_shadow_hit(&ts, &valid, &lam)
 }
 
 pub fn torus_uv(p: TorusParams, pos: &Array, _n: &Array) -> Array {
@@ -606,42 +630,15 @@ pub(crate) fn cyclide_local_contains(
 pub fn cyclide_intersect(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (ts, ns, valid, _amb) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
-    let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
-    let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
-    let t_l = ck(cand.min_axes(&[-1], false));
-    let mask = ck(t_l.is_finite());
-    let idx = ck(ops::indexing::argmin_axis(&cand, -1, false));
-    let mut n_l = ck(ck(ns.take_along_axis(
-        ck(ops::broadcast_to(
-            ck(ck(idx.expand_dims(1)).expand_dims(2)),
-            &[ns.shape()[0], 1, 3],
-        )),
-        1,
-    ))
-    .take_axis(Array::from_slice(&[0], &[]), 1));
-    let inside = ck(mask.logical_and(cyclide_local_contains(p.a, p.b, p.d, p.c, p.shift, &o_l)));
-    n_l = ck(ops::select(
-        ck(inside.expand_dims(1)),
-        ck(n_l.negative()),
-        &n_l,
-    ));
-    let t = ck(t_l.divide(col(&lam, 0)));
-    let mut n = affine_normal(&n_l, p.a_inv3);
-    n = ck(ops::select(
-        ck(mask.expand_dims(1)),
-        &n,
-        ck(ops::zeros_like(&n)),
-    ));
-    (t, n, mask)
+    local_nearest_hit(&ts, &ns, &valid, &o_l, &lam, p.a_inv3, |q| {
+        cyclide_local_contains(p.a, p.b, p.d, p.c, p.shift, q)
+    })
 }
 
 pub fn cyclide_shadow(p: CyclideParams, o: &Array, d: &Array) -> (Array, Array) {
     let (o_l, d_u, lam) = affine_to_local(p.a_inv3, p.t_inv, o, d);
     let (ts, _, valid, _amb) = cyclide_local_crossings(p.a, p.b, p.d, p.c, p.shift, &o_l, &d_u);
-    let pos = ck(valid.logical_and(s_gt(&ts, 1e-6)));
-    let cand = ck(ops::select(&pos, &ts, inf_like(&ts)));
-    let t_l = ck(cand.min_axes(&[-1], false));
-    (ck(t_l.divide(col(&lam, 0))), ck(t_l.is_finite()))
+    local_shadow_hit(&ts, &valid, &lam)
 }
 
 pub fn cyclide_uv(p: CyclideParams, pos: &Array, _n: &Array) -> Array {
@@ -676,6 +673,7 @@ pub fn cyclide_uv(p: CyclideParams, pos: &Array, _n: &Array) -> Array {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{test_hit, test_ray};
     use cga_core::{CsgGeometry, CsgOp, CyclideGeometry, DupinCyclide, Geometry, Multivector};
 
     const CGA_A: f64 = 1.0;
@@ -707,20 +705,6 @@ mod tests {
         let tau = 2.0 * std::f64::consts::PI;
         let r = x - tau * (x / tau).floor();
         r.min(tau - r)
-    }
-
-    fn ray3(x: f64, y: f64, z: f64) -> Array {
-        Array::from_slice(&[x as f32, y as f32, z as f32], &[1, 3])
-    }
-
-    fn cyc_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, bool) {
-        let p = crate::geom_to_camera(g, &Multivector::identity());
-        let oa = ray3(o[0], o[1], o[2]);
-        let da = ray3(d[0], d[1], d[2]);
-        let (t, _, mask) = crate::geom_intersect(&p, &oa, &da);
-        t.eval().unwrap();
-        mask.eval().unwrap();
-        (t.item_cast::<f32>(), mask.as_slice::<bool>()[0])
     }
 
     #[test]
@@ -914,7 +898,7 @@ mod tests {
     fn test_cyclide_ray_hits_implicit() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let (t, m) = cyc_hit(&g, [3.0, 0.0, 0.0], [-1.0, 0.0, 0.0]);
+        let (t, m) = test_hit(&g, [3.0, 0.0, 0.0], [-1.0, 0.0, 0.0]);
         assert!(m);
         let cy = cga_cy();
         assert!(cy.implicit(3.0 - f64::from(t), 0.0, 0.0).abs() < 1e-3);
@@ -925,7 +909,8 @@ mod tests {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
         let p = crate::geom_to_camera(&g, &Multivector::identity());
-        let (ts, _, valid) = crate::geom_crossings(&p, &ray3(3.0, 0.0, 0.0), &ray3(-1.0, 0.0, 0.0));
+        let (ts, _, valid) =
+            crate::geom_crossings(&p, &test_ray(3.0, 0.0, 0.0), &test_ray(-1.0, 0.0, 0.0));
         valid.eval().unwrap();
         let v = valid.as_slice::<bool>().to_vec();
         assert_eq!(v.len(), 4);
@@ -958,7 +943,7 @@ mod tests {
     fn test_cyclide_center_hole_ray_misses() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let (_, m) = cyc_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
+        let (_, m) = test_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(!m);
     }
 
@@ -1025,7 +1010,7 @@ mod tests {
                 )),
             ],
         );
-        let (t, m) = cyc_hit(
+        let (t, m) = test_hit(
             &Geometry::CsgGeometry(csg),
             [3.0, 0.0, 0.0],
             [-1.0, 0.0, 0.0],

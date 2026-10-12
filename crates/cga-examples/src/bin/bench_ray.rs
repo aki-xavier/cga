@@ -4,7 +4,11 @@
 //! 用法：cargo run --release --bin bench_ray [gallery]
 use cga_core::*;
 use cga_gpu::*;
+use cga_scene::*;
 use std::time::Instant;
+
+/// 图元构造器：位置 → 对象（「图元类型」基准用它铺 100 个同类图元）。
+type ObjectFn = fn([f64; 3]) -> Object;
 
 fn mat_red() -> Material {
     Material::standard(MaterialParams {
@@ -150,7 +154,7 @@ fn main() {
             let mut run = cga_host::run_jsx(&jsx, Some(&css), "examples/jsx").expect("run_jsx");
             for (w, h) in [(640i32, 480i32), (1280, 720)] {
                 run.camera.aspect = f64::from(w) / f64::from(h);
-                time_cam(run.scene.clone(), run.camera, w, h, 2, &format!("{name}"));
+                time_cam(run.scene.clone(), run.camera, w, h, 2, name);
             }
         }
         return;
@@ -215,7 +219,7 @@ fn main() {
     }
 
     println!("== 图元类型（100 个同类，640x480 aa=1）");
-    let kinds: Vec<(&str, fn([f64; 3]) -> Object)> = vec![
+    let kinds: Vec<(&str, ObjectFn)> = vec![
         ("sphere", |p| {
             obj(
                 Geometry::SphereGeometry(SphereGeometry::new(0.06)),
@@ -275,13 +279,11 @@ fn main() {
     println!("== CSG 子节点数（box 差 N 个球，640x480 aa=1）");
     for n in [1usize, 4, 16, 64] {
         let mut kids = vec![Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0))];
-        for i in 0..n {
-            let a = i as f64 * 0.7;
+        for _ in 0..n {
             kids.push(Geometry::AffineGeometry(AffineGeometry::new(
                 Geometry::SphereGeometry(SphereGeometry::new(0.25)),
                 [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             )));
-            let _ = a;
         }
         let mut sc = Scene::new(None);
         sc.add_object(obj(

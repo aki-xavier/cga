@@ -29,14 +29,6 @@ impl Multivector {
         m
     }
 
-    pub fn bivector(components: [f64; 10]) -> Multivector {
-        let mut m = Self::zero();
-        for i in 0..10 {
-            m.values[grade_indices[grade_start[2] + i]] = components[i];
-        }
-        m
-    }
-
     pub fn e1() -> Multivector {
         Self::vector(1.0, 0.0, 0.0, 0.0, 0.0)
     }
@@ -71,16 +63,6 @@ impl Multivector {
         self.values[0]
     }
 
-    pub fn vector_part(&self) -> [f64; 5] {
-        [
-            self.values[1],
-            self.values[2],
-            self.values[3],
-            self.values[4],
-            self.values[5],
-        ]
-    }
-
     pub fn euclidean_vector(&self) -> [f64; 3] {
         [self.values[1], self.values[2], self.values[3]]
     }
@@ -91,14 +73,6 @@ impl Multivector {
 
     pub fn einf_coeff(&self) -> f64 {
         self.values[5]
-    }
-
-    pub fn bivector_part(&self) -> [f64; 10] {
-        let mut out = [0.0; 10];
-        for i in 0..10 {
-            out[i] = self.values[grade_indices[grade_start[2] + i]];
-        }
-        out
     }
 
     pub fn coords(&self) -> [f64; 3] {
@@ -174,10 +148,6 @@ impl Multivector {
             .iter()
             .zip(&o.values)
             .all(|(&a, &b)| (a - b).abs() <= 1e-6)
-    }
-
-    pub fn copy(&self) -> Multivector {
-        *self
     }
 
     pub fn gp(&self, o: &Multivector) -> Multivector {
@@ -260,10 +230,6 @@ impl Multivector {
         res
     }
 
-    pub fn conjugate(&self) -> Multivector {
-        self.reverse().grade_involution()
-    }
-
     pub fn dual(&self) -> Multivector {
         let mut i_inv = Multivector::zero();
         i_inv.values[31] = -1.0;
@@ -328,26 +294,6 @@ impl Multivector {
     pub fn norm(&self) -> f64 {
         let s = self.gp(&self.reverse()).values[0];
         s.abs().sqrt()
-    }
-
-    pub fn normalized(&self) -> Multivector {
-        let n = self.norm();
-        if n < 1e-12 {
-            return Multivector::zero();
-        }
-        self.div_scalar(n)
-    }
-
-    pub fn bulk(&self) -> Multivector {
-        let mut res = Multivector::zero();
-        for idx in [0, 1, 2, 3, 6, 7, 10, 16] {
-            res.values[idx] = self.values[idx];
-        }
-        res
-    }
-
-    pub fn weight(&self) -> Multivector {
-        self.sub(&self.bulk())
     }
 
     fn blade_grade(&self) -> i32 {
@@ -567,7 +513,6 @@ fn wedge_rows(rows: &[Vec<f64>]) -> Multivector {
 mod tests {
     use crate::*;
 
-    #[allow(dead_code)]
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() < tol
     }

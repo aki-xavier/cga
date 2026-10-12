@@ -1,4 +1,5 @@
 use super::*;
+use cga_core::{vec3_add, vec3_len, vec3_scale};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JointKind {
@@ -154,22 +155,10 @@ pub(crate) fn rpy4(rpy: [f64; 3]) -> [f64; 16] {
     )
 }
 
-fn v3_add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn v3_scale(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
-fn v3_norm(a: [f64; 3]) -> f64 {
-    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
-}
-
 fn v3_unit(a: [f64; 3]) -> [f64; 3] {
-    let n = v3_norm(a);
+    let n = vec3_len(a);
     if n > 1e-300 {
-        v3_scale(a, 1.0 / n)
+        vec3_scale(a, 1.0 / n)
     } else {
         [0.0, 0.0, 0.0]
     }
@@ -198,13 +187,13 @@ fn v3_perp(u: [f64; 3]) -> [f64; 3] {
 pub(crate) fn joint_motion(kind: &JointKind, axis: [f64; 3], q: &[f64], pitch: f64) -> [f64; 16] {
     match kind {
         JointKind::Revolute | JointKind::Continuous => Multivector::rotor(axis, q[0]).to_matrix(),
-        JointKind::Prismatic => translate4(v3_scale(axis, q[0])),
+        JointKind::Prismatic => translate4(vec3_scale(axis, q[0])),
         JointKind::Helical => mat4_mul(
-            translate4(v3_scale(axis, pitch * q[0])),
+            translate4(vec3_scale(axis, pitch * q[0])),
             Multivector::rotor(axis, q[0]).to_matrix(),
         ),
         JointKind::Cylindrical => mat4_mul(
-            translate4(v3_scale(axis, q[1])),
+            translate4(vec3_scale(axis, q[1])),
             Multivector::rotor(axis, q[0]).to_matrix(),
         ),
         JointKind::Spherical => mat4_mul(
@@ -218,7 +207,7 @@ pub(crate) fn joint_motion(kind: &JointKind, axis: [f64; 3], q: &[f64], pitch: f
             let e1 = v3_perp(axis);
             let e2 = vec3_cross(axis, e1);
             mat4_mul(
-                translate4(v3_add(v3_scale(e1, q[0]), v3_scale(e2, q[1]))),
+                translate4(vec3_add(vec3_scale(e1, q[0]), vec3_scale(e2, q[1]))),
                 Multivector::rotor(axis, q[2]).to_matrix(),
             )
         }
@@ -253,7 +242,7 @@ fn pose_profile(p: &CamProfile, world: [f64; 16]) -> ProfilePose {
         },
         CamProfile::Plane { n, d } => {
             let nw = rot_dir(*n);
-            let pw = transform_point(world, v3_scale(*n, *d));
+            let pw = transform_point(world, vec3_scale(*n, *d));
             ProfilePose {
                 c: pw,
                 n: nw,
@@ -282,7 +271,7 @@ fn separation_branches(a: &ProfilePose, b: &ProfilePose) -> Vec<f64> {
                 dc[1] - along * n[1],
                 dc[2] - along * n[2],
             ];
-            vec![v3_norm(in_plane) - (a.r + b.r)]
+            vec![vec3_len(in_plane) - (a.r + b.r)]
         }
         (true, false) => {
             let delta = vec3_dot(b.c, a.n) - a.d;
@@ -326,7 +315,7 @@ pub(crate) fn cam_solve(
     };
     let pa = pose_profile(&rel.a_profile, d_world);
     let pb0 = pose_profile(&rel.b_profile, t2(0.0));
-    let parallel = |u: [f64; 3], v: [f64; 3]| v3_norm(vec3_cross(u, v)) < 1e-9;
+    let parallel = |u: [f64; 3], v: [f64; 3]| vec3_len(vec3_cross(u, v)) < 1e-9;
     let err_axis = || "build: cam profile normal must be parallel to its joint axis".to_string();
     if !pa.is_plane
         && matches!(
@@ -398,15 +387,15 @@ pub(crate) fn cam_solve(
     if brackets.is_empty() {
         return Err(format!(
             "build: cam found no contact in limit [{}, {}]",
-            fmt_f64(lo),
-            fmt_f64(hi)
+            fmt_num(lo),
+            fmt_num(hi)
         ));
     }
     if brackets.len() > 1 {
         return Err(format!(
             "build: cam contact is not unique in limit [{}, {}]",
-            fmt_f64(lo),
-            fmt_f64(hi)
+            fmt_num(lo),
+            fmt_num(hi)
         ));
     }
     let (mut a, mut b, k) = brackets[0];
@@ -1109,6 +1098,8 @@ pub(crate) fn closure_residual(
 /// 闭合残差的解析雅可比（G5+）：自由变量 (pair, 分量) 的螺旋列 s=[w;v] 作用于
 /// 它驱动的一侧端点：d(pa) = w×pa+v，d(û) = w×û（旋转保持单位长）。
 /// 测试纪律：FD 对拍（`closure_jacobian_fd_check`）。
+// 参数即输入集合（声明/闭合/自由变量/两端下标/索引/生成树/q/位形），无自然聚合体。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn closure_jacobian(
     decl: &GraphDecl,
     cd: &ClosureDecl,
@@ -1163,18 +1154,18 @@ pub(crate) fn closure_jacobian(
         );
         let (da, db) = (is_down(pi, ia), is_down(pi, ib));
         let d_pa = if da {
-            v3_add(vec3_cross(w, pa), v)
+            vec3_add(vec3_cross(w, pa), v)
         } else {
             [0.0; 3]
         };
         let d_pb = if db {
-            v3_add(vec3_cross(w, pb), v)
+            vec3_add(vec3_cross(w, pb), v)
         } else {
             [0.0; 3]
         };
         let d_ua = if da { vec3_cross(w, ua) } else { [0.0; 3] };
         let d_ub = if db { vec3_cross(w, ub) } else { [0.0; 3] };
-        let d_cr = v3_add(vec3_cross(d_ua, ub), vec3_cross(ua, d_ub));
+        let d_cr = vec3_add(vec3_cross(d_ua, ub), vec3_cross(ua, d_ub));
         for i in 0..3 {
             j[i][k] = d_pa[i] - d_pb[i];
             j[3 + i][k] = d_cr[i];
@@ -1372,19 +1363,18 @@ pub fn screws_world_at(
         JointKind::Helical => {
             // M = T(axis·p·q)·R(axis,q)：旋转心随平移走。
             let q = q.first().copied().unwrap_or(0.0);
-            let o = v3_add(o0, v3_scale(axis_w, pitch * q));
-            let v = v3_add(vec3_cross(o, axis_w), v3_scale(axis_w, pitch));
+            let o = vec3_add(o0, vec3_scale(axis_w, pitch * q));
+            let v = vec3_add(vec3_cross(o, axis_w), vec3_scale(axis_w, pitch));
             vec![[axis_w[0], axis_w[1], axis_w[2], v[0], v[1], v[2]]]
         }
         JointKind::Cylindrical => {
             // M = T(axis·qp)·R(axis,qr)：旋转心在平移后的点。
             let qp = q.get(1).copied().unwrap_or(0.0);
-            let o = v3_add(o0, v3_scale(axis_w, qp));
+            let o = vec3_add(o0, vec3_scale(axis_w, qp));
             vec![rot_col(o), slide_col]
         }
         JointKind::Spherical => {
             // M = Rx·Ry·Rz（先 z 后 y 后 x）：瞬时轴 = x, Rx·y, Rx·Ry·z（F_a 系）。
-            let q = q;
             let (rx, ry) = (
                 q.first().copied().unwrap_or(0.0),
                 q.get(1).copied().unwrap_or(0.0),
@@ -1417,14 +1407,13 @@ pub fn screws_world_at(
             let axis_l = axis;
             let e1 = v3_perp(axis_l);
             let e2 = vec3_cross(axis_l, e1);
-            let q = q;
             let th = q.get(2).copied().unwrap_or(0.0);
             let _ = th;
             let (x, y) = (
                 q.first().copied().unwrap_or(0.0),
                 q.get(1).copied().unwrap_or(0.0),
             );
-            let o = v3_add(o0, v3_add(v3_scale(r(e1), x), v3_scale(r(e2), y)));
+            let o = vec3_add(o0, vec3_add(vec3_scale(r(e1), x), vec3_scale(r(e2), y)));
             let rotc = rot_col(o);
             vec![
                 [0.0, 0.0, 0.0, r(e1)[0], r(e1)[1], r(e1)[2]],
@@ -1743,7 +1732,8 @@ fn newton_minimize(f: &dyn Fn(&[f64]) -> f64, x: &mut [f64]) -> Result<(), Strin
                 h[i][k] = (gp[i] - g[i]) / hh;
             }
         }
-        // 对称化（FD 噪声）
+        // 对称化（FD 噪声）：同时写 h[i][j] 与 h[j][i]（跨行），索引写法比迭代器清晰。
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             for j in i + 1..n {
                 let s = 0.5 * (h[i][j] + h[j][i]);
@@ -1755,8 +1745,8 @@ fn newton_minimize(f: &dyn Fn(&[f64]) -> f64, x: &mut [f64]) -> Result<(), Strin
         let mut stepped = false;
         for _ in 0..50 {
             let mut aa = h.clone();
-            for u2 in 0..n {
-                aa[u2][u2] += lambda;
+            for (u2, row) in aa.iter_mut().enumerate() {
+                row[u2] += lambda;
             }
             let b: Vec<f64> = g.iter().map(|v| -v).collect();
             if let Some(mut d) = gauss_solve(&aa, &b) {
@@ -1797,11 +1787,11 @@ pub fn link_masses(run: &crate::SceneRun) -> Vec<LinkMass> {
         for &mi in &l.meshes {
             if let Some(Some(mp)) = run.mass_props.get(mi) {
                 m_total += mp.mass;
-                acc = v3_add(acc, v3_scale(mp.cog, mp.mass));
+                acc = vec3_add(acc, vec3_scale(mp.cog, mp.mass));
             }
         }
         if m_total > 0.0 {
-            let cog_w = v3_scale(acc, 1.0 / m_total);
+            let cog_w = vec3_scale(acc, 1.0 / m_total);
             let inv = mat4_inv(l.world);
             out.push((
                 l.name.clone(),
@@ -1886,7 +1876,7 @@ pub(crate) fn drag_jacobian(
         let sgn = if p.tree_up == p.a { 1.0 } else { -1.0 };
         let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
         let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
-        let d = v3_add(vec3_cross(w, p_grab), v);
+        let d = vec3_add(vec3_cross(w, p_grab), v);
         for i in 0..3 {
             j[i][k] = d[i];
         }
@@ -2089,7 +2079,7 @@ fn rotvec_from_mat3(r: [[f64; 3]; 3]) -> [f64; 3] {
             }
             a = v3_unit(a);
         }
-        return v3_scale(a, th);
+        return vec3_scale(a, th);
     }
     let s = 2.0 * th.sin();
     [
@@ -2106,7 +2096,7 @@ fn rotvec_from_mat3(r: [[f64; 3]; 3]) -> [f64; 3] {
 /// （u=π−θ，避免 0/0）。有了它朝向行雅可比在**任意**残差处精确，不只是 r=0
 /// （FD 对拍：drag_pose_jacobian_fd_check 含非零残差构型）。
 fn rotvec_left_jac_inv(r: [f64; 3]) -> [[f64; 3]; 3] {
-    let th = v3_norm(r);
+    let th = vec3_len(r);
     let skew = [[0.0, -r[2], r[1]], [r[2], 0.0, -r[0]], [-r[1], r[0], 0.0]];
     let skew2 = mat3_mul(skew, skew);
     let c2 = if th < 1e-9 {
@@ -2183,7 +2173,7 @@ pub(crate) fn drag_pose_jacobian(
         let sgn = if pd.tree_up == pd.a { 1.0 } else { -1.0 };
         let w = [sgn * s[0], sgn * s[1], sgn * s[2]];
         let v = [sgn * s[3], sgn * s[4], sgn * s[5]];
-        let dp = v3_add(vec3_cross(w, p), v);
+        let dp = vec3_add(vec3_cross(w, p), v);
         let dw = mat3_vec(jl_inv, w);
         for i in 0..3 {
             j[i][k] = dp[i];
@@ -2357,16 +2347,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn closure_jacobian_fd_check() {
-        // 解析雅可比 vs FD（裁判）。任意非零位形，手工 parent/order/前向传播。
-        let decl = multi_dof_decl([0.0, 0.0], [0.0, 0.0, 0.0]);
+    /// 解析雅可比 vs FD（裁判）：任意非零位形，手工 parent/order/前向传播。
+    /// `decl`/`parent` 参数化边集方向，`tag` 只作断言消息前缀（空串 = 正向边）。
+    fn closure_jacobian_fd_check_impl(
+        decl: &GraphDecl,
+        parent: [Option<(usize, usize, bool)>; 3],
+        tag: &str,
+    ) {
         let cd = &decl.closures[0];
         let link_idx: HashMap<&str, usize> =
             [("base", 0), ("l1", 1), ("l2", 2)].into_iter().collect();
-        // parent[v] = (pair, 上游 link, fwd)
-        let parent: [Option<(usize, usize, bool)>; 3] =
-            [None, Some((0, 0, true)), Some((1, 1, true))];
         let order = [1usize, 2usize];
         let qs: Vec<Vec<f64>> = vec![vec![0.3, 0.2], vec![0.1, -0.2, 0.15]];
         let free: Vec<(usize, usize)> = vec![(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)];
@@ -2386,7 +2376,7 @@ mod tests {
             world
         };
         let world = fwd(&qs);
-        let ja = closure_jacobian(&decl, cd, &free, 2, 0, &link_idx, &parent, &qs, &world);
+        let ja = closure_jacobian(decl, cd, &free, 2, 0, &link_idx, &parent, &qs, &world);
         // FD 雅可比
         for (k, &(pi, c)) in free.iter().enumerate() {
             let h = 1e-7;
@@ -2398,11 +2388,21 @@ mod tests {
                 let fd = (rp[i] - r0[i]) / h;
                 assert!(
                     (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
-                    "J[{i}][{k}] 解析 {} vs FD {fd}",
+                    "{tag}J[{i}][{k}] 解析 {} vs FD {fd}",
                     ja[i][k]
                 );
             }
         }
+    }
+
+    #[test]
+    fn closure_jacobian_fd_check() {
+        closure_jacobian_fd_check_impl(
+            &multi_dof_decl([0.0, 0.0], [0.0, 0.0, 0.0]),
+            // parent[v] = (pair, 上游 link, fwd)
+            [None, Some((0, 0, true)), Some((1, 1, true))],
+            "",
+        );
     }
 
     /// 反向声明的 G5+ 场景：pair 朝 anchor 写（a 侧在生成树下游，BFS 反向边）。
@@ -2457,48 +2457,12 @@ mod tests {
     fn closure_jacobian_fd_check_reversed_edges() {
         // 探针（U1 前期）：反向边的下游是 a 侧，其运动螺旋 = −s（b 侧相对螺旋取负）。
         // closure_jacobian 必须与 FD 一致——不一致就是反向边符号漏处理的实证。
-        let decl = multi_dof_decl_reversed();
-        let cd = &decl.closures[0];
-        let link_idx: HashMap<&str, usize> =
-            [("base", 0), ("l1", 1), ("l2", 2)].into_iter().collect();
         // parent[v] = (pair, 上游 link, fwd)：两条边都是反向（fwd=false）。
-        let parent: [Option<(usize, usize, bool)>; 3] =
-            [None, Some((0, 0, false)), Some((1, 1, false))];
-        let order = [1usize, 2usize];
-        let qs: Vec<Vec<f64>> = vec![vec![0.3, 0.2], vec![0.1, -0.2, 0.15]];
-        let free: Vec<(usize, usize)> = vec![(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)];
-        let fwd = |qs: &Vec<Vec<f64>>| -> Vec<[f64; 16]> {
-            let mut world = vec![mat4_identity(); 3];
-            for &v in &order {
-                let (pi, u, is_fwd) = parent[v].unwrap();
-                let p = &decl.pairs[pi];
-                let fa = mat4_mul(translate4(p.at), rpy4(p.rpy));
-                let m = joint_motion(&p.kind, p.axis, &qs[pi], p.pitch.unwrap_or(0.0));
-                world[v] = if is_fwd {
-                    mat4_mul(world[u], mat4_mul(fa, m))
-                } else {
-                    mat4_mul(world[u], mat4_inv(mat4_mul(fa, m)))
-                };
-            }
-            world
-        };
-        let world = fwd(&qs);
-        let ja = closure_jacobian(&decl, cd, &free, 2, 0, &link_idx, &parent, &qs, &world);
-        for (k, &(pi, c)) in free.iter().enumerate() {
-            let h = 1e-7;
-            let mut qp = qs.clone();
-            qp[pi][c] += h;
-            let rp = closure_residual(cd, 2, 0, &fwd(&qp));
-            let r0 = closure_residual(cd, 2, 0, &fwd(&qs));
-            for i in 0..6 {
-                let fd = (rp[i] - r0[i]) / h;
-                assert!(
-                    (ja[i][k] - fd).abs() < 1e-5 + 1e-5 * fd.abs(),
-                    "反向边 J[{i}][{k}] 解析 {} vs FD {fd}",
-                    ja[i][k]
-                );
-            }
-        }
+        closure_jacobian_fd_check_impl(
+            &multi_dof_decl_reversed(),
+            [None, Some((0, 0, false)), Some((1, 1, false))],
+            "反向边 ",
+        );
     }
 
     // ---- 抓取驱动（U1）------------------------------------------------------
@@ -3044,7 +3008,7 @@ mod tests {
         // （对跖处符号二义，断言模长 = π 且 |axis·rv̂| = 1）。
         let m = Multivector::rotor([0.6, 0.8, 0.0], std::f64::consts::PI).to_matrix();
         let rv = rotvec_from_mat3(mat4_rot(&m));
-        let n = v3_norm(rv);
+        let n = vec3_len(rv);
         assert!(
             (n - std::f64::consts::PI).abs() < 1e-9,
             "|rv| 应为 π: {rv:?}"
@@ -3077,7 +3041,7 @@ mod tests {
     /// J_l(r) = I + a·r̂ + b·r̂²，a = (1−cosθ)/θ²，b = (θ−sinθ)/θ³。
     #[cfg(test)]
     fn rotvec_left_jac(r: [f64; 3]) -> [[f64; 3]; 3] {
-        let th = v3_norm(r);
+        let th = vec3_len(r);
         let skew = [[0.0, -r[2], r[1]], [r[2], 0.0, -r[0]], [-r[1], r[0], 0.0]];
         let skew2 = mat3_mul(skew, skew);
         let (a, b) = (
@@ -3100,15 +3064,14 @@ mod tests {
         // 恒等式** J_l⁻¹·J_l = I（J_l 用独立闭式实现）。多轴向 × |r| = π−5e-4。
         for axis in [[0.6, 0.8, 0.0], [0.0, 1.0, 0.0], [0.3, -0.5, 0.8]] {
             let a = v3_unit(axis);
-            let r = v3_scale(a, std::f64::consts::PI - 5e-4);
+            let r = vec3_scale(a, std::f64::consts::PI - 5e-4);
             let prod = mat3_mul(rotvec_left_jac_inv(r), rotvec_left_jac(r));
-            for i in 0..3 {
-                for j in 0..3 {
+            for (i, row) in prod.iter().enumerate() {
+                for (j, v) in row.iter().enumerate() {
                     let want = if i == j { 1.0 } else { 0.0 };
                     assert!(
-                        (prod[i][j] - want).abs() < 1e-9,
-                        "axis={axis:?}: (J⁻¹J)[{i}][{j}] = {}",
-                        prod[i][j]
+                        (v - want).abs() < 1e-9,
+                        "axis={axis:?}: (J⁻¹J)[{i}][{j}] = {v}"
                     );
                 }
             }
@@ -3116,10 +3079,10 @@ mod tests {
         // 小角级数分支（c2 = 1/12）同一恒等式
         let r = [1e-6, -2e-6, 3e-6];
         let prod = mat3_mul(rotvec_left_jac_inv(r), rotvec_left_jac(r));
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, row) in prod.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
                 let want = if i == j { 1.0 } else { 0.0 };
-                assert!((prod[i][j] - want).abs() < 1e-9, "小角分支: {}", prod[i][j]);
+                assert!((v - want).abs() < 1e-9, "小角分支: {v}");
             }
         }
     }

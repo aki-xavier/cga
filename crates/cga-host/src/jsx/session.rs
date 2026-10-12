@@ -9,10 +9,11 @@ use serde_json::Value;
 use cga_scene::{Color, Object, PerspectiveCamera, Scene};
 
 use crate::scene_build::{
-    solve_graph, CamDecl, CamProfile, ClosureDecl, GearDecl, GraphDecl, JointKind, PairDecl,
+    rigid_inv, solve_graph, CamDecl, CamProfile, ClosureDecl, GearDecl, GraphDecl, JointKind,
+    PairDecl,
 };
 
-use super::builder::{mat4_inv, Builder, BuilderStart};
+use super::builder::{Builder, BuilderStart};
 use super::compile::{compile_jsx_with, disk_resolver, PRELUDE};
 use super::css::*;
 use super::element::*;
@@ -44,8 +45,7 @@ pub(crate) fn solve_host(
         args.first()
             .ok_or_else(|| bad("JSX: solve needs (init array, residuals)"))?,
         ctx,
-    )
-    .map_err(|e| e)?;
+    )?;
     let fns: Vec<boa_engine::JsObject> = match args.get(1).and_then(|v| v.as_object()) {
         Some(o) => {
             let n = o.get(js_string!("length"), ctx)?.to_number(ctx)? as usize;
@@ -67,8 +67,12 @@ pub(crate) fn solve_host(
         let arr = v.to_vec().try_into_js(ctx)?;
         fns.iter()
             .map(|f| {
-                f.call(&boa_engine::JsValue::undefined(), &[arr.clone()], ctx)
-                    .and_then(|r| r.to_number(ctx))
+                f.call(
+                    &boa_engine::JsValue::undefined(),
+                    std::slice::from_ref(&arr),
+                    ctx,
+                )
+                .and_then(|r| r.to_number(ctx))
             })
             .collect()
     };
@@ -78,7 +82,7 @@ pub(crate) fn solve_host(
     for _ in 0..100 {
         let rmax = r.iter().fold(0.0f64, |a, b| a.max(b.abs()));
         if rmax < 1e-9 {
-            return Ok(v.clone().try_into_js(ctx)?);
+            return v.clone().try_into_js(ctx);
         }
         // 数值雅可比
         let mut j = vec![vec![0.0f64; n]; m];
@@ -105,8 +109,8 @@ pub(crate) fn solve_host(
                     }
                 }
             }
-            for c in 0..n {
-                a[c][c] += lambda;
+            for (c, row) in a.iter_mut().enumerate() {
+                row[c] += lambda;
             }
             // 高斯消元
             let mut ok = true;
@@ -125,8 +129,10 @@ pub(crate) fn solve_host(
                 b.swap(c, piv);
                 for rr in c + 1..n {
                     let f = a[rr][c] / a[c][c];
-                    for cc in c..n {
-                        a[rr][cc] -= f * a[c][cc];
+                    let (up, down) = a.split_at_mut(rr);
+                    let (src, dst) = (&up[c], &mut down[0]);
+                    for (dv, sv) in dst.iter_mut().zip(src.iter()).skip(c) {
+                        *dv -= f * sv;
                     }
                     b[rr] -= f * b[c];
                 }
@@ -979,7 +985,7 @@ impl SceneSession {
                 .find(|l| l.name == link)
                 .ok_or_else(|| format!("JSX: drag 引用未知 link {link}"))?;
             // 世界点 → link 局部系（解算器在图求解位姿系里工作）。
-            let grab_local = cga_core::transform_point(mat4_inv(l.world), from);
+            let grab_local = cga_core::transform_point(rigid_inv(l.world), from);
             crate::scene_build::drag_solve(&run.kinematics, link, grab_local, to, &self.drag_owned)?
         };
         self.apply_drag_q(&solved.solved)?;
@@ -1080,7 +1086,7 @@ impl SceneSession {
         self.rebuild()?;
         let run = self.run();
         let mut r = cga_gpu::Renderer::new(w, h, aa, 3).with_mode(mode);
-        let img = r.render(run.scene.clone(), run.camera.clone());
+        let img = r.render(run.scene.clone(), run.camera);
         Ok(crate::HeadlessImage {
             width: w,
             height: h,
@@ -1156,7 +1162,7 @@ impl SceneSession {
         self.rebuild()?;
         let run = self.run();
         let mut r = cga_gpu::Renderer::new(w, h, aa, 3).with_dof(aperture, focal);
-        let img = r.render(run.scene.clone(), run.camera.clone());
+        let img = r.render(run.scene.clone(), run.camera);
         Ok(crate::HeadlessImage {
             width: w,
             height: h,

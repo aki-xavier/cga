@@ -1,4 +1,4 @@
-use crate::Multivector;
+use crate::{vec3_len, Multivector};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DupinCyclide {
@@ -136,7 +136,7 @@ impl DupinCyclide {
 
     pub fn normal(&self, x: f64, y: f64, z: f64) -> [f64; 3] {
         let g = self.gradient(x, y, z);
-        let n = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+        let n = vec3_len(g);
         if n < 1e-12 {
             return [0.0, 0.0, 1.0];
         }

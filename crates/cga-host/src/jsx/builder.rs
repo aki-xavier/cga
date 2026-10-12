@@ -5,13 +5,12 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use cga_core::Multivector;
-use cga_gpu::shading::Light;
-use cga_scene::Color;
+use cga_core::{mat4_mul, vec3_len, Multivector};
+use cga_scene::{Color, Light, Material};
 
 use crate::scene_build::{
-    ArgValue, Builders, CamSolved, ClosureSolved, GearRel, Kinematics, LinkDef, PairDef,
-    TagInstance, TagRegistry,
+    rigid_inv, translate4, ArgValue, Builders, CamSolved, ClosureSolved, GearRel, Kinematics,
+    LinkDef, PairDef, TagInstance, TagRegistry,
 };
 use cga_scene::{Object, ObjectParams, PerspectiveCamera, Scene};
 
@@ -28,6 +27,9 @@ pub(crate) type BuiltRun = (
     HashMap<*const El, std::ops::Range<usize>>,
     BuildStats,
 );
+
+/// 查询目标的解算结果：世界变换 + 可选世界包围盒。
+pub(crate) type TargetXform = ([f64; 16], Option<[[f64; 3]; 2]>);
 
 /// 构造参数（一次构建的全部外部输入）：图解、缓存与规则。
 pub(crate) struct BuilderStart<'p> {
@@ -80,16 +82,6 @@ pub(crate) struct Builder<'p> {
     reused_objects: usize,
 }
 
-pub(crate) fn mat4_mul(a: [f64; 16], b: [f64; 16]) -> [f64; 16] {
-    cga_core::mat4_mul(a, b)
-}
-
-pub(crate) fn translate4(t: [f64; 3]) -> [f64; 16] {
-    [
-        1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2], 0.0, 0.0, 0.0, 1.0,
-    ]
-}
-
 pub(crate) fn scale_matrix(v: [f64; 3]) -> [f64; 16] {
     let mut m = cga_core::mat4_identity();
     m[0] = v[0];
@@ -113,7 +105,7 @@ pub(crate) fn check_invertible(tag: &str, m: &[f64; 16]) -> Result<(), String> {
 }
 
 pub(crate) fn mirror_matrix(axis: [f64; 3]) -> Result<[f64; 16], String> {
-    let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    let n = vec3_len(axis);
     if n < 1e-12 {
         return Err("JSX: mirror axis must be nonzero".to_string());
     }
@@ -356,10 +348,7 @@ impl<'p> Builder<'p> {
         Ok(out)
     }
 
-    fn build_material(
-        &self,
-        style: &HashMap<String, ArgValue>,
-    ) -> Result<cga_gpu::shading::Material, String> {
+    fn build_material(&self, style: &HashMap<String, ArgValue>) -> Result<Material, String> {
         self.loader
             .build_material(style)
             .map_err(|e| e.replacen("build: ", "JSX: ", 1))
@@ -367,7 +356,7 @@ impl<'p> Builder<'p> {
 
     fn register_tags(&mut self, geo: &cga_core::Geometry, world: [f64; 16], emit: [f64; 16]) {
         for (name, entry) in self.pending_tags.clone() {
-            let rel = mat4_mul(mat4_inv(entry), emit);
+            let rel = mat4_mul(rigid_inv(entry), emit);
             self.tags.entry(name).or_default().push(TagInstance {
                 geo: geo.clone(),
                 world,
@@ -381,7 +370,7 @@ impl<'p> Builder<'p> {
         scene: &mut Scene,
         geo: cga_core::Geometry,
         world: [f64; 16],
-        mat: cga_gpu::shading::Material,
+        mat: Material,
         src: Option<i64>,
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
@@ -1084,21 +1073,6 @@ impl<'p> Builder<'p> {
     }
 }
 
-pub(crate) fn mat4_inv(m: [f64; 16]) -> [f64; 16] {
-    let mut r = [0.0; 16];
-    for i in 0..3 {
-        for j in 0..3 {
-            r[i * 4 + j] = m[j * 4 + i];
-        }
-    }
-    let t = [m[3], m[7], m[11]];
-    for i in 0..3 {
-        r[i * 4 + 3] = -(r[i * 4] * t[0] + r[i * 4 + 1] * t[1] + r[i * 4 + 2] * t[2]);
-    }
-    r[15] = 1.0;
-    r
-}
-
 pub(crate) fn parse_hex(s: &str) -> Result<Color, String> {
     let h = s.trim().trim_start_matches('#');
     let v = i32::from_str_radix(h, 16).map_err(|_| format!("JSX: bad color {s}"))?;
@@ -1195,11 +1169,7 @@ impl<'p> Builder<'p> {
     }
 
     /// (transform, world bounds) of a query target: tag name or element.
-    fn query_target(
-        &mut self,
-        of: &Value,
-        what: &str,
-    ) -> Result<([f64; 16], Option<[[f64; 3]; 2]>), String> {
+    fn query_target(&mut self, of: &Value, what: &str) -> Result<TargetXform, String> {
         match of {
             Value::String(s) => {
                 let insts = match self.tags.get(s) {
@@ -1332,7 +1302,7 @@ impl<'p> Builder<'p> {
                     "ydir" => [m[1], m[5], m[9]],
                     _ => [m[2], m[6], m[10]],
                 };
-                let n = (col[0] * col[0] + col[1] * col[1] + col[2] * col[2]).sqrt();
+                let n = vec3_len(col);
                 if n < 1e-12 {
                     return Err(format!("JSX: {q} is degenerate"));
                 }
@@ -1498,7 +1468,7 @@ impl<'p> Builder<'p> {
         ctx: [f64; 16],
     ) -> Result<(cga_core::Geometry, [f64; 16]), String> {
         let r = p_num(el, "r")?.ok_or_else(|| "JSX: drill needs r=".to_string())?;
-        if !(r > 0.0) {
+        if r.is_nan() || r <= 0.0 {
             return Err("JSX: drill.r must be > 0".to_string());
         }
         let ax = match p_num(el, "axis")? {
@@ -1515,7 +1485,7 @@ impl<'p> Builder<'p> {
                 };
                 let rel0 = insts[0].rel;
                 let f = mat4_mul(ctx, rel0);
-                let finv = mat4_inv(f);
+                let finv = rigid_inv(f);
                 let mut acc: Option<[[f64; 3]; 2]> = None;
                 for i in &insts {
                     if let Some(b) = self
@@ -1583,7 +1553,7 @@ impl<'p> Builder<'p> {
                             "JSX: drill face reference has no finite bounds".to_string()
                         })?;
                     let p_world = cga_core::transform_point(insts[0].world, p_local);
-                    Ok(Some(cga_core::transform_point(mat4_inv(f), p_world)[ax]))
+                    Ok(Some(cga_core::transform_point(rigid_inv(f), p_world)[ax]))
                 }
                 _ => Err("JSX: drill from/to must be a number or \"name:key\"".to_string()),
             }
@@ -1600,7 +1570,7 @@ impl<'p> Builder<'p> {
                 .map(|b| b[1][ax])
                 .ok_or_else(|| "JSX: drill needs through=<name or geometry>".to_string())?,
         };
-        if !(a1 > a0) {
+        if a1.is_nan() || a0.is_nan() || a1 <= a0 {
             return Err(format!(
                 "JSX: drill extent must be non-empty ({a0} .. {a1})"
             ));

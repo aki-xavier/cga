@@ -59,11 +59,11 @@ fn sphere_contacts(c: [f64; 3], r: f64, s: &Shape, flip: bool) -> Option<Vec<Con
     } else {
         unit(dir)
     };
-    let on_sphere = sub(c, scale(n, r));
-    let mid = scale(add(on_sphere, q), 0.5);
+    let on_sphere = sub(c, vec3_scale(n, r));
+    let mid = vec3_scale(add(on_sphere, q), 0.5);
     Some(vec![Contact {
         point: mid,
-        normal: if flip { n } else { scale(n, -1.0) },
+        normal: if flip { n } else { vec3_scale(n, -1.0) },
         separation: sep,
     }])
 }
@@ -73,17 +73,16 @@ fn plane_contacts(n: [f64; 3], d: f64, s: &Shape, flip: bool) -> Option<Vec<Cont
     if let Shape::Plane { .. } = s {
         return None; // 平面–平面：接触是一条线，v1 不给
     }
-    let (lo, hi) = support_range(s, n)?;
+    let (lo, _) = support_range(s, n)?;
     let sep = plane_separation(n, d, s)?;
     if lo - d > 0.0 {
         return Some(Vec::new()); // 确切分离
     }
-    let _ = hi;
     // 接触点 = b 在 −n 方向的最深支撑点（穿入时是最深点，接触时恰在界面上）。
-    let p = support_point(s, scale(n, -1.0))?;
+    let p = support_point(s, vec3_scale(n, -1.0))?;
     Some(vec![Contact {
         point: p,
-        normal: if flip { scale(n, -1.0) } else { n },
+        normal: if flip { vec3_scale(n, -1.0) } else { n },
         separation: sep,
     }])
 }
@@ -99,37 +98,37 @@ fn closest_point(s: &Shape, p: [f64; 3]) -> Option<[f64; 3]> {
             Some(if n < 1e-12 {
                 add(c, [r, 0.0, 0.0])
             } else {
-                add(c, scale(d, r / n))
+                add(c, vec3_scale(d, r / n))
             })
         }
-        Shape::Plane { n, d } => Some(sub(p, scale(n, dot(n, p) - d))),
+        Shape::Plane { n, d } => Some(sub(p, vec3_scale(n, vec3_dot(n, p) - d))),
         Shape::Box { c, axes, half } => {
             let q = sub(p, c);
             let mut out = c;
             for i in 0..3 {
-                let x = dot(q, axes[i]).clamp(-half[i], half[i]);
-                out = add(out, scale(axes[i], x));
+                let x = vec3_dot(q, axes[i]).clamp(-half[i], half[i]);
+                out = add(out, vec3_scale(axes[i], x));
             }
             Some(out)
         }
         Shape::Cylinder { q, u, r, half } => {
             let w = sub(p, q);
-            let x = dot(w, u);
-            let rad = sub(w, scale(u, x));
+            let x = vec3_dot(w, u);
+            let rad = sub(w, vec3_scale(u, x));
             let rho = norm(rad);
             let xc = if half <= 0.0 { x } else { x.clamp(-half, half) };
             let rc = if rho > r { r } else { rho };
             let dir = if rho < 1e-12 {
                 [1.0, 0.0, 0.0]
             } else {
-                scale(rad, 1.0 / rho)
+                vec3_scale(rad, 1.0 / rho)
             };
-            Some(add(q, add(scale(u, xc), scale(dir, rc))))
+            Some(add(q, add(vec3_scale(u, xc), vec3_scale(dir, rc))))
         }
         Shape::Cone { c, axis, r, h } => {
             let q = sub(p, c);
-            let z = dot(q, axis);
-            let rad = sub(q, scale(axis, z));
+            let z = vec3_dot(q, axis);
+            let rad = sub(q, vec3_scale(axis, z));
             let rho = norm(rad);
             // 截面 (ρ, z) 上求截面三角形边的最近点，再映回 3D。
             let apex = (0.0, h / 2.0);
@@ -141,9 +140,9 @@ fn closest_point(s: &Shape, p: [f64; 3]) -> Option<[f64; 3]> {
             let dir = if rho < 1e-12 {
                 [1.0, 0.0, 0.0]
             } else {
-                scale(rad, 1.0 / rho)
+                vec3_scale(rad, 1.0 / rho)
             };
-            Some(add(c, add(scale(axis, qz), scale(dir, qr))))
+            Some(add(c, add(vec3_scale(axis, qz), vec3_scale(dir, qr))))
         }
         Shape::Torus {
             c,
@@ -152,8 +151,8 @@ fn closest_point(s: &Shape, p: [f64; 3]) -> Option<[f64; 3]> {
             minor,
         } => {
             let q = sub(p, c);
-            let z = dot(q, axis);
-            let rad = sub(q, scale(axis, z));
+            let z = vec3_dot(q, axis);
+            let rad = sub(q, vec3_scale(axis, z));
             let rho = norm(rad);
             // 截面 (ρ, z)：环心 (major, 0)、半径 minor 的圆。
             let d = [rho - major, z];
@@ -166,9 +165,9 @@ fn closest_point(s: &Shape, p: [f64; 3]) -> Option<[f64; 3]> {
             let dir = if rho < 1e-12 {
                 [1.0, 0.0, 0.0]
             } else {
-                scale(rad, 1.0 / rho)
+                vec3_scale(rad, 1.0 / rho)
             };
-            Some(add(c, add(scale(axis, qz), scale(dir, qr))))
+            Some(add(c, add(vec3_scale(axis, qz), vec3_scale(dir, qr))))
         }
         Shape::Ellipsoid { c, axes, radii } => ellipsoid_closest(c, axes, radii, p).map(|x| x.1),
     }
@@ -191,12 +190,16 @@ fn closest_on_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, f64), f
 /// 方向 v（单位）上的支撑点（v 方向的最远点）。
 fn support_point(s: &Shape, v: [f64; 3]) -> Option<[f64; 3]> {
     match *s {
-        Shape::Sphere { c, r } => Some(add(c, scale(v, r))),
+        Shape::Sphere { c, r } => Some(add(c, vec3_scale(v, r))),
         Shape::Box { c, axes, half } => {
             let mut p = c;
             for i in 0..3 {
-                let s = if dot(v, axes[i]) >= 0.0 { 1.0 } else { -1.0 };
-                p = add(p, scale(axes[i], s * half[i]));
+                let s = if vec3_dot(v, axes[i]) >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                p = add(p, vec3_scale(axes[i], s * half[i]));
             }
             Some(p)
         }
@@ -204,28 +207,28 @@ fn support_point(s: &Shape, v: [f64; 3]) -> Option<[f64; 3]> {
             if half <= 0.0 {
                 return None;
             }
-            let vu = dot(v, u);
+            let vu = vec3_dot(v, u);
             let cap = if vu >= 0.0 { half } else { -half };
-            let perp = sub(v, scale(u, vu));
+            let perp = sub(v, vec3_scale(u, vu));
             let pl = norm(perp);
             let rim = if pl < 1e-12 {
                 [0.0; 3]
             } else {
-                scale(perp, r / pl)
+                vec3_scale(perp, r / pl)
             };
-            Some(add(q, add(scale(u, cap), rim)))
+            Some(add(q, add(vec3_scale(u, cap), rim)))
         }
         Shape::Cone { c, axis, r, h } => {
-            let apex = add(c, scale(axis, h / 2.0));
-            let bc = add(c, scale(axis, -h / 2.0));
-            let perp = sub(v, scale(axis, dot(v, axis)));
+            let apex = add(c, vec3_scale(axis, h / 2.0));
+            let bc = add(c, vec3_scale(axis, -h / 2.0));
+            let perp = sub(v, vec3_scale(axis, vec3_dot(v, axis)));
             let pl = norm(perp);
             let rim = if pl < 1e-12 {
                 bc
             } else {
-                add(bc, scale(perp, r / pl))
+                add(bc, vec3_scale(perp, r / pl))
             };
-            Some(if dot(v, apex) >= dot(v, rim) {
+            Some(if vec3_dot(v, apex) >= vec3_dot(v, rim) {
                 apex
             } else {
                 rim
@@ -237,18 +240,22 @@ fn support_point(s: &Shape, v: [f64; 3]) -> Option<[f64; 3]> {
             major,
             minor,
         } => {
-            let va = dot(v, axis);
-            let perp = sub(v, scale(axis, va));
+            let va = vec3_dot(v, axis);
+            let perp = sub(v, vec3_scale(axis, va));
             let pl = norm(perp);
             let m = if pl < 1e-12 {
                 c
             } else {
-                add(c, scale(perp, major / pl))
+                add(c, vec3_scale(perp, major / pl))
             };
-            Some(add(m, scale(v, minor)))
+            Some(add(m, vec3_scale(v, minor)))
         }
         Shape::Ellipsoid { c, axes, radii } => {
-            let vi = [dot(v, axes[0]), dot(v, axes[1]), dot(v, axes[2])];
+            let vi = [
+                vec3_dot(v, axes[0]),
+                vec3_dot(v, axes[1]),
+                vec3_dot(v, axes[2]),
+            ];
             let s: f64 = (0..3)
                 .map(|i| (vi[i] * radii[i]) * (vi[i] * radii[i]))
                 .sum::<f64>()
@@ -258,7 +265,7 @@ fn support_point(s: &Shape, v: [f64; 3]) -> Option<[f64; 3]> {
             }
             let mut p = c;
             for i in 0..3 {
-                p = add(p, scale(axes[i], radii[i] * radii[i] * vi[i] / s));
+                p = add(p, vec3_scale(axes[i], radii[i] * radii[i] * vi[i] / s));
             }
             Some(p)
         }
@@ -274,7 +281,11 @@ pub(crate) fn ellipsoid_closest(
     p: [f64; 3],
 ) -> Option<(f64, [f64; 3])> {
     let q = sub(p, c);
-    let a = [dot(q, axes[0]), dot(q, axes[1]), dot(q, axes[2])];
+    let a = [
+        vec3_dot(q, axes[0]),
+        vec3_dot(q, axes[1]),
+        vec3_dot(q, axes[2]),
+    ];
     let s: f64 = (0..3).map(|i| (a[i] / radii[i]) * (a[i] / radii[i])).sum();
     if s <= 1.0 {
         return None;
@@ -310,7 +321,7 @@ pub(crate) fn ellipsoid_closest(
     for i in 0..3 {
         let x = radii[i] * radii[i] * a[i] / (t + radii[i] * radii[i]);
         d2 += (x - a[i]) * (x - a[i]);
-        out = add(out, scale(axes[i], x));
+        out = add(out, vec3_scale(axes[i], x));
     }
     Some((d2.sqrt(), out))
 }
@@ -342,11 +353,11 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
     let mtv = box_mtv_exact(ca, aa, ha, cb, ab, hb);
     let l = norm(mtv);
     let normal = if l > 1e-12 {
-        scale(mtv, 1.0 / l)
+        vec3_scale(mtv, 1.0 / l)
     } else {
         let t = sub(cb, ca);
         let extent = |l: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]| -> f64 {
-            (0..3).map(|i| dot(l, axes[i]).abs() * half[i]).sum()
+            (0..3).map(|i| vec3_dot(l, axes[i]).abs() * half[i]).sum()
         };
         let mut best_axis = [1.0, 0.0, 0.0];
         let mut min_overlap = f64::INFINITY;
@@ -355,8 +366,8 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
             if ll < 1e-9 {
                 return;
             }
-            let l = scale(l, 1.0 / ll);
-            let ov = extent(l, aa, ha) + extent(l, ab, hb) - dot(t, l).abs();
+            let l = vec3_scale(l, 1.0 / ll);
+            let ov = extent(l, aa, ha) + extent(l, ab, hb) - vec3_dot(t, l).abs();
             if ov < min_overlap {
                 min_overlap = ov;
                 best_axis = l;
@@ -367,13 +378,13 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
         }
         for axa in aa {
             for axb in ab {
-                consider(cross(axa, axb));
+                consider(vec3_cross(axa, axb));
             }
         }
-        if dot(best_axis, t) >= 0.0 {
+        if vec3_dot(best_axis, t) >= 0.0 {
             best_axis
         } else {
-            scale(best_axis, -1.0)
+            vec3_scale(best_axis, -1.0)
         }
     };
 
@@ -415,7 +426,7 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
     }
     if uniq.is_empty() {
         // 深包容等无面交点的情形：退化为两心间的中点。
-        uniq.push(scale(add(ca, cb), 0.5));
+        uniq.push(vec3_scale(add(ca, cb), 0.5));
     }
     Some(
         uniq.into_iter()
@@ -430,7 +441,7 @@ fn box_box_contacts(a: &Shape, b: &Shape) -> Option<Vec<Contact>> {
 
 fn point_in_box(p: [f64; 3], c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3]) -> bool {
     let q = sub(p, c);
-    (0..3).all(|i| dot(q, axes[i]).abs() <= half[i] + 1e-12)
+    (0..3).all(|i| vec3_dot(q, axes[i]).abs() <= half[i] + 1e-12)
 }
 
 /// 边（两端点）与盒面（轴 f/2、符号 f%2）的交点：两端点在面两侧且交点落在面内。
@@ -443,16 +454,18 @@ fn edge_face_cross(
 ) -> Option<[f64; 3]> {
     let j = f / 2;
     let s = if f.is_multiple_of(2) { 1.0 } else { -1.0 };
-    let d0 = dot(sub(e[0], c), axes[j]) - s * half[j];
-    let d1 = dot(sub(e[1], c), axes[j]) - s * half[j];
+    let d0 = vec3_dot(sub(e[0], c), axes[j]) - s * half[j];
+    let d1 = vec3_dot(sub(e[1], c), axes[j]) - s * half[j];
     if d0 * d1 > 0.0 || (d0 - d1).abs() < 1e-15 {
         return None;
     }
     let t = d0 / (d0 - d1);
-    let p = add(e[0], scale(sub(e[1], e[0]), t));
+    let p = add(e[0], vec3_scale(sub(e[1], e[0]), t));
     let q = sub(p, c);
     let (u, k) = ((j + 1) % 3, (j + 2) % 3);
-    if dot(q, axes[u]).abs() <= half[u] + 1e-12 && dot(q, axes[k]).abs() <= half[k] + 1e-12 {
+    if vec3_dot(q, axes[u]).abs() <= half[u] + 1e-12
+        && vec3_dot(q, axes[k]).abs() <= half[k] + 1e-12
+    {
         Some(p)
     } else {
         None

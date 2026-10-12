@@ -3,6 +3,22 @@ use crate::csg_node::{CsgGeometry, CsgParams};
 use crate::primitives::Cylinder;
 use crate::{Mat3, Multivector};
 
+/// 场景几何：所有几何 kernel 的封闭枚举（含 CSG 节点与仿射包装）。
+#[derive(Clone, Debug)]
+pub enum Geometry {
+    AffineGeometry(AffineGeometry),
+    CsgGeometry(CsgGeometry),
+    ConeGeometry(ConeGeometry),
+    CyclideGeometry(CyclideGeometry),
+    EllipsoidGeometry(EllipsoidGeometry),
+    TorusGeometry(TorusGeometry),
+    SphereGeometry(SphereGeometry),
+    PlaneGeometry(PlaneGeometry),
+    CylinderGeometry(CylinderGeometry),
+    BoxGeometry(BoxGeometry),
+    CircleGeometry(CircleGeometry),
+}
+
 pub mod sphere_params;
 pub use self::sphere_params::*;
 pub mod plane_params;
@@ -34,8 +50,6 @@ pub mod box_geometry;
 pub use self::box_geometry::*;
 pub mod circle_geometry;
 pub use self::circle_geometry::*;
-pub mod geometry;
-pub use self::geometry::*;
 pub mod cone_geometry;
 pub use self::cone_geometry::*;
 pub mod torus_geometry;
@@ -44,11 +58,3 @@ pub mod ellipsoid_geometry;
 pub use self::ellipsoid_geometry::*;
 pub mod cyclide_geometry;
 pub use self::cyclide_geometry::*;
-
-pub fn vec3_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}

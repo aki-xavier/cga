@@ -2,12 +2,12 @@
 //! helper + 1336 行测试，名不副实）。
 
 use super::*;
-use crate::scene::{Object, ObjectParams, PerspectiveCamera};
-use crate::scene_graph::{srgb_to_linear, Color};
-use crate::shading::{Light, Material, MaterialParams};
 use cga_core::{
     BoxGeometry, ConeGeometry, CyclideGeometry, CylinderGeometry, EllipsoidGeometry, Geometry,
     PlaneGeometry, SphereGeometry, TorusGeometry,
+};
+use cga_scene::{
+    srgb_to_linear, Color, Light, Material, MaterialParams, Object, ObjectParams, PerspectiveCamera,
 };
 use mlx_rs::Array;
 
@@ -16,7 +16,7 @@ fn data_f32(img: &Array) -> Vec<f32> {
     img.as_slice::<f32>().to_vec()
 }
 
-fn std_red_material() -> crate::shading::Material {
+fn std_red_material() -> Material {
     Material::standard(MaterialParams {
         color: Color::from_hex(0xC0392B),
         roughness: 0.3,
@@ -430,6 +430,8 @@ fn test_render_ignore_opacity_transparent_occluder_fully_shadows() {
     // 完全不透明的遮挡物（opacity=0）：正常模式不投影（透过率 1，像素被照亮），
     // 忽略透明度模式按全不透明投影（本影只剩环境光）。
     let sc = rq_shadow_scene(Some(0.0));
+    // 0.7071 是刻意取粗的 1/√2（45° 受光面），只用作消息里的参考上限。
+    #[allow(clippy::approx_constant)]
     let want_lit = rq_linear_to_srgb255(0.8 * 0.7071 + 0.2); // 直射 + 环境（粗略上限）
     let mut n = Renderer::new(96, 96, 1, 3);
     let px_n = rq_px(&n.render(sc.clone(), rq_shadow_cam()), 96, 48, 48);
@@ -476,7 +478,7 @@ fn test_render_object_straddling_frame_edge() {
     let d = data_f32(&img);
     // 相机基座的 right = -x，所以世界 +x 的球出现在画面左缘：左缘被覆盖，
     // 右缘仍是天空背景（0x87CEEB：蓝 > 红）。
-    let li = (32 * 64 + 0) * 4;
+    let li = (32 * 64) * 4;
     let ri = (32 * 64 + 63) * 4;
     let (lr, lg, lb) = (d[li], d[li + 1], d[li + 2]);
     let (rr, _rg, rb) = (d[ri], d[ri + 1], d[ri + 2]);
@@ -854,7 +856,7 @@ fn test_diag_bitwise_deterministic() {
 
 fn dof_scene() -> (Scene, PerspectiveCamera) {
     // 两个自发光小球：A 在 (0,0,0)（对焦距离 5 处），B 在 (0.35,0,−2)（离焦）。
-    let emissive = || crate::shading::Material {
+    let emissive = || Material {
         emissive: Color::from_hex(0xFFFFFF),
         ..std_red_material()
     };

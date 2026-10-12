@@ -3,6 +3,8 @@
 //! 只做字节编码，不做几何：三角网来自 `GeometryParams::bake`（marching
 //! tetrahedra，认证水密）或场景级导出（cga-host 把各对象的 motor 应用到顶点）。
 
+use cga_core::{vec3_cross, vec3_len, vec3_sub};
+
 /// 二进制 STL（80 字节头 + 三角数 + 每面 50 字节）。单位法线按右手定则现算；
 /// 退化面写零法线（读取方通常忽略 STL 法线）。
 pub fn stl_binary(verts: &[[f64; 3]], faces: &[[i32; 3]]) -> Vec<u8> {
@@ -13,9 +15,9 @@ pub fn stl_binary(verts: &[[f64; 3]], faces: &[[i32; 3]]) -> Vec<u8> {
         let a = verts[f[0] as usize];
         let b = verts[f[1] as usize];
         let c = verts[f[2] as usize];
-        let (u, v) = (sub(b, a), sub(c, a));
-        let n = cross(u, v);
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        let (u, v) = (vec3_sub(b, a), vec3_sub(c, a));
+        let n = vec3_cross(u, v);
+        let len = vec3_len(n);
         let n = if len > 0.0 {
             [n[0] / len, n[1] / len, n[2] / len]
         } else {
@@ -42,8 +44,8 @@ pub fn stl_ascii(name: &str, verts: &[[f64; 3]], faces: &[[i32; 3]]) -> String {
         let a = verts[f[0] as usize];
         let b = verts[f[1] as usize];
         let c = verts[f[2] as usize];
-        let n = cross(sub(b, a), sub(c, a));
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        let n = vec3_cross(vec3_sub(b, a), vec3_sub(c, a));
+        let len = vec3_len(n);
         let n = if len > 0.0 {
             [n[0] / len, n[1] / len, n[2] / len]
         } else {
@@ -60,18 +62,6 @@ pub fn stl_ascii(name: &str, verts: &[[f64; 3]], faces: &[[i32; 3]]) -> String {
     }
     out.push_str(&format!("endsolid {name}\n"));
     out
-}
-
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 #[cfg(test)]

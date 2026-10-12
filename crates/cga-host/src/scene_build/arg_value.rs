@@ -23,7 +23,7 @@ impl PartialEq for ArgValue {
 impl fmt::Display for ArgValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ArgValue::Num(x) => f.write_str(&fmt_f64(*x)),
+            ArgValue::Num(x) => f.write_str(&fmt_num(*x)),
             ArgValue::Bool(v) => f.write_str(if *v { "true" } else { "false" }),
             ArgValue::Str(s) => f.write_str(s),
             ArgValue::List(items) => {
@@ -31,7 +31,7 @@ impl fmt::Display for ArgValue {
                 write!(f, "[{}]", parts.join(", "))
             }
             ArgValue::Vec3(v) => {
-                write!(f, "[{}, {}, {}]", fmt_f64(v.x), fmt_f64(v.y), fmt_f64(v.z))
+                write!(f, "[{}, {}, {}]", fmt_num(v.x), fmt_num(v.y), fmt_num(v.z))
             }
         }
     }

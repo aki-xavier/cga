@@ -512,6 +512,7 @@ dependencies = [
  "cga-core",
  "cga-gpu",
  "cga-host",
+ "cga-scene",
  "clap",
  "image",
  "mlx-rs",

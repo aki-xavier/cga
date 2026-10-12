@@ -1,13 +1,9 @@
-use crate::Multivector;
+use crate::{vec3_len, Multivector};
 
 impl Multivector {
     pub fn point(x: f64, y: f64, z: f64) -> Multivector {
         let r2 = x * x + y * y + z * z;
         Self::vector(x, y, z, 1.0, 0.5 * r2)
-    }
-
-    pub fn point_pair(&self, p2: &Multivector) -> Multivector {
-        self.op(p2)
     }
 
     pub fn line(p1: &Multivector, p2: &Multivector) -> Multivector {
@@ -52,7 +48,7 @@ impl Multivector {
 
     pub fn circle(center: [f64; 3], radius: f64, normal: [f64; 3]) -> Multivector {
         let s = Self::sphere(center, radius);
-        let nl = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        let nl = vec3_len(normal);
         let mut d = 0.0;
         if nl > 1e-12 {
             d = (center[0] * normal[0] + center[1] * normal[1] + center[2] * normal[2]) / nl;
@@ -78,7 +74,7 @@ impl Multivector {
         let c = p.coords();
         let v = self.euclidean_vector();
         let d = self.einf_coeff();
-        let nl = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let nl = vec3_len(v);
         if nl < 1e-12 {
             return 1e300;
         }

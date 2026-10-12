@@ -73,12 +73,10 @@ pub fn gen_flange_assembly(
         gen_post_mat(0.85, 0.9, 0x9BA1A6, 0.3, 0.8)
     ));
     out.push_str(&gear.generate());
-    out.push_str(&format!(
-        "    <Torus R={{0.72}} r={{0.16}} color={{0x4A4F54}} roughness={{0.45}} metalness={{0.65}} rotate={{[1.0, 0.0, 0.0, -1.5707963267948966]}} t={{[0.0, 4.45, 0.0]}} />\n\
-         \x20   <Box s={{[0.95, 0.5, 0.95]}} color={{0x6E747A}} roughness={{0.4}} metalness={{0.7}} t={{[0.0, 4.85, 0.0]}} />\n\
-         \x20   <Box s={{[0.18, 0.9, 0.18]}} color={{0xC8A24A}} roughness={{0.35}} metalness={{0.75}} t={{[0.62, 3.6, 0.0]}} />\n\
-         \x20   <Plane n={{[0.0, 1.0, 0.0]}} d={{0.0}} color={{0x3A4046}} roughness={{0.9}} />\n",
-    ));
+    out.push_str("    <Torus R={0.72} r={0.16} color={0x4A4F54} roughness={0.45} metalness={0.65} rotate={[1.0, 0.0, 0.0, -1.5707963267948966]} t={[0.0, 4.45, 0.0]} />\n\
+         \x20   <Box s={[0.95, 0.5, 0.95]} color={0x6E747A} roughness={0.4} metalness={0.7} t={[0.0, 4.85, 0.0]} />\n\
+         \x20   <Box s={[0.18, 0.9, 0.18]} color={0xC8A24A} roughness={0.35} metalness={0.75} t={[0.62, 3.6, 0.0]} />\n\
+         \x20   <Plane n={[0.0, 1.0, 0.0]} d={0.0} color={0x3A4046} roughness={0.9} />\n");
     out.push_str(&gen_footer());
     out
 }
