@@ -908,7 +908,7 @@ mod tests {
     fn test_cyclide_axis_ray_four_crossings() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let p = g.params_in_frame(&Multivector::identity());
         let (ts, _, valid) =
             crate::geom_crossings(&p, &test_ray(3.0, 0.0, 0.0), &test_ray(-1.0, 0.0, 0.0));
         valid.eval().unwrap();
@@ -951,7 +951,7 @@ mod tests {
     fn test_cyclide_contains() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let p = g.params_in_frame(&Multivector::identity());
         let pos = Array::from_slice(&[1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0], &[3, 3]);
         let got = crate::geom_contains(&p, &pos);
         got.eval().unwrap();
@@ -962,7 +962,7 @@ mod tests {
     fn test_cyclide_shift() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [1.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let p = g.params_in_frame(&Multivector::identity());
         let pos = Array::from_slice(&[2.0f32, 0.0, 0.0, 1.0, 0.0, 0.0], &[2, 3]);
         let got = crate::geom_contains(&p, &pos);
         got.eval().unwrap();
@@ -973,7 +973,7 @@ mod tests {
     fn test_cyclide_bounds_contain_surface() {
         let g =
             Geometry::CyclideGeometry(CyclideGeometry::new(CGA_A, CGA_B, CGA_D, [0.0, 0.0, 0.0]));
-        let p = crate::geom_to_camera(&g, &Multivector::identity());
+        let p = g.params_in_frame(&Multivector::identity());
         let b = crate::geom_bounds(&p).expect("no bounds");
         let bmin = b[0];
         let bmax = b[1];

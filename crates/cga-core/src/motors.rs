@@ -151,7 +151,7 @@ impl Multivector {
         let b_r = (1.0 - cos_t) / theta2;
         let a_v = (1.0 - cos_t) / theta2;
         let b_v = (theta - sin_t) / (theta2 * theta);
-        let eye = mat3_identity();
+        let eye = identity3();
         let r = mat3_add_scaled(mat3_add_scaled(eye, a_r, w), b_r, ww);
         let v = mat3_add_scaled(mat3_add_scaled(eye, a_v, w), b_v, ww);
         let t = mat3_vec(v, v_bar);
@@ -177,12 +177,26 @@ impl Multivector {
 
 pub type Mat3 = [[f64; 3]; 3];
 
-fn mat3_identity() -> Mat3 {
+/// 3×3 单位阵。
+pub fn identity3() -> Mat3 {
     let mut m = [[0.0; 3]; 3];
     m[0][0] = 1.0;
     m[1][1] = 1.0;
     m[2][2] = 1.0;
     m
+}
+
+/// 是否 3×3 单位阵（逐元素 1e-12 判据）。
+pub fn is_identity3(m: Mat3) -> bool {
+    for (i, row) in m.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            let want = if i == j { 1.0 } else { 0.0 };
+            if (v - want).abs() > 1e-12 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub fn mat3_new(r0: [f64; 3], r1: [f64; 3], r2: [f64; 3]) -> Mat3 {
@@ -317,7 +331,7 @@ impl Multivector {
             let wx2 = mat3_mul(wxm, wxm);
             let theta2 = theta * theta;
             let coeff = 1.0 / theta2 - (1.0 + cos_theta) / (2.0 * theta * sin_theta);
-            let v_inv = mat3_add_scaled(mat3_add_scaled(mat3_identity(), -0.5, wxm), coeff, wx2);
+            let v_inv = mat3_add_scaled(mat3_add_scaled(identity3(), -0.5, wxm), coeff, wx2);
             mat3_vec(v_inv, tv)
         };
         Self::velocity(

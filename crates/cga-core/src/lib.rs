@@ -36,3 +36,6 @@ pub use csg_node::*;
 
 pub mod query;
 pub use query::*;
+
+pub mod ray;
+pub use ray::*;

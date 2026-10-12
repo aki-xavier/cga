@@ -377,7 +377,7 @@ impl<'p> Builder<'p> {
         // 非刚性部分（scale/mirror）折进几何；质量属性的 `world` 必须是**刚体**的
         // （mass.rs 的契约），否则线性部分被作用两次：缩放对象的 cog/inertia 会错
         // （实测 scale=2 的锥 cog.z 由 −1 变 −2）。
-        let (g2, mass_world) = if cga_scene::is_identity3(lin) {
+        let (g2, mass_world) = if cga_core::is_identity3(lin) {
             (geo.clone(), world)
         } else {
             (

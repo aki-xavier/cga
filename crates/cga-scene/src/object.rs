@@ -1,4 +1,5 @@
 use super::*;
+use cga_core::{identity3, Mat3};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Object3D {

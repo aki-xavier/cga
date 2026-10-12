@@ -7,7 +7,7 @@ pub enum CsgOp {
     Intersection,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct CsgParams {
     pub op: CsgOp,
     pub children: Vec<GeometryParams>,

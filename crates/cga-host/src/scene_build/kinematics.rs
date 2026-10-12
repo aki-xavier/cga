@@ -180,7 +180,7 @@ fn v3_perp(u: [f64; 3]) -> [f64; 3] {
 }
 
 // 注：`v3_cross` 已收敛到 `cga_core::vec3_cross`（公式逐字相同）。
-// `v3_unit` 保留本地：它的退化语义是近零 → `[0,0,0]`，与 `cga_scene::vec3_unit`
+// `v3_unit` 保留本地：它的退化语义是近零 → `[0,0,0]`，与 `cga_core::vec3_unit`
 // 的近零 → `[0,0,1]` 不同，合并会改行为（相机/法线兜底方向不一样）。
 
 /// Joint motion M(q) as a 4×4 matrix, about the anchor (axis in parent frame).

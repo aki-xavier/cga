@@ -80,7 +80,9 @@ pub fn a_fwd_point(a_fwd: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-fn radial(l: [f64; 3]) -> f64 {
+/// **规范系（轴 = +z）**下的径向距离 = `√(x² + y²)`。只对已进入规范系的坐标使用；
+/// 轴为任意方向的参数（如 `CylinderParams.u`）必须用 `vec3_len`。
+fn radial_xy(l: [f64; 3]) -> f64 {
     (l[0] * l[0] + l[1] * l[1]).sqrt()
 }
 
@@ -144,7 +146,8 @@ impl GeometryParams {
                 let w = vec3_sub(x, p.q);
                 let s = vec3_dot(w, p.u);
                 let rad = vec3_sub(w, [p.u[0] * s, p.u[1] * s, p.u[2] * s]);
-                Some(cylinder_field_section(p.r, p.h, radial(rad), s))
+                // 轴是任意方向 `u`（不是规范系的 +z）⇒ 径向距离取**三维**范数。
+                Some(cylinder_field_section(p.r, p.h, crate::vec3_len(rad), s))
             }
             GeometryParams::BoxParams(p) => {
                 let q = vec3_sub(x, p.c);
@@ -160,7 +163,7 @@ impl GeometryParams {
             GeometryParams::CircleParams(_) => None,
             GeometryParams::ConeParams(p) => {
                 let l = to_local(p.a_inv3, p.t_inv, x);
-                Some(cone_field_section(p.r, p.h, radial(l), l[2]))
+                Some(cone_field_section(p.r, p.h, radial_xy(l), l[2]))
             }
             GeometryParams::TorusParams(p) => {
                 let l = to_local(p.a_inv3, p.t_inv, x);
@@ -172,7 +175,7 @@ impl GeometryParams {
                     p.major,
                     p.minor,
                     p.arc,
-                    radial(l),
+                    radial_xy(l),
                     l[2],
                     theta,
                 ))
@@ -240,14 +243,14 @@ impl GeometryParams {
             GeometryParams::CylinderParams(p) => Some(sdf_cylinder(p.q, p.u, p.r, p.h, x)),
             GeometryParams::ConeParams(p) => {
                 let l = to_local(p.a_inv3, p.t_inv, x);
-                Some(sdf_cone_section(p.r, p.h, radial(l), l[2]))
+                Some(sdf_cone_section(p.r, p.h, radial_xy(l), l[2]))
             }
             GeometryParams::TorusParams(p) => {
                 if p.arc < std::f64::consts::TAU - 1e-9 {
                     return None;
                 }
                 let l = to_local(p.a_inv3, p.t_inv, x);
-                Some(sdf_torus_section(p.major, p.minor, radial(l), l[2]))
+                Some(sdf_torus_section(p.major, p.minor, radial_xy(l), l[2]))
             }
             GeometryParams::EllipsoidParams(p) => {
                 let l = to_local(p.a_inv3, p.t_inv, x);

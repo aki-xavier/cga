@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CircleParams {
     pub c: [f64; 3],
     pub n: [f64; 3],

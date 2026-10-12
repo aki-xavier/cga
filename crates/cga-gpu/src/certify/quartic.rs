@@ -21,45 +21,14 @@ impl Quartic {
     }
 }
 impl Quartic {
-    pub fn torus(major: f64, minor: f64, o: [f64; 3], d: [f64; 3]) -> Quartic {
-        let r2 = major * major;
-        let oo = o[0] * o[0] + o[1] * o[1] + o[2] * o[2];
-        let od = o[0] * d[0] + o[1] * d[1] + o[2] * d[2];
-        let g = oo + r2 - minor * minor;
+    /// 从降幂系数 `[c3, c2, c1, c0]` 构造（`t⁴ + c3 t³ + c2 t² + c1 t + c0`）。
+    /// 系数由 `cga_core` 的 `ray` 模块给出（唯一几何定义），本模块只负责求根与认证。
+    pub fn from_coeffs(c: [f64; 4]) -> Quartic {
         Quartic {
-            c3: 4.0 * od,
-            c2: 2.0 * g + 4.0 * od * od - 4.0 * r2 * (d[0] * d[0] + d[1] * d[1]),
-            c1: 4.0 * od * g - 8.0 * r2 * (o[0] * d[0] + o[1] * d[1]),
-            c0: g * g - 4.0 * r2 * (o[0] * o[0] + o[1] * o[1]),
-        }
-    }
-}
-impl Quartic {
-    #[allow(clippy::too_many_arguments)]
-    pub fn cyclide(
-        a: f64,
-        b: f64,
-        dd: f64,
-        c: f64,
-        shift: [f64; 3],
-        o: [f64; 3],
-        d: [f64; 3],
-    ) -> Quartic {
-        let ox = o[0] - shift[0];
-        let oy = o[1] - shift[1];
-        let oz = o[2] - shift[2];
-        let (dx, dy) = (d[0], d[1]);
-        let big_a = ox * ox + oy * oy + oz * oz;
-        let b1 = ox * dx + oy * dy + oz * d[2];
-        let bb = b * b - dd * dd;
-        let g = big_a + bb;
-        let p0 = ox * a - c * dd;
-        let p1 = dx * a;
-        Quartic {
-            c3: 4.0 * b1,
-            c2: 2.0 * g + 4.0 * b1 * b1 - 4.0 * p1 * p1 - 4.0 * b * b * dy * dy,
-            c1: 4.0 * b1 * g - 8.0 * p0 * p1 - 8.0 * b * b * oy * dy,
-            c0: g * g - 4.0 * p0 * p0 - 4.0 * b * b * oy * oy,
+            c3: c[0],
+            c2: c[1],
+            c1: c[2],
+            c0: c[3],
         }
     }
 }

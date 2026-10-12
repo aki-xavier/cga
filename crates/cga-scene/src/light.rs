@@ -1,4 +1,5 @@
 use super::*;
+use cga_core::vec3_unit;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LightKind {

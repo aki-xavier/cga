@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct BoxParams {
     pub c: [f64; 3],
     pub axes: [[f64; 3]; 3],

@@ -1,11 +1,8 @@
-use crate::geom_kernels::geom_to_camera;
 use crate::geometry_ops::{geom_bounds, geom_intersect, geom_shadow, geom_uv};
 use crate::mlxops::*;
 use crate::shading::shade_batched;
-use cga_core::{vec3_cross, GeometryParams, Multivector};
-use cga_scene::{
-    vec3_dot, vec3_unit, Light, LightKind, Object, PerspectiveCamera, Scene, WrapMode,
-};
+use cga_core::{vec3_cross, vec3_unit, GeometryParams, Multivector};
+use cga_scene::{vec3_dot, Light, LightKind, Object, PerspectiveCamera, Scene, WrapMode};
 use mlx_rs::{ops, Array};
 
 fn view_frame(camera: &PerspectiveCamera) -> ([[f64; 3]; 3], [f64; 3]) {
@@ -365,7 +362,9 @@ pub fn pick(
     let d_a = ck(ops::broadcast_to(arr3v([d[0], d[1], d[2]]), &[1, 3]));
     let mut best: Option<PickHit> = None;
     for (i, obj) in scene.objects.iter().enumerate() {
-        let params = geom_to_camera(&obj.geometry, &camera.motor.compose(&obj.motor()));
+        let params = obj
+            .geometry
+            .params_in_frame(&camera.motor.compose(&obj.motor()));
         let (t, n, mask) = geom_intersect(&params, &o, &d_a);
         t.eval().unwrap();
         n.eval().unwrap();
@@ -843,11 +842,11 @@ impl Renderer {
         let mut params_list: Vec<GeometryParams> = Vec::with_capacity(scene.objects.len());
         let mut stated_list: Vec<GeometryParams> = Vec::with_capacity(scene.objects.len());
         for obj in scene.objects.iter() {
-            params_list.push(geom_to_camera(
-                &obj.geometry,
-                &camera.motor.compose(&obj.motor()),
-            ));
-            stated_list.push(geom_to_camera(&obj.geometry, &obj.motor()));
+            params_list.push(
+                obj.geometry
+                    .params_in_frame(&camera.motor.compose(&obj.motor())),
+            );
+            stated_list.push(obj.geometry.params_in_frame(&obj.motor()));
         }
         // BVH 求交内核（相机空间参数 + 相机空间光线，同帧一致）：
         // 小场景（画廊金标）留在旧数组路径，逐位不变；CGA_NO_BVH / CGA_BVH_FORCE 覆盖。

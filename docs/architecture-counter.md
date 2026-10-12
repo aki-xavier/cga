@@ -48,13 +48,15 @@ cga 不是「用 CGA 做几何引擎」，而是「一个自研几何 + 宿主�
 
 后果不是「难看」而是**修正不可达**：改一处公式要同步 4–6 个文件，而它们的精度与 guard 常数各不相同（MSL 里手抄 1e-6/1e-9/1e-12；f32 数组 vs f64 认证），测试只覆盖其中一部分（MSL 副本只有「整帧容差 `max_diff ≤ 8`」）。
 
-**阶段 1 已收敛（2026-10-12，`docs/geometry-unification.md`）**：点包含（`field`/`contains`）、
-精确欧氏距离/最近点/支撑/包围盒现在只有一份实现（`cga-core::query`，blade 图元锚在 GA 关联谓词上），
-网格化与碰撞改为分发，core 里此前**零调用**的 `DupinCyclide::implicit`/`Cylinder::dist`/`plane_dist`/`sphere_dist`
-已接线；GPU 的 f32 数组内核与 MSL 保留为性能实现，由逐图元漂移测试钉住（数组 ≡ 标量定义）。
-**仍未收敛**：射线求交（数组 f32 / MSL / f64 `fallback` / `certify` 共 4 份）与参数化 seam
-（`identity_params` vs `geom_to_camera` 两份 11 变体 switch，对 cylinder/box/circle 给出不同 `q/u/axes`）
-——阶段 2/3 的验收条件写在 `docs/geometry-unification.md` §4。
+**阶段 1–3 已收敛（2026-10-12/13，`docs/geometry-unification.md`）**：点包含（`field`/`contains`）、
+精确欧氏距离/最近点/支撑/包围盒、**以及射线层的多项式系数/法线/局部系搬移**现在只有一份实现
+（`cga-core::query` + `cga-core::ray`，blade 图元锚在 GA 关联谓词上）；网格化、碰撞、宿主、f64 回退
+与 `certify` 的四次式系数全部改为分发，core 里此前**零调用**的 `DupinCyclide::implicit`/`Cylinder::dist`/
+`plane_dist`/`sphere_dist` 已接线；参数化也只剩 `Geometry::params_in_frame` 一份（`geom_to_camera` 已删）。
+GPU 的 f32 数组内核与 MSL 保留为性能实现，由漂移测试钉住（包含 ≡ 标量定义；射线 ≡ f64 定义：
+命中/未命中、最近 t、命中点在 core 定义的曲面上、法线朝向；**MSL（BVH）≡ 数组与 f64**：
+5 图元 × 33 对象场景 × 64 光线，含命中对象下标与"全部对象走内核"的覆盖断言）。
+三份副本至此都有"同一份定义 + 防漂移测试"，本文 §2 的这条控告**已解决**（`docs/geometry-unification.md` §4/§6）。
 
 另一边，号称「纯代数边界」的 `cga-core` 实际装着：GPU kernel 参数 ABI（`geometry/identity_params.rs` 100 行，被 4 个 crate 调用）、4×4 矩阵工具（`mat4.rs` 自述是 mesh_io 残留）、场景枚举（`Geometry/CsgGeometry/AffineGeometry`——而真正的场景图在 `cga-scene`，反过来 `pub use cga_core::{Geometry, Multivector}`）。`docs/module-review.md:20` 的「cga-core 纯代数边界无污染」与代码不符。
 

@@ -4,12 +4,12 @@ use cga_core::{
 };
 use mlx_rs::Array;
 
-use crate::{geom_contains, geom_intersect, geom_to_camera};
+use crate::{geom_contains, geom_intersect};
 
 const IDENT: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 fn cam(g: &Geometry) -> GeometryParams {
-    geom_to_camera(g, &Multivector::identity())
+    g.params_in_frame(&Multivector::identity())
 }
 
 fn vec3(v: [f64; 3]) -> Array {

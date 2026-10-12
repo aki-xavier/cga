@@ -35,6 +35,10 @@ pub(crate) mod fallback;
 #[cfg(test)]
 mod degenerate;
 
+/// 阶段 3 漂移防线：f32 数组内核 ↔ f64 标量定义（`docs/geometry-unification.md`）。
+#[cfg(test)]
+mod ray_drift;
+
 /// 测试用：`[x, y, z]` → 1×3 的 f32 数组（光线原点/方向都用它）。
 #[cfg(test)]
 pub(crate) fn test_ray(x: f64, y: f64, z: f64) -> mlx_rs::Array {
@@ -48,7 +52,7 @@ pub(crate) fn test_contains(
     m: &cga_core::Multivector,
     pts: &[[f64; 3]],
 ) -> Vec<bool> {
-    let p = geom_to_camera(g, m);
+    let p = g.params_in_frame(m);
     let flat: Vec<f32> = pts.iter().flat_map(|q| q.map(|v| v as f32)).collect();
     let pos = mlx_rs::Array::from_slice(&flat, &[pts.len() as i32, 3]);
     let got = geom_contains(&p, &pos);
@@ -59,7 +63,7 @@ pub(crate) fn test_contains(
 /// 测试用：单条相机空间光线的最近命中 `(t, 是否命中)`。
 #[cfg(test)]
 pub(crate) fn test_hit(g: &cga_core::Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, bool) {
-    let p = geom_to_camera(g, &cga_core::Multivector::identity());
+    let p = g.params_in_frame(&cga_core::Multivector::identity());
     let (t, _, mask) = geom_intersect(&p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
     t.eval().unwrap();
     mask.eval().unwrap();

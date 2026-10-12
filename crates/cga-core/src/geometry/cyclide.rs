@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CyclideParams {
     pub a_inv3: Mat3,
     pub t_inv: [f64; 3],

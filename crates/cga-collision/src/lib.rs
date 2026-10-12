@@ -68,7 +68,7 @@ pub struct Contact {
 // 定义全在 cga-core（canonical，唯一一份）；本模块的几何公式很密（`sub`/`add`/
 // `norm` 共 130+ 处），故以短别名引入，而不是把调用点全改成 `vec3_*`——纯粹为
 // 可读性。`unit` 保留为本地派生助手：它没有近零兜底（除以零得 inf），与
-// `cga_scene::vec3_unit` 的 `[0,0,1]` 兜底不是同一语义。
+// `cga_core::vec3_unit` 的 `[0,0,1]` 兜底不是同一语义。
 
 pub(crate) use cga_core::{
     transform_dir, vec3_add as add, vec3_cross, vec3_dot, vec3_len as norm, vec3_scale,

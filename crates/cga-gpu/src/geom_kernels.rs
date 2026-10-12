@@ -1,8 +1,4 @@
-use cga_core::{
-    mat3_new, mat3_transpose, AffineGeometry, AffineParams, CsgOp, CsgParams, Geometry,
-    GeometryParams, Mat3, Multivector,
-};
-use cga_scene::{identity3, vec3_unit};
+use cga_core::{mat3_transpose, AffineParams, CsgOp, CsgParams, GeometryParams, Mat3};
 use mlx_rs::ops;
 use mlx_rs::Array;
 
@@ -547,122 +543,6 @@ pub fn csg_uv(p: &CsgParams, pos: &Array, n: &Array) -> Array {
     uv
 }
 
-pub fn geom_to_camera(g: &Geometry, m: &Multivector) -> GeometryParams {
-    match g {
-        Geometry::SphereGeometry(g) => {
-            let s = m.apply(&g.blade);
-            let (c, r) = s.to_sphere();
-            GeometryParams::SphereParams(cga_core::SphereParams {
-                c,
-                r,
-                axes: [
-                    vec3_unit(m.apply(&Multivector::e1()).euclidean_vector()),
-                    vec3_unit(m.apply(&Multivector::e2()).euclidean_vector()),
-                    vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
-                ],
-            })
-        }
-        Geometry::PlaneGeometry(g) => {
-            let pi = m.apply(&g.blade);
-            GeometryParams::PlaneParams(cga_core::PlaneParams {
-                n: vec3_unit(pi.euclidean_vector()),
-                d: pi.einf_coeff(),
-            })
-        }
-        Geometry::CylinderGeometry(g) => GeometryParams::CylinderParams(cga_core::CylinderParams {
-            q: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
-            u: vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
-            r: g.radius,
-            h: g.half,
-        }),
-        Geometry::BoxGeometry(g) => {
-            let hf = g.half;
-            GeometryParams::BoxParams(cga_core::BoxParams {
-                c: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
-                axes: [
-                    vec3_unit(m.apply(&Multivector::e1()).euclidean_vector()),
-                    vec3_unit(m.apply(&Multivector::e2()).euclidean_vector()),
-                    vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
-                ],
-                half: hf,
-            })
-        }
-        Geometry::CircleGeometry(g) => GeometryParams::CircleParams(cga_core::CircleParams {
-            c: m.apply(&Multivector::point(0.0, 0.0, 0.0)).coords(),
-            n: vec3_unit(m.apply(&Multivector::e3()).euclidean_vector()),
-            r: g.radius,
-        }),
-        Geometry::ConeGeometry(g) => {
-            let (ai, ti, af) = m.affine_from_motor(identity3());
-            GeometryParams::ConeParams(cga_core::ConeParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                r: g.radius,
-                h: g.height,
-            })
-        }
-        Geometry::TorusGeometry(g) => {
-            let (ai, ti, af) = m.affine_from_motor(identity3());
-            GeometryParams::TorusParams(cga_core::TorusParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                major: g.major,
-                minor: g.minor,
-                arc: g.arc,
-            })
-        }
-        Geometry::EllipsoidGeometry(g) => {
-            let rr = g.radii;
-            let diag = mat3_new([rr[0], 0.0, 0.0], [0.0, rr[1], 0.0], [0.0, 0.0, rr[2]]);
-            let (ai, ti, af) = m.affine_from_motor(diag);
-            GeometryParams::EllipsoidParams(cga_core::EllipsoidParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-            })
-        }
-        Geometry::CyclideGeometry(g) => {
-            let (ai, ti, af) = m.affine_from_motor(identity3());
-            let sh = g.shift;
-            GeometryParams::CyclideParams(cga_core::CyclideParams {
-                a_inv3: ai,
-                t_inv: ti,
-                a_fwd: af,
-                a: g.a,
-                b: g.b,
-                d: g.d,
-                c: (g.a * g.a - g.b * g.b).sqrt(),
-                shift: sh,
-            })
-        }
-        Geometry::CsgGeometry(g) => {
-            let mut ch: Vec<GeometryParams> = Vec::new();
-            for c in &g.children {
-                ch.push(geom_to_camera(c, m));
-            }
-            GeometryParams::CsgParams(CsgParams {
-                op: g.op,
-                children: ch,
-            })
-        }
-        Geometry::AffineGeometry(g) => GeometryParams::AffineParams(affine_to_camera(g, m)),
-    }
-}
-
-pub fn affine_to_camera(g: &AffineGeometry, m: &Multivector) -> AffineParams {
-    let ip = geom_to_camera(&g.inner[0], &Multivector::identity());
-    let full = m.gp(&g.motor);
-    let (ai, ti, af) = full.affine_from_motor(g.linear);
-    AffineParams {
-        inner: Box::new(ip),
-        a_inv3: ai,
-        t_inv: ti,
-        a_fwd: af,
-    }
-}
-
 pub fn csg_bounds(p: &CsgParams) -> Option<[[f64; 3]; 2]> {
     let mut bnds: Vec<Option<[[f64; 3]; 2]>> = Vec::new();
     for cp in &p.children {
@@ -728,11 +608,12 @@ mod tests {
     use super::*;
     use crate::{test_contains, test_ray};
     use cga_core::{
-        decompose_rigid, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry, Multivector,
+        decompose_rigid, mat3_new, AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry,
+        Geometry, Multivector,
     };
 
     fn tf_hit(g: &Geometry, m: &Multivector, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
-        let p = geom_to_camera(g, m);
+        let p = g.params_in_frame(m);
         let (t, n, mask) =
             crate::geom_intersect(&p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
         n.eval().unwrap();
@@ -831,7 +712,7 @@ mod tests {
     }
 
     fn em_hit(g: &Geometry, o: [f64; 3], d: [f64; 3]) -> (f32, [f32; 3], bool) {
-        let p = geom_to_camera(g, &Multivector::identity());
+        let p = g.params_in_frame(&Multivector::identity());
         let (t, n, mask) =
             crate::geom_intersect(&p, &test_ray(o[0], o[1], o[2]), &test_ray(d[0], d[1], d[2]));
         n.eval().unwrap();

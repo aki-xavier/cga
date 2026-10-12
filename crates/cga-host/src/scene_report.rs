@@ -1,9 +1,8 @@
-use cga_core::{decompose_rigid, Geometry, Quaternion};
+use cga_core::{decompose_rigid, vec3_unit, Geometry, Quaternion};
 use std::f64::consts::PI;
 
 use crate::scene_build::{csg_op_name, Kinematics, TagInstance, TagRegistry};
-use cga_gpu::geom_kernels::geom_to_camera;
-use cga_scene::{vec3_unit, Color, Light, LightKind, Material, MaterialKind};
+use cga_scene::{Color, Light, LightKind, Material, MaterialKind};
 use cga_scene::{Object, PerspectiveCamera, Scene};
 
 fn fmt_num(v: f64) -> String {
@@ -321,7 +320,7 @@ pub fn scene_report(
                 fmt_vec3(mp.cog)
             ));
         }
-        let params = geom_to_camera(&m.geometry, &m.motor());
+        let params = m.geometry.params_in_frame(&m.motor());
         match cga_gpu::geometry_ops::geom_bounds(&params) {
             Some(b) => {
                 out.push_str(&format!(

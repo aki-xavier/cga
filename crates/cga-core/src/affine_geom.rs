@@ -2,7 +2,7 @@ use crate::geometry::{Geometry, GeometryParams};
 use crate::motors::Mat3;
 use crate::Multivector;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct AffineParams {
     pub inner: Box<GeometryParams>,
     pub a_inv3: Mat3,

@@ -14,7 +14,6 @@ use cga_mesh::BakeExt;
 
 use crate::jsx::run_jsx;
 use crate::scene_build::{rigid_inv, JointKind, Kinematics, SceneRun};
-use cga_gpu::geom_to_camera;
 
 fn uf(v: f64) -> String {
     let s = format!("{v:.6}");
@@ -66,7 +65,7 @@ fn visual_of(
     let m = &run.scene.objects[mesh_idx];
     let world = m.motor().to_matrix();
     let inv = rigid_inv(link_world);
-    let p = geom_to_camera(&m.geometry, &m.motor());
+    let p = m.geometry.params_in_frame(&m.motor());
     let to_link_p = |q: [f64; 3]| transform_point(inv, q);
     let to_link_d = |q: [f64; 3]| transform_dir(inv, q);
     let (xyz, rpy, geom): ([f64; 3], [f64; 3], Option<String>) = match &p {

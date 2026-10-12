@@ -442,7 +442,12 @@ mod tests {
 
     #[test]
     fn quartic_tangent_torus_ray_reports_unknown() {
-        let q = Quartic::torus(2.0, 1.0, [3.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
+        let q = Quartic::from_coeffs(cga_core::torus_quartic(
+            2.0,
+            1.0,
+            [3.0, 0.0, 5.0],
+            [0.0, 0.0, -1.0],
+        ));
         assert_eq!(
             (q.c3, q.c2, q.c1, q.c0),
             (-20.0, 174.0, -740.0, 1225.0),
@@ -455,7 +460,12 @@ mod tests {
 
     #[test]
     fn quartic_transversal_torus_ray_certified() {
-        let q = Quartic::torus(2.0, 1.0, [2.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
+        let q = Quartic::from_coeffs(cga_core::torus_quartic(
+            2.0,
+            1.0,
+            [2.0, 0.0, 5.0],
+            [0.0, 0.0, -1.0],
+        ));
         assert_eq!((q.c3, q.c2, q.c1, q.c0), (-20.0, 164.0, -640.0, 960.0));
         match q.roots() {
             QuarticRoots::Certified(rs) => {
@@ -476,7 +486,15 @@ mod tests {
         );
         let o = [s[0], s[1], s[2] + 4.0];
         let d = [0.0, 0.0, -1.0];
-        let q = Quartic::cyclide(cy.a, cy.b, cy.d, cy.c(), cy.shift, o, d);
+        let q = Quartic::from_coeffs(cga_core::cyclide_quartic(
+            cy.a,
+            cy.b,
+            cy.d,
+            cy.c(),
+            cy.shift,
+            o,
+            d,
+        ));
         let r = q.roots();
         assert!(!r.is_unknown(), "横截 cyclide 射线应可完全证明，实际 {r:?}");
         let rs = r.roots();

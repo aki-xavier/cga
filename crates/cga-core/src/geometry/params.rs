@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum GeometryParams {
     AffineParams(AffineParams),
     CsgParams(CsgParams),

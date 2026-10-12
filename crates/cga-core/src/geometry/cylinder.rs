@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CylinderParams {
     pub q: [f64; 3],
     pub u: [f64; 3],
