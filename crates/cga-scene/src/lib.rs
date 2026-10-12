@@ -15,32 +15,18 @@ pub use cga_core::{clamp01, vec3_cross, vec3_dot, vec3_len, Geometry, Multivecto
 
 pub mod color;
 pub use self::color::*;
-pub mod object3d;
-pub use self::object3d::*;
-pub mod light_kind;
-pub use self::light_kind::*;
 pub mod light;
 pub use self::light::*;
-pub mod material_kind;
-pub use self::material_kind::*;
 pub mod material;
 pub use self::material::*;
-pub mod material_params;
-pub use self::material_params::*;
-pub mod wrap_mode;
-pub use self::wrap_mode::*;
 pub mod texture;
 pub use self::texture::*;
-pub mod png;
-pub use self::png::*;
 pub mod camera;
 pub use self::camera::*;
 pub mod orbit_controls;
 pub use self::orbit_controls::*;
 pub mod object;
 pub use self::object::*;
-pub mod object_params;
-pub use self::object_params::*;
 pub mod scene;
 pub use self::scene::*;
 

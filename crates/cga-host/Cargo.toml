@@ -1,19 +1,20 @@
 [package]
 name = "cga-host"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "cga scene authoring host: JSX+CSS frontend, scene builders, reports, URDF interop."
 
 [dependencies]
-cga-core = { path = "../cga-core" }
-cga-collision = { path = "../cga-collision" }
-cga-mesh = { path = "../cga-mesh" }
-cga-scene = { path = "../cga-scene" }
-cga-gpu = { path = "../cga-gpu" }
+cga-core = { workspace = true }
+cga-collision = { workspace = true }
+cga-mesh = { workspace = true }
+cga-scene = { workspace = true }
+cga-gpu = { workspace = true }
 boa_engine = "0.22.0"
 swc_core = { version = "81.0.2", features = ["common", "ecma_ast", "ecma_parser", "ecma_codegen", "ecma_transforms_react", "ecma_visit"] }
 lightningcss = "1.0.0-alpha.72"
-serde_json = "1.0.151"
+serde_json = { workspace = true }
 urdf-rs = "0.10.0"
 
 [lints]

@@ -1,6 +1,12 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug)]
+pub struct PlaneParams {
+    pub n: [f64; 3],
+    pub d: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct PlaneGeometry {
     pub blade: Multivector,
 }

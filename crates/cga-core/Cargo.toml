@@ -1,10 +1,9 @@
 [package]
 name = "cga-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Conformal Geometric Algebra (CGA) core, pure f64 CPU."
-
-[dependencies]
 
 [lints]
 workspace = true

@@ -1,11 +1,12 @@
 [package]
 name = "cga-mesh"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Mesh baking (watertight tessellation) and STL encoding for cga geometry, pure f64 CPU."
 
 [dependencies]
-cga-core = { path = "../cga-core" }
+cga-core = { workspace = true }
 
 [lints]
 workspace = true

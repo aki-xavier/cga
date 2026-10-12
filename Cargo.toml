@@ -11,9 +11,26 @@ members = [
     "crates/cga-examples",
 ]
 
-[workspace.dependencies]
-mlx-rs = "0.32"
+# 元数据集中一份，各 crate 用 `xxx.workspace = true` 继承。
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
 
+# 依赖：>1 个 crate 用到的收在这里（版本单点）；单 crate 专用的留在各自 Cargo.toml。
+[workspace.dependencies]
+cga-core = { path = "crates/cga-core" }
+cga-scene = { path = "crates/cga-scene" }
+cga-collision = { path = "crates/cga-collision" }
+cga-mesh = { path = "crates/cga-mesh" }
+cga-gpu = { path = "crates/cga-gpu" }
+cga-fastmetal = { path = "crates/cga-fastmetal" }
+cga-host = { path = "crates/cga-host" }
+
+image = { version = "0.25", default-features = false }
+mlx-rs = "0.32"
+mlx-sys = "0.6.0"
+serde_json = "1.0.151"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

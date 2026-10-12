@@ -4,12 +4,36 @@ pub mod quad_roots;
 pub use self::quad_roots::*;
 pub mod quartic;
 pub use self::quartic::*;
-pub mod quartic_roots;
-pub use self::quartic_roots::*;
-pub mod probe;
-pub(crate) use self::probe::*;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QuarticRoots {
+    Certified(Vec<f64>),
+
+    Unknown { certified: Vec<f64> },
+}
+impl QuarticRoots {
+    pub fn roots(&self) -> &[f64] {
+        match self {
+            QuarticRoots::Certified(v) | QuarticRoots::Unknown { certified: v } => v,
+        }
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, QuarticRoots::Unknown { .. })
+    }
+}
+
 pub mod sweep;
 pub(crate) use self::sweep::*;
+
+#[derive(Debug)]
+pub(crate) enum Probe {
+    Root(f64, f64),
+
+    NoRoot,
+
+    Unknown,
+}
 
 #[inline]
 fn iv(a: f64, b: f64) -> Interval {

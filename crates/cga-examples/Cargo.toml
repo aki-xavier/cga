@@ -1,19 +1,20 @@
 [package]
 name = "cga-examples"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Demo CLIs for the cga crates."
 
 [dependencies]
-cga-core = { path = "../cga-core" }
-cga-gpu = { path = "../cga-gpu" }
-cga-host = { path = "../cga-host" }
-cga-scene = { path = "../cga-scene" }
+cga-core = { workspace = true }
+cga-scene = { workspace = true }
+cga-gpu = { workspace = true }
+cga-host = { workspace = true }
 mlx-rs = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["gif"] }
+image = { workspace = true, features = ["gif"] }
 rand = "0.9"
 clap = { version = "4", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

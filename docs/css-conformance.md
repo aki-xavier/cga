@@ -2,7 +2,7 @@
 # CSS 收敛计划：与真 CSS 对齐
 
 状态：**已实施（2026-10-07）**，P0–P4 全部落地，`cargo test --workspace` 全绿（189 = cga-core 44 + cga-gpu 82 + cga-host 63），3 个金标 PNG 逐位不变。
-适用：`crates/cga-host/src/jsx/mod.rs` 的 CSS 段（`// ---- CSS ----`：`parse_selector` / `sel_matches` / `parse_css` / `css_value` / `css_color` / `css_number` / `var_substitute`，以及 `Builder::style_for` / `Builder::build_material`、`build_scene_run` 的根作用域分支），以及 `docs/jsx-css-host.md` §2 / §4 / §5。
+适用：`crates/cga-host/src/jsx/css.rs`（`parse_selector` / `sel_matches` / `parse_css` / `css_value` / `css_color` / `css_number` / `var_substitute`）、`crates/cga-host/src/jsx/builder.rs`（`Builder::style_for` / `Builder::build_material`、`build_scene_run` 的根作用域分支），以及 `docs/jsx-css-host.md` §2 / §4 / §5。
 行号为 2026-10-07 快照，随代码漂移；**以符号名为准**。§2 的探针表是**实施前**的基线证据，用来解释为什么要做这些改动；实施后的行为以 §6 各阶段的验收与 `mod tests` 里的 `test_css_*` 为准。
 
 本文回答两件事：现状到底差在哪（§2、§3 全部是**实测**结论，不是推断），以及按什么顺序修、每步怎么验收（§6–§8）。
@@ -149,7 +149,7 @@
 
 **改动点**
 
-1. `parse_selector_part`（`jsx/mod.rs:435`）→ `parse_selector(text) -> Result<ComplexSelector, String>`：识别组合器、复合选择器、多类、属性选择器、`*`、`:root`；无法识别的（交互伪类、伪元素）返回错误并带上原文。
+1. `parse_selector_part`（`jsx/css.rs`）→ `parse_selector(text) -> Result<ComplexSelector, String>`：识别组合器、复合选择器、多类、属性选择器、`*`、`:root`；无法识别的（交互伪类、伪元素）返回错误并带上原文。
 2. `SimpleSel` / `StyleRule`（`:421`–`:433`）→ `Compound` / `ComplexSelector` / `StyleRule { sel, props, source }`。
 3. `css_match`（`:494`）→ `matches(el, ctx) -> bool`，右到左求值；`ctx` 含祖先栈、前兄弟、`is_root`。
 4. `material_for`（`:560`）与 `Builder::walk` 签名同步扩上下文（**唯一波及几何发射的地方**）。
@@ -301,7 +301,7 @@ CSS: <lightningcss 已给位置时原样透传>                例：CSS: Invali
 
 ## 8. 测试计划与阶段门
 
-**测试结构**（已实现，在 `src/jsx/mod.rs` 的 `mod tests` 内，与 `test_jsx_css_material` 同处）
+**测试结构**（已实现，在 `src/jsx/tests.rs` 内，与 `test_jsx_css_material` 同处）
 
 | 测试 | 覆盖 |
 | --- | --- |

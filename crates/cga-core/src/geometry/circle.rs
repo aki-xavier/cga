@@ -1,6 +1,13 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug)]
+pub struct CircleParams {
+    pub c: [f64; 3],
+    pub n: [f64; 3],
+    pub r: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct CircleGeometry {
     pub radius: f64,
     pub blade: Multivector,

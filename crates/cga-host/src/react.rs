@@ -43,10 +43,10 @@ use std::thread::JoinHandle;
 use boa_engine::{Context, JsNativeError, JsValue, NativeFunction, Source};
 use serde_json::{json, Value};
 
-const SHIM: &str = include_str!("../../assets/react-shim.js");
-const HOST: &str = include_str!("../../assets/react-host.js");
-const RUNTIME_DEV: &str = include_str!("../../assets/react-runtime.dev.js");
-const RUNTIME_PROD: &str = include_str!("../../assets/react-runtime.prod.js");
+const SHIM: &str = include_str!("../assets/react-shim.js");
+const HOST: &str = include_str!("../assets/react-host.js");
+const RUNTIME_DEV: &str = include_str!("../assets/react-runtime.dev.js");
+const RUNTIME_PROD: &str = include_str!("../assets/react-runtime.prod.js");
 
 /// 引擎线程栈：足够深的中等场景 JSX（debug 构建下 8 MB 就会顶爆 `mechanical` 这种场景）。
 const WORKER_STACK: usize = 64 << 20;

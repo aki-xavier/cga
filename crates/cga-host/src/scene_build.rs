@@ -14,16 +14,12 @@ use cga_scene::{texture_load, vec3_dot, Color, Material, MaterialParams, Scene};
 
 use crate::jsx_gen::fmt_num;
 
-pub mod arg_value;
-pub use self::arg_value::*;
-pub mod arg_vec3;
-pub use self::arg_vec3::*;
+pub mod args;
+pub use self::args::*;
 pub mod scene_run;
 pub use self::scene_run::*;
 pub mod kinematics;
 pub use self::kinematics::*;
-pub mod tag_instance;
-pub use self::tag_instance::*;
 pub mod builders;
 pub use self::builders::*;
 

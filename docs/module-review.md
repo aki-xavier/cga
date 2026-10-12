@@ -35,7 +35,7 @@ Metal 渲染器。实证三处：
 **对策**：抽 `cga-scene` crate（Scene/Object/Material/Light/Camera/Color/
 纹理），gpu 与 host 改为依赖它；cga-gpu 内 re-export 保持现有 API 路径不破坏。
 
-## 问题 2（内聚性）：`jsx/mod.rs` 是 God file —— 已解决
+## 问题 2（内聚性）：`jsx/mod.rs` 是 God file —— 已解决（现为 `jsx.rs` + `jsx/`）
 
 原 4124 行非测试代码承担至少 6 类职责：swc 编译、CSS 匹配/级联、元素 walk/
 几何构建、SceneSession（帧事务/增量）、拖拽与拾取 API、tag/face/center 查询。
@@ -44,7 +44,8 @@ Metal 渲染器。实证三处：
 ## 轻微项（已处理）
 
 - `renderer/mod.rs` 曾是 43 行 helper + 1336 行测试集中地，名不副实 → 测试已挪
-  `renderer/tests.rs`；
+  `renderer/tests.rs`（2026-10-12 布局遍后：主体与 helper 在 `renderer.rs`，测试仍在
+  `renderer/tests.rs`）；
 - `kinematics.rs` 非测试 1014 行内聚良好，测试/代码 2:1 是文化使然（保留）；
 - `v3_*` 小助手重复 → `v3_cross` 已收敛到 `cga_core::vec3_cross`；`v3_unit`
   保留本地（退化语义不同，见行动表）。
@@ -64,7 +65,7 @@ Metal 渲染器。实证三处：
 验收（全绿）：**348 测试通过**（cga-core 29 + cga-collision 29 + cga-mesh 17 + cga-gpu 102 + cga-host 159 + cga-scene 1 + cga-fastmetal 7 + cga-examples 4）、**clippy 全工作区 0 警告**（原 34 + `--fix` 清掉的 ~150）、**7 张 gallery PNG 逐字节一致**（320×240 aa=2，基线/终态 sha256 全同）。Rust 净删 459 行（35559 → 35100）。
 
 ### 1. vec/mat 数学收敛到 cga-core（唯一定义处）
-新增 `crates/cga-core/src/vec3.rs`：`vec3_dot / vec3_scale / vec3_cross / vec3_add / vec3_sub / vec3_len`（`vec3_cross` 自 `geometry/mod.rs` 迁入）；`mat4.rs` 新增 `transform_dir`。此前同一公式散在 5 个 crate、14 份定义（`dot`/`v3_dot`/`vdot`/`scale`/`v3_scale`/`vscale`/`v3scale`/`cross`/`v3cross`/`xform_point`/`xform_dir`/`vnorm`/`v3_norm`/`v3_len`）。19 处内联长度公式 `(v[0]*v[0] + …).sqrt()` 统一为 `vec3_len`。
+新增 `crates/cga-core/src/vec3.rs`：`vec3_dot / vec3_scale / vec3_cross / vec3_add / vec3_sub / vec3_len`（`vec3_cross` 自 `geometry.rs` 迁入）；`mat4.rs` 新增 `transform_dir`。此前同一公式散在 5 个 crate、14 份定义（`dot`/`v3_dot`/`vdot`/`scale`/`v3_scale`/`vscale`/`v3scale`/`cross`/`v3cross`/`xform_point`/`xform_dir`/`vnorm`/`v3_norm`/`v3_len`）。19 处内联长度公式 `(v[0]*v[0] + …).sqrt()` 统一为 `vec3_len`。
 保留的差异：`cga_scene::vec3_unit` 与各处本地 `*_unit` 近零退化兜底方向不同（`[0,0,1]` vs `[0,0,0]`，已注释）；`cga-collision` 用 `use cga_core::{vec3_add as add, …}` 短别名（该 crate 的 `sub/add/norm` 有 130+ 处调用，逐处改长只会更难读）。
 
 ### 2. 删掉路径兼容 shim（承接 10-09 的"抽 cga-scene"）
@@ -74,7 +75,7 @@ Metal 渲染器。实证三处：
 `geometry_ops.rs` / `geometry_extra.rs` / `csg.rs` 里同一图元的「射线—图元前导 + 根求解」原本各有 2~3 份逐字拷贝（全仓最大的重复块）。提取 12 个 `#[inline]` helper、30 个调用点复用（`sphere_ray_quad`、`near_root`、`plane_ray`、`circle_ray`、`cylinder_local`、`cylinder_quad`、`cylinder_caps`、`box_slab`、`box_hit_root`、`ellipsoid_ray_quad`、`local_nearest_hit`、`local_shadow_hit`），净 -60 行。**不为去重多算任何算子**：`*_intersect` 只取近根、`*_crossings` 要两根、`*_shadow` 只要 t——只在三处本来就算同一批算子时才合并。
 
 ### 4. 死代码
-- cga-core：`multivector::{bivector, vector_part, bivector_part, copy, normalized, weight, bulk, conjugate}`、`primitives::point_pair`；`geometry/geometry.rs` 的 11 变体枚举并入 `geometry/mod.rs`（消除 `clippy::module_inception`）；删空目录 `src/collision`。
+- cga-core：`multivector::{bivector, vector_part, bivector_part, copy, normalized, weight, bulk, conjugate}`、`primitives::point_pair`；`geometry/geometry.rs` 的 11 变体枚举并入 `geometry.rs`（消除 `clippy::module_inception`）；删空目录 `src/collision`。
 - cga-gpu：`geom_kernels::to_f32_3`（原被 `#[allow(dead_code)]` 掩盖）、`mlxops::s_min`、`tol::degenerate_tol`。
 - cga-host：`builder::{mat4_mul, translate4, mat4_inv}` 三个纯转发层、`urdf::{xform_point, xform_dir, rigid_inv}`、`scene_build::fmt_f64`（并入 `jsx_gen::fmt_num`）、`react::apply_input`。
 - cga-scene：`texture_from_bytes` / `texture_from_png_bytes`。
@@ -95,3 +96,49 @@ Metal 渲染器。实证三处：
 | `tables.rs` 的 `gp_grade` | 该文件是 `gen_tables.py` 生成的数学常量表（文件头写着 do not edit by hand），模块级 `#[allow(dead_code)]` 只掩盖它一项，不动 |
 | `v3_add`/`v3_sub` 别名 vs canonical 名 | 见第 1 节：collision 用短别名，其余 crate 用 canonical 名 |
 | `examples/jsx/*.jsx` 之间 0.86 相似度 | 是各演示场景共享的 `<scene>/<camera>/<ground>` 写法，合并会毁掉「每个文件独立可读」的展示价值 |
+
+## 布局遍（2026-10-12）：按 rust 习俗归位
+
+动机：**131 个 .rs 里 51 个 <40 行**（典型「一个类型一个文件」的 Java 习惯）、**11 个 `foo/mod.rs`**（2018 风格应为 `foo.rs` + `foo/`）。本次只动文件/模块布局，公开路径与行为零变化。
+
+验收（全绿）：348 测试通过、clippy 全工作区 0 警告、7 张 gallery PNG 逐字节 sha256 不变。**.rs 文件数 131 → 103；`mod.rs` 11 → 0。**
+
+### 1. `foo/mod.rs` → `foo.rs`（2018 风格）
+| 原 | 现 |
+| --- | --- |
+| `cga-core/src/geometry/mod.rs`、`csg_node/`、`affine_geom/` | `geometry.rs`（+ `geometry/`）、`csg_node.rs`、`affine_geom.rs`（后两者目录消失） |
+| `cga-gpu/src/certify/mod.rs` | `certify.rs`（+ `certify/`） |
+| `cga-gpu/src/renderer/mod.rs` + `renderer/renderer.rs` + `renderer/truth.rs` | `renderer.rs`（+ `renderer/tests.rs`） |
+| `cga-gpu/src/shading/mod.rs`（目录内只有它） | `shading.rs` |
+| `cga-gpu/src/texture/mod.rs`（同上） | `texture.rs` |
+| `cga-host/src/jsx/mod.rs` | `jsx.rs`（+ `jsx/`） |
+| `cga-host/src/jsx_gen/mod.rs` | `jsx_gen.rs`（+ `jsx_gen/`） |
+| `cga-host/src/react/mod.rs`（目录内只有它） | `react.rs`（4 处 `include_str!` 路径随之 `"../../assets/…"` → `"../assets/…"`） |
+| `cga-host/src/scene_build/mod.rs` | `scene_build.rs`（+ `scene_build/`） |
+
+副产品：`renderer::renderer` 这个「模块同名于父模块」消失 ⇒ 上一轮为它加的 `#[allow(clippy::module_inception)]` 与理由注释一并删除，全仓 now 只剩有理由的 2 个 clippy allow（`approx_constant`、`too_many_arguments`）。
+
+### 2. 合并「一个类型一个文件」的过度切分
+| 现 | ← 原 |
+| --- | --- |
+| `cga-core/src/geometry/<prim>.rs`（sphere/plane/cylinder/box/circle/cone/torus/ellipsoid/cyclide） | `<prim>_params.rs` + `<prim>_geometry.rs`（同图元的参数 + 几何体） |
+| `cga-core/src/geometry/params.rs` | `geometry_params.rs`（`geometry::geometry_params` 名字冗余；实测无外部引用） |
+| `cga-core/src/csg_node.rs` | `csg_node/{mod,csg_op,csg_params,csg_geometry}.rs`（4 → 1） |
+| `cga-core/src/affine_geom.rs` | `affine_geom/{mod,affine_params,affine_geometry}.rs`（3 → 1） |
+| `cga-scene/src/light.rs` | `light.rs` + `light_kind.rs` |
+| `cga-scene/src/material.rs` | `material.rs` + `material_kind.rs` + `material_params.rs`（3 → 1） |
+| `cga-scene/src/object.rs` | `object.rs` + `object_params.rs` + `object3d.rs`（3 → 1） |
+| `cga-scene/src/texture.rs` | `texture.rs` + `wrap_mode.rs` + `png.rs`（同一 CPU 纹理领域） |
+| `cga-gpu/src/certify.rs` | `certify/mod.rs` + `probe.rs` + `quartic_roots.rs` |
+| `cga-gpu/src/renderer.rs` | `renderer/mod.rs` + `renderer/renderer.rs` + `truth.rs` |
+| `cga-host/src/scene_build/args.rs` | `arg_value.rs` + `arg_vec3.rs` |
+| `cga-host/src/scene_build/scene_run.rs` | `scene_run.rs` + `tag_instance.rs` |
+| `cga-examples/src/bin/stereo_pair/main.rs` | 并入 `placement.rs`，去掉 `#[path = "placement.rs"]` 这个非习俗的模块 hack |
+
+注：`geometry/box.rs` 的模块名是 Rust 关键字，`geometry.rs` 里写 `pub mod r#box; pub use self::r#box::*;`（文件名仍是 `box.rs`），`geometry::BoxParams` 路径不变。
+
+### 3. 清单归属（Cargo 习俗）
+- `[workspace.package]`：`version = "0.1.0"` / `edition = "2021"` / `license = "MIT"`，各 crate 用 `version.workspace = true` 等继承（原 8 份重复元数据，且都没有 license 字段）。
+- `[workspace.dependencies]`：**>1 个 crate 用到**的收进来单点版本——`cga-core/scene/collision/mesh/gpu/fastmetal/host` 路径依赖、`image`、`mlx-rs`、`mlx-sys`、`serde_json`；单 crate 专用的（`boa_engine`/`swc_core`/`lightningcss`/`urdf-rs`/`inari`/`clap`/`rand`）留在各自 crate。`image` 在各 crate 处用 `image = { workspace = true, features = [...] }` 追加 features（gif / png+jpeg）。
+- `cga-fastmetal` **故意不写** `[lints] workspace = true`：它是 mlx-c 的 unsafe 绑定层，继承 workspace 的 `unsafe_code = "forbid"` 会让文件头的 `#![allow(unsafe_code)]` 直接 E0453。已在 Cargo.toml 写明理由。
+- `Cargo.lock` 无变化（版本未动，只是声明方式改成继承）。

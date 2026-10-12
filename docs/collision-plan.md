@@ -27,8 +27,8 @@
 | motor `exp` / `log` / `velocity` / `extract_velocity` | `cga-core/src/motors.rs` | 螺旋运动：CCD 的**精确**轨迹（不是线性插值近似） |
 | `geom_bounds` / `aabb_sphere` / 屏幕剔除 | `cga-gpu/src/geometry_ops.rs`、`renderer.rs` | broad phase 的包围盒/包围球 |
 | 帧间指纹 diff / 分组 | `IncrementalRenderer`、`Object::group` | 碰撞对缓存的失效依据：指纹没变 ⇒ 碰撞结果不用重算 |
-| tag 注册表 + `face()/center()` 查询 | `cga-host/src/jsx/mod.rs`、`scene_build` | JSX 侧按名字引用对象的方式（`collides("gripper", "part")`） |
-| `solve` 宿主原生函数 | `react-host.js` / `jsx/mod.rs` | JSX → Rust 标量查询的既有模式，`collides()` 照抄 |
+| tag 注册表 + `face()/center()` 查询 | `cga-host/src/jsx.rs`、`scene_build` | JSX 侧按名字引用对象的方式（`collides("gripper", "part")`） |
+| `solve` 宿主原生函数 | `react-host.js` / `jsx.rs` | JSX → Rust 标量查询的既有模式，`collides()` 照抄 |
 
 ## 2. 设计决策
 

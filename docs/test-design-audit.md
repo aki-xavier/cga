@@ -15,7 +15,7 @@
 
 ## 总体判断
 
-整体符合度约 75–80%。标杆：`cga-collision`（29/29 全符合）、`certify`（i128 精确判别式金标 + 固定种子 LCG）、`react/mod.rs`、`urdf.rs`（urdf_rs 第三方当裁判）。
+整体符合度约 75–80%。标杆：`cga-collision`（29/29 全符合）、`certify`（i128 精确判别式金标 + 固定种子 LCG）、`react.rs`、`urdf.rs`（urdf_rs 第三方当裁判）。
 
 ## 违规清单与修复台账
 
@@ -25,7 +25,7 @@
 | V2 | `cga-core/src/motors.rs` `test_extract_velocity` | 闭式 ω=1.0 用 1e-3 拍脑袋公差 | 收紧 1e-9 + 注释 ✓ |
 | V3 | `kinematics.rs` 对跖分支 | `rotvec_from_mat3` / `rotvec_left_jac_inv` 的 θ→π 分支零覆盖 | 补 3 测试：对跖轴恢复闭式、大残差（π−0.01）收敛、J_l⁻¹·J_l = I 代数逆恒等式（含小角级数分支）✓ |
 | V4 | `kinematics.rs` `drag_unreachable_is_error` | 错误锚只 `contains("drag")`，分不清两条拒绝路径 | 见「LM 语义改进」；测试钉「目标不可达」✓ |
-| V5 | `jsx/mod.rs` 两处 session drag 测试 | 不可达/未知 link 只 `is_err()` | 钉「目标不可达」「未知 link nope」✓ |
+| V5 | `jsx.rs` 两处 session drag 测试 | 不可达/未知 link 只 `is_err()` | 钉「目标不可达」「未知 link nope」✓ |
 | V6 | 文件级 P7 | 空场景/无相机/无灯光零覆盖 | 补 3 测试：默认相机字段钉死、空场景整帧同色、无灯命中比背景暗 ✓ |
 | V7 | `cga-mesh/src/mass.rs:335` | 闭式 want_xy 算出后 `let _ =` 丢弃 | 改为 I = R·diag·Rᵀ 独立闭式断言（1e-9）+ 对称性 ✓ |
 

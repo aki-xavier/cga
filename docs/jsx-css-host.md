@@ -158,7 +158,7 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 ## 8. Rust ↔ JS 引擎桥
 
 - **引擎隔离**：boa（纯 Rust，无 FFI）跑在专用线程（64 MB 栈）。跨线程只传 `Send` 命令闭包；`!Send` 的 `Context` 只活在引擎线程，所有对 JS 的接触都在那里。
-- **统一下发**：`HostCall`（`src/react/mod.rs`）是唯一的方法/参数编码点；JS 侧只有 `__sess.call(payloadJson)` 一个入口，方法表 `HANDLERS` 在 `react-host.js`。新增宿主方法 = 两端各加一处，不再三处手写字符串调用。
+- **统一下发**：`HostCall`（`src/react.rs`）是唯一的方法/参数编码点；JS 侧只有 `__sess.call(payloadJson)` 一个入口，方法表 `HANDLERS` 在 `react-host.js`。新增宿主方法 = 两端各加一处，不再三处手写字符串调用。
 - **结构化错误**：回传一律是信封字符串 `{"ok":true,"value":…}` / `{"ok":false,"kind","message","stack"}`，`kind` ∈ syntax/runtime/internal。Rust `parse_envelope` 解构，`ReactError` 保留 `kind`；引擎级异常对象永不跨边界。
 - **帧事务**：`ReactSession::frame(FrameAction)` 一次完成动作（mount / input / event / none）+ 重渲染 + drain + 快照 + React 错误，单次跨线程；`SceneSession` 直接用返回的快照重建。
 - **契约版本**：JS `__sess.schema()` 报告 `{t,p,c}` schema 版本，建会话时由 `SCENE_SCHEMA` 断言——两端 IR 漂移立即失败（渲染金标是第二道防线）。v2（2026-10-07）：每个节点带 `__v`（自身版本）/`__s`（子树版本），增量构建的复用依据（§6 档 0）。
@@ -167,4 +167,4 @@ v1 边界（显式不做）：`echo`；CSS 侧的布局/盒模型、伪元素、
 - **场景预置**：`assets/scene-prelude.js`，编译期 `include_str!` 嵌入。
 - **沙箱（可选）**：`CGA_SANDBOX=1`，或 `SessionOptions { sandbox: Sandbox::On }` / `run_jsx_pose_sandbox` / `SceneSession::open_pose_sandbox`。模块求值前冻结宿主能力全局（`__sess`/`React`/`CGA_*`/`console`…），每帧后删除作者新增的全局。这是**纵深防御而非硬边界**：单帧内作者仍能读到未冻结的宿主对象；彻底隔离需要独立 realm（后续项）。
 
-桥测试（`src/react/mod.rs`）：信封错误分类（语法/运行时）、帧事务一次挂载、原生函数 panic 被捕获、沙箱冻结宿主全局并清理作者全局、非沙箱保留作者全局；`src/jsx/mod.rs`：沙箱下照常渲染。
+桥测试（`src/react.rs`）：信封错误分类（语法/运行时）、帧事务一次挂载、原生函数 panic 被捕获、沙箱冻结宿主全局并清理作者全局、非沙箱保留作者全局；`src/jsx.rs`：沙箱下照常渲染。

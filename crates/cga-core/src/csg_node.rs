@@ -1,4 +1,17 @@
-use super::*;
+use crate::geometry::{Geometry, GeometryParams};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CsgOp {
+    Union,
+    Difference,
+    Intersection,
+}
+
+#[derive(Clone, Debug)]
+pub struct CsgParams {
+    pub op: CsgOp,
+    pub children: Vec<GeometryParams>,
+}
 
 #[derive(Clone, Debug)]
 pub struct CsgGeometry {

@@ -158,7 +158,7 @@
 ### U3 诊断渲染通道（对应 MegaLights 的诊断叙事）
 
 **已实施（2026-10-09）**：`cga_gpu::render_diagnostic` + `DiagChannel`
-（`crates/cga-gpu/src/renderer/renderer.rs`）+ `SceneSession::render_diagnostic`
+（`crates/cga-gpu/src/renderer.rs`）+ `SceneSession::render_diagnostic`
 + MCP `scene_render` 的 `channel` 参数。
 
 **UE 做法**：MegaLights 转正的关键不止是性能，还有 Light Finder / Ray Visualizer——可观测性让用户敢用高级特性。
@@ -205,7 +205,7 @@ N 个同形实例只变换不同）——纯性能项，真实消费者（百级
 ### U5 解析轮廓 NPR（对应 Toon Shader，且是 UE 做不到的）
 
 **已实施（2026-10-09）**：`RenderMode::Toon` + `DiagChannel::Edge` +
-`edge_mask`/`toon_post`（`crates/cga-gpu/src/renderer/renderer.rs`）。
+`edge_mask`/`toon_post`（`crates/cga-gpu/src/renderer.rs`）。
 
 **UE 做法**：Substrate NPR 卡通着色。网格引擎的描边是屏幕空间后处理（法线/深度不连续检测，本质是猜）。
 

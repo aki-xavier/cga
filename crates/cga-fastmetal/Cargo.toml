@@ -1,9 +1,13 @@
 [package]
 name = "cga-fastmetal"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Safe wrapper over mlx-c's fast custom Metal kernel API (mlx-rs 未绑定 metal_kernel)。"
 
 [dependencies]
-mlx-sys = "0.6.0"
+mlx-sys = { workspace = true }
 mlx-rs = { workspace = true }
+
+# 故意不写 `[lints] workspace = true`：本 crate 就是 mlx-c 的 unsafe 绑定层，
+# 继承 workspace 的 `unsafe_code = "forbid"` 会让 `#![allow(unsafe_code)]` E0453。

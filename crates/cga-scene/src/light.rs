@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LightKind {
+    Ambient,
+    Directional,
+    Point,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Light {
     pub kind: LightKind,

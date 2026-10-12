@@ -18,3 +18,10 @@ pub struct SceneRun {
     /// 平面/圆片/无限长柱为 None——无有限体积，诚实跳过）。
     pub mass_props: Vec<Option<cga_mesh::MassProps>>,
 }
+
+#[derive(Clone, Debug)]
+pub struct TagInstance {
+    pub geo: Geometry,
+    pub world: [f64; 16],
+    pub rel: [f64; 16],
+}

@@ -6,9 +6,11 @@ use std::fs;
 use rand::rngs::StdRng;
 use rand::{Rng as _, SeedableRng};
 
-#[path = "placement.rs"]
-pub mod placement;
-pub(crate) use self::placement::*;
+pub(crate) struct Placement {
+    pub(crate) kind: &'static str,
+    pub(crate) at: [f64; 3],
+    pub(crate) size: f64,
+}
 
 struct Rng(StdRng);
 impl Rng {
