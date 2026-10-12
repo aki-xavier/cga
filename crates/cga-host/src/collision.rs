@@ -52,7 +52,7 @@ pub const SPATIAL_INDEX_THRESHOLD: usize = 64;
 
 /// 对象的世界 AABB（局部包围盒 8 角点变换后取 min/max）；无界几何（平面）→ None。
 fn world_aabb(o: &Object) -> Option<[[f64; 3]; 2]> {
-    let [bmin, bmax] = cga_mesh::BakeExt::bounds(&o.geometry.identity_params())?;
+    let [bmin, bmax] = o.geometry.identity_params().bounds()?;
     let m = o.motor().to_matrix();
     let mut mn = [f64::INFINITY; 3];
     let mut mx = [f64::NEG_INFINITY; 3];
@@ -564,7 +564,7 @@ pub fn sweep_joint(run: &crate::SceneRun, joint_name: &str) -> JointSweepOutcome
 /// 螺旋运动下物体点的全程速度上界（保守认证用）：|v| + |ω|·(轴到中心距 + 局部包围半径)。
 /// 无局部包围盒 → ∞（认证不了）。
 fn speed_bound(mv_o: [f64; 3], mv_xi: [f64; 6], obj: &Object, w: [f64; 16]) -> f64 {
-    let Some([bmin, bmax]) = cga_mesh::BakeExt::bounds(&obj.geometry.identity_params()) else {
+    let Some([bmin, bmax]) = obj.geometry.identity_params().bounds() else {
         return f64::INFINITY;
     };
     let c_local = [

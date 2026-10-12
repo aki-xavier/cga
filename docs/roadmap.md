@@ -3,7 +3,12 @@
 
 状态：**当前（2026-10-08）**。本文档是方向的依赖关系与排序；每个方向落地时各自单独立项（参照 `css-conformance.md` / `collision-plan.md` / `kinematics-graph.md` 的做法：计划文档 → 阶段 → 验收）。
 
-## 1. 已建成（全部推送，348 测试全绿）
+## 1. 已建成（全部推送，363 测试全绿）
+
+- **图元几何单一来源**（2026-10-12）：`cga-core::query` 是符号隐式 / 三值包含 / 精确欧氏距离、
+  最近点、支撑、包围盒的唯一实现（blade 图元锚在 GA 关联谓词上）；网格化、碰撞（窄相/接触/宽相）、
+  宿主全部改为分发；GPU 的 f32 数组内核与 MSL 是性能实现，由逐图元漂移测试钉住。
+  计划与拒绝的替代方案：`docs/geometry-unification.md`。
 
 - **渲染器**：解析光线追踪（全图元 + CSG + 仿射 + 认证数值回退）、帧间像素级增量渲染（与全帧逐位一致）。
 - **JSX+CSS 宿主**：真 React 19（hooks/context/memo/key/事件派发/宿主输入）、CSS 真匹配真级联（含错误契约）、帧间子树复用、分组（`Object::group`）、碰撞查询惰性求值。
@@ -115,7 +120,7 @@ G5+ 空间闭链 / 多自由度环路         ← 依赖：B（雅可比复用�
 
 ### C. 物理属性 + 静力学（已完成 C1+C2）
 
-- **C1 质量属性**：`cga_mesh::mass_properties`——图元闭式解（球/盒/柱/锥/整环面/椭球），CSG/仿射/环纹面/部分环面走水密网格的 Mirtich 体积分（`bake` 保证水密 + 一致朝向；步长自适应包围盒）；平面/圆片/无限长柱 → `None`（无有限体积，诚实跳过）。闭式与网格积分互相交叉验证（锥/环面的横向惯性公式由对拍裁决，不凭记忆）。JSX：`density` prop 沿子树下传（独立通道，不进材质键），每对象 `SceneRun.mass_props`，报告 `mass i m=… cog=…` + 汇总 `total_mass=`。
+- **C1 质量属性**：`cga_mesh::mass_properties`——图元闭式解（球/盒/柱/锥/整环面/椭球），CSG/仿射/环纹面/部分环面走水密网格的 Mirtich 体积分（`bake` 保证水密 + 一致朝向；步长自适应包围盒）；平面/圆片/无限长柱 → `None`（无有限体积，诚实跳过）。闭式与网格积分互相交叉验证（锥/环面的横向惯性公式由对拍裁决，不凭记忆）。**两条契约**（2026-10-12 审计修正）：① `inertia` = `ρ·R·I_l·Rᵀ`，其中 `I_l` 是**单位密度**二阶矩（`∫x_i x_j dV`）——乘质量会把体积多乘一次（`v≠1` 的物体偏大 v 倍）；② 调用方给的 `world` 必须是**刚体**的：`scale/mirror` 已折进几何（仿射包装），再传完整 world 会把线性部分作用两次（缩放对象的 `cog` 错）。两条各有回归测试：`mass::tests::inertia_scales_with_density_not_with_volume`、`mesh_path_inertia_shares_the_closed_form_convention`、`jsx::tests::test_mass_scaled_object_uses_rigid_world_only`。JSX：`density` prop 沿子树下传（独立通道，不进材质键），每对象 `SceneRun.mass_props`，报告 `mass i m=… cog=…` + 汇总 `total_mass=`。
 - **C2 准静态平衡**：`settle(kin, link_masses, gravity, free)`——势能 U = −Σ m·g·cog，自由 q 上最小化；带阻尼牛顿（FD 梯度/Hessian + 步长截断 + U 下降接受准则；不是平衡方程迭代——起点恰在驻点时梯度法的 Hessian 奇异，势能最小化没有这个病）。无时间积分：这是静力学不是动力学。单摆/双摆闭式平衡姿态验证。
 - 不含接触动力学（见 §2 明确不做）。装配静力校核（wrench 投影到副方向）留到有消费者。
 

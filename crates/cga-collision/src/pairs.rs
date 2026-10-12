@@ -32,140 +32,47 @@ pub(crate) fn pair_separation(a: &Shape, b: &Shape) -> Option<f64> {
 }
 
 // ---- 点–形状带符号距离（实体内部为负） -----------------------------------
+//
+// 唯一的实现在 `cga_core::query`（图元几何的标量定义）；这里只做 `Shape`（世界空间）
+// 的分发。
 
 pub(crate) fn sdf(s: &Shape, p: [f64; 3]) -> Option<f64> {
     match *s {
-        Shape::Sphere { c, r } => Some(norm(sub(p, c)) - r),
-        Shape::Plane { n, d } => Some(vec3_dot(n, p) - d), // 半空间：内部为负
-        Shape::Box { c, axes, half } => Some(sdf_box(c, axes, half, p)),
-        Shape::Cylinder { q, u, r, half } => Some(sdf_cylinder(q, u, r, half, p)),
-        Shape::Cone { c, axis, r, h } => Some(sdf_cone(c, axis, r, h, p)),
+        Shape::Sphere { c, r } => Some(cga_core::sdf_sphere(c, r, p)),
+        Shape::Plane { n, d } => cga_core::sdf_plane(n, d, p), // 半空间：内部为负
+        Shape::Box { c, axes, half } => Some(cga_core::sdf_box(c, axes, half, p)),
+        Shape::Cylinder { q, u, r, half } => Some(cga_core::sdf_cylinder(q, u, r, half, p)),
+        Shape::Cone { c, axis, r, h } => Some(cga_core::sdf_cone(c, axis, r, h, p)),
         Shape::Torus {
             c,
             axis,
             major,
             minor,
-        } => {
-            let q = sub(p, c);
-            let z = vec3_dot(q, axis);
-            let rho = norm(sub(q, vec3_scale(axis, z)));
-            Some(norm([rho - major, z, 0.0]) - minor)
-        }
+        } => Some(cga_core::sdf_torus(c, axis, major, minor, p)),
         Shape::Ellipsoid { c, axes, radii } => {
-            super::contacts::ellipsoid_closest(c, axes, radii, p).map(|x| x.0)
+            cga_core::ellipsoid_closest(c, axes, radii, p).map(|x| x.0)
         }
     }
-}
-
-/// 盒 SDF（精确）：到面的欧氏距离，内部为 −min 面距。
-fn sdf_box(c: [f64; 3], axes: [[f64; 3]; 3], half: [f64; 3], p: [f64; 3]) -> f64 {
-    let q = sub(p, c);
-    let mut dmax = f64::NEG_INFINITY;
-    let mut out2 = 0.0;
-    for i in 0..3 {
-        let d = vec3_dot(q, axes[i]).abs() - half[i];
-        dmax = dmax.max(d);
-        out2 += d.max(0.0) * d.max(0.0);
-    }
-    out2.sqrt() + dmax.min(0.0)
-}
-
-/// 柱 SDF（精确）：half ≤ 0 为无限长。
-fn sdf_cylinder(q0: [f64; 3], u: [f64; 3], r: f64, half: f64, p: [f64; 3]) -> f64 {
-    let w = sub(p, q0);
-    let x = vec3_dot(w, u);
-    let rho = norm(sub(w, vec3_scale(u, x)));
-    let dx = rho - r;
-    if half <= 0.0 {
-        return dx;
-    }
-    let dz = x.abs() - half;
-    let outside = (dx.max(0.0) * dx.max(0.0) + dz.max(0.0) * dz.max(0.0)).sqrt();
-    outside + dx.max(dz).min(0.0)
-}
-
-/// 锥 SDF（精确）：截面三角形（顶点 (0, h/2)，底角 (r, −h/2)，轴底 (0, −h/2)）
-/// 的 2D 点–边距离 + 内外判定。
-fn sdf_cone(c: [f64; 3], axis: [f64; 3], r: f64, h: f64, p: [f64; 3]) -> f64 {
-    let q = sub(p, c);
-    let z = vec3_dot(q, axis);
-    let rho = norm(sub(q, vec3_scale(axis, z)));
-    let apex = (0.0, h / 2.0);
-    let base = (r, -h / 2.0);
-    let axbot = (0.0, -h / 2.0);
-    let d = dist_seg((rho, z), apex, base).min(dist_seg((rho, z), base, axbot));
-    let in_z = (-h / 2.0..=h / 2.0).contains(&z);
-    let rmax = r * (h / 2.0 - z) / h;
-    let inside = in_z && rho <= rmax;
-    if inside {
-        -d
-    } else {
-        d
-    }
-}
-
-/// 2D 点–线段距离。
-pub(crate) fn dist_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
-    let ab = (b.0 - a.0, b.1 - a.1);
-    let ap = (p.0 - a.0, p.1 - a.1);
-    let len2 = ab.0 * ab.0 + ab.1 * ab.1;
-    let t = if len2 > 0.0 {
-        ((ap.0 * ab.0 + ap.1 * ab.1) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let dx = ap.0 - t * ab.0;
-    let dy = ap.1 - t * ab.1;
-    (dx * dx + dy * dy).sqrt()
 }
 
 // ---- 平面–X：支撑函数 ----------------------------------------------------
 
 /// 实体在方向 n（单位）上的支撑区间 [lo, hi]（n·x 的最小/最大）。
+/// 唯一的实现在 `cga_core::query`。
 pub(crate) fn support_range(s: &Shape, n: [f64; 3]) -> Option<(f64, f64)> {
     match *s {
-        Shape::Sphere { c, r } => Some((vec3_dot(n, c) - r, vec3_dot(n, c) + r)),
-        Shape::Box { c, axes, half } => {
-            let e: f64 = (0..3).map(|i| vec3_dot(n, axes[i]).abs() * half[i]).sum();
-            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
-        }
-        Shape::Cylinder { q, u, r, half } => {
-            if half <= 0.0 {
-                return None; // 无限长柱与平面没有有限支撑区间
-            }
-            let nu = vec3_dot(n, u);
-            let e = half * nu.abs() + r * (1.0 - nu * nu).max(0.0).sqrt();
-            Some((vec3_dot(n, q) - e, vec3_dot(n, q) + e))
-        }
-        Shape::Cone { c, axis, r, h } => {
-            let apex = add(c, vec3_scale(axis, h / 2.0));
-            let bc = add(c, vec3_scale(axis, -h / 2.0));
-            let s = (1.0 - vec3_dot(n, axis) * vec3_dot(n, axis))
-                .max(0.0)
-                .sqrt();
-            let na = vec3_dot(n, apex);
-            let nb = vec3_dot(n, bc);
-            Some((na.min(nb - r * s), na.max(nb + r * s)))
-        }
+        Shape::Sphere { c, r } => Some(cga_core::support_range_sphere(c, r, n)),
+        Shape::Box { c, axes, half } => Some(cga_core::support_range_box(c, axes, half, n)),
+        Shape::Cylinder { q, u, r, half } => cga_core::support_range_cylinder(q, u, r, half, n),
+        Shape::Cone { c, axis, r, h } => Some(cga_core::support_range_cone(c, axis, r, h, n)),
         Shape::Torus {
             c,
             axis,
             major,
             minor,
-        } => {
-            let na = vec3_dot(n, axis);
-            let e = major * (1.0 - na * na).max(0.0).sqrt() + minor;
-            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
-        }
+        } => Some(cga_core::support_range_torus(c, axis, major, minor, n)),
         Shape::Ellipsoid { c, axes, radii } => {
-            let e: f64 = (0..3)
-                .map(|i| {
-                    let v = vec3_dot(n, axes[i]) * radii[i];
-                    v * v
-                })
-                .sum::<f64>()
-                .sqrt();
-            Some((vec3_dot(n, c) - e, vec3_dot(n, c) + e))
+            Some(cga_core::support_range_ellipsoid(c, axes, radii, n))
         }
         Shape::Plane { .. } => None, // 平面–平面在 plane_separation 单列
     }

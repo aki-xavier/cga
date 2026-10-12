@@ -318,8 +318,9 @@ pub fn geom_contains(p: &GeometryParams, pos: &Array) -> Array {
 mod tests {
     use crate::{test_contains, test_hit};
     use cga_core::{
-        BoxGeometry, CsgGeometry, CsgOp, EllipsoidGeometry, Geometry, Multivector, PlaneGeometry,
-        SphereGeometry,
+        AffineGeometry, BoxGeometry, ConeGeometry, CsgGeometry, CsgOp, CyclideGeometry,
+        CylinderGeometry, EllipsoidGeometry, Geometry, Multivector, PlaneGeometry, SphereGeometry,
+        TorusGeometry,
     };
 
     #[test]
@@ -397,6 +398,66 @@ mod tests {
         let (t, m) = test_hit(&g, [0.0, 0.0, 5.0], [0.0, 0.0, -1.0]);
         assert!(m);
         assert!((f64::from(t) - 2.0).abs() < 1e-3);
+    }
+
+    /// 漂移看守：f32 数组内核对**每个图元**的符号判定，必须与 `cga_core` 的唯一标量定义
+    /// （`GeometryParams::field` 的符号）一致。数组路径是**性能实现**（同一公式的 f32
+    /// 批量形态），不是第二份定义——这个测试就是那道防线。
+    ///
+    /// 贴面样本跳过：f32 舍入，以及数组侧用严格 `<`、标量侧用 `<=`（表面算内部）的
+    /// 约定差异。
+    #[test]
+    fn test_array_contains_agrees_with_core_sign_definition() {
+        let prims: Vec<Geometry> = vec![
+            Geometry::SphereGeometry(SphereGeometry::new(1.3)),
+            Geometry::PlaneGeometry(PlaneGeometry::new([0.0, 1.0, 0.0], 0.2)),
+            Geometry::BoxGeometry(BoxGeometry::new(2.0, 1.2, 0.6)),
+            Geometry::CylinderGeometry(CylinderGeometry::new(0.8, 2.2)),
+            Geometry::ConeGeometry(ConeGeometry::new(0.7, 1.6)),
+            Geometry::EllipsoidGeometry(EllipsoidGeometry::new(1.0, 0.6, 1.4)),
+            Geometry::TorusGeometry(TorusGeometry::new(1.5, 0.4)),
+            Geometry::CyclideGeometry(CyclideGeometry::new(1.0, 0.5, 0.25, [0.0; 3])),
+            Geometry::CsgGeometry(CsgGeometry::new(
+                CsgOp::Difference,
+                vec![
+                    Geometry::BoxGeometry(BoxGeometry::new(2.4, 2.4, 2.4)),
+                    Geometry::SphereGeometry(SphereGeometry::new(0.9)),
+                ],
+            )),
+            Geometry::AffineGeometry(AffineGeometry::new(
+                Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+                [[1.4, 0.0, 0.0], [0.0, 0.7, 0.0], [0.0, 0.0, 1.1]],
+            )),
+        ];
+        let mut pts = Vec::new();
+        for i in -4..=4 {
+            for j in -4..=4 {
+                for k in -4..=4 {
+                    pts.push([i as f64 * 0.35, j as f64 * 0.35, k as f64 * 0.35]);
+                }
+            }
+        }
+        for g in &prims {
+            let params = g.identity_params();
+            let array_side = test_contains(g, &Multivector::identity(), &pts);
+            let mut compared = 0;
+            for (i, p) in pts.iter().enumerate() {
+                let Some(f) = params.field(*p) else {
+                    continue;
+                };
+                if f.abs() < 1e-3 {
+                    continue; // 贴面
+                }
+                compared += 1;
+                assert_eq!(
+                    array_side[i],
+                    f <= 0.0,
+                    "{g:?} 在 {p:?}：数组 {} vs 标量定义 field={f}",
+                    array_side[i]
+                );
+            }
+            assert!(compared > 50, "{g:?} 的比较样本太少：{compared}");
+        }
     }
 
     #[test]

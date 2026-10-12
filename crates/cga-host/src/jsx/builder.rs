@@ -374,10 +374,16 @@ impl<'p> Builder<'p> {
         src: Option<i64>,
     ) {
         let (motor, lin) = cga_core::decompose_rigid(world);
-        let g2 = if cga_scene::is_identity3(lin) {
-            geo.clone()
+        // 非刚性部分（scale/mirror）折进几何；质量属性的 `world` 必须是**刚体**的
+        // （mass.rs 的契约），否则线性部分被作用两次：缩放对象的 cog/inertia 会错
+        // （实测 scale=2 的锥 cog.z 由 −1 变 −2）。
+        let (g2, mass_world) = if cga_scene::is_identity3(lin) {
+            (geo.clone(), world)
         } else {
-            cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin))
+            (
+                cga_core::Geometry::AffineGeometry(cga_core::AffineGeometry::new(geo.clone(), lin)),
+                motor.to_matrix(),
+            )
         };
         let group = self.group_stack.last().copied().unwrap_or(0);
         // 质量属性（C1）：density 链上的对象才有；CSG/仿射走网格积分（比发射慢，
@@ -385,7 +391,7 @@ impl<'p> Builder<'p> {
         let mp = self
             .density_stack
             .last()
-            .and_then(|&d| cga_mesh::mass_properties(&g2, world, d));
+            .and_then(|&d| cga_mesh::mass_properties(&g2, mass_world, d));
         scene.add_object(
             Object::new(ObjectParams {
                 geometry: g2,

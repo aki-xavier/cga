@@ -20,14 +20,15 @@ pub struct MassProps {
     pub inertia: [[f64; 3]; 3],
 }
 
-/// 局部闭式解：(体积, 局部质心, 局部惯性对角)。柱轴/锥轴/环轴都是局部 z。
+/// 局部闭式解：(体积, 局部质心, 局部**单位密度**惯性对角 `∫x_i x_j dV`)。柱轴/锥轴/环轴都是局部 z。
+/// 密度只在 `to_world` 里乘一次；这里的惯量已含体积因子。
 fn closed_form(g: &Geometry) -> Option<(f64, [f64; 3], [[f64; 3]; 3])> {
     let diag = |a: f64, b: f64, c: f64| [[a, 0.0, 0.0], [0.0, b, 0.0], [0.0, 0.0, c]];
     use cga_core::Geometry as G;
     match g {
         G::SphereGeometry(s) => {
             let v = 4.0 / 3.0 * std::f64::consts::PI * s.radius.powi(3);
-            let i = 2.0 / 5.0 * v * s.radius * s.radius; // 单位密度：I = 2/5 m r²
+            let i = 2.0 / 5.0 * v * s.radius * s.radius; // 单位密度：∫x²dV = 2/5·(ρ=1 的质量)·r²
             Some((v, [0.0; 3], diag(i, i, i)))
         }
         G::BoxGeometry(b) => {
@@ -99,7 +100,11 @@ pub fn mass_properties(g: &Geometry, world: [f64; 16], density: f64) -> Option<M
     mesh_mass(g, world, density)
 }
 
-/// 局部闭式 → 世界（刚体）：质心平移 + 惯性旋转（I_w = R·I_l·Rᵀ，I_l 已关于局部质心）。
+/// 局部量 → 世界（`world` 必须是**刚体**的，见 `mass_properties` 的契约）。
+///
+/// `i_l` 是**单位密度**二阶矩（`∫ x_i x_j dV`，见 `closed_form`/`mesh_integrate`），
+/// 所以世界惯量是 `I_w = ρ·R·I_l·Rᵀ`——**不能**乘质量：`ρ·v·R·I_l·Rᵀ` 会把体积
+/// 多乘一次（体积 ≠ 1 的物体惯量整体偏大 v 倍）。
 fn to_world(
     v: f64,
     cog_l: [f64; 3],
@@ -114,7 +119,7 @@ fn to_world(
         [world[4], world[5], world[6]],
         [world[8], world[9], world[10]],
     ];
-    // I_w = R·I·Rᵀ
+    // I_w = ρ·R·I_l·Rᵀ（I_l 是单位密度二阶矩 ⇒ 只乘密度，不乘质量）
     let mut tmp = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
@@ -124,7 +129,7 @@ fn to_world(
     let mut iw = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
-            iw[i][j] = m * (0..3).map(|k| tmp[i][k] * r[j][k]).sum::<f64>();
+            iw[i][j] = density * (0..3).map(|k| tmp[i][k] * r[j][k]).sum::<f64>();
         }
     }
     MassProps {
@@ -317,17 +322,18 @@ mod tests {
     #[test]
     fn world_rotation_rotates_inertia() {
         // 绕 z 转 45° 的细长盒：I_xy 非零（主轴不在坐标轴上）。
+        // 体积故意 ≠ 1（4×1×1 = 4）：体积为 1 的盒子对「惯量乘质量」的量纲错误是盲区。
         let rot45 =
             cga_core::Multivector::rotor([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_4).to_matrix();
         let mp = mass_properties(
-            &Geometry::BoxGeometry(BoxGeometry::new(4.0, 0.5, 0.5)),
+            &Geometry::BoxGeometry(BoxGeometry::new(4.0, 1.0, 1.0)),
             rot45,
             1.0,
         )
         .unwrap();
         // 闭式 I_xy：I = R·diag(I1,I2,I3)·Rᵀ（教科书定义，与被测积分实现独立）。
-        // 半宽 (2, 0.25, 0.25)：主惯量 I1 = m(hy²+hz²)/3、I2 = I3 = m(hx²+hz²)/3。
-        let (hx, hy, hz) = (2.0, 0.25, 0.25);
+        // 半宽 (2, 0.5, 0.5)：主惯量 I1 = m(hy²+hz²)/3、I2 = I3 = m(hx²+hz²)/3。
+        let (hx, hy, hz) = (2.0, 0.5, 0.5);
         let i1 = mp.mass * (hy * hy + hz * hz) / 3.0;
         let i2 = mp.mass * (hx * hx + hz * hz) / 3.0;
         // want_xy = Σ_k R[x][k]·I_k·R[y][k]（行主序：r[0..3] 是 x 行、r[4..7] 是 y 行）
@@ -340,9 +346,63 @@ mod tests {
         );
         // 对称性
         assert_eq!(mp.inertia[0][1], mp.inertia[1][0]);
-        // 迹不变（半宽 hx=2, hy=hz=0.25）
+        // 迹不变（半宽 hx=2, hy=hz=0.5）
         let tr: f64 = (0..3).map(|i| mp.inertia[i][i]).sum();
-        let il = mp.mass * ((0.0625 + 0.0625) / 3.0 + (4.0 + 0.0625) / 3.0 + (4.0 + 0.0625) / 3.0);
+        let il = mp.mass * ((0.25 + 0.25) / 3.0 + (4.0 + 0.25) / 3.0 + (4.0 + 0.25) / 3.0);
         assert!((tr - il).abs() / il < 1e-9, "迹不变: {tr} vs {il}");
+    }
+
+    #[test]
+    fn inertia_scales_with_density_not_with_volume() {
+        // 约定钉死：`inertia` 是 ρ·(单位密度二阶矩)。体积 ≠ 1 的物件对
+        // 「乘质量（=ρv）」的量纲错误会整体偏大 v 倍——球 r=1 偏 4.18879 倍。
+        let sp = Geometry::SphereGeometry(SphereGeometry::new(1.0));
+        let p = mass_properties(&sp, ID, 1.0).unwrap();
+        let want_m = 4.0 / 3.0 * std::f64::consts::PI;
+        let want_i = 2.0 / 5.0 * want_m; // 2/5·m·r²，r=1
+        assert!((p.mass - want_m).abs() < 1e-12);
+        assert!(
+            (p.inertia[0][0] - want_i).abs() < 1e-12,
+            "球 I_xx={} vs 2/5·m·r²={want_i}",
+            p.inertia[0][0]
+        );
+
+        // 盒 2×2×2（v=8）、ρ=3：I_xx = m(b²+c²)/12（棱长 b=c=2），闭式独立。
+        let bx = Geometry::BoxGeometry(BoxGeometry::new(2.0, 2.0, 2.0));
+        let q = mass_properties(&bx, ID, 3.0).unwrap();
+        let m = 3.0 * 8.0;
+        let want = m * (4.0 + 4.0) / 12.0;
+        assert!((q.mass - m).abs() < 1e-12);
+        for k in 0..3 {
+            assert!(
+                (q.inertia[k][k] - want).abs() < 1e-12,
+                "I[{k}][{k}]={} vs {want}",
+                q.inertia[k][k]
+            );
+        }
+        // 惯量严格正比于密度：I(ρ)/ρ 与 ρ 无关。
+        let unit = mass_properties(&bx, ID, 1.0).unwrap();
+        for k in 0..3 {
+            assert!((q.inertia[k][k] - 3.0 * unit.inertia[k][k]).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn mesh_path_inertia_shares_the_closed_form_convention() {
+        // 网格路径（仿射包装 → marching tetrahedra + Mirtich）与闭式同约定：
+        // 球 r=1 的 I_xx 必须与 2/5·m·r² 同量级（网格近似容差 1e-2 足以拦住
+        // 「乘质量」的 4.19 倍错误）。
+        let ag = Geometry::AffineGeometry(cga_core::AffineGeometry::new(
+            Geometry::SphereGeometry(SphereGeometry::new(1.0)),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ));
+        let p = mass_properties(&ag, ID, 1.0).expect("球走网格路径");
+        let want = 2.0 / 5.0 * p.mass;
+        let rel = (p.inertia[0][0] - want).abs() / want;
+        assert!(
+            rel < 1e-2,
+            "网格路径 I_xx={} vs 2/5·m·r²={want}（相对差 {rel}）",
+            p.inertia[0][0]
+        );
     }
 }

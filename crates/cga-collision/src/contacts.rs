@@ -9,7 +9,7 @@
 
 use super::*;
 use pairs::{
-    box_box, box_edges, box_mtv_exact, box_vertices, dist_seg, plane_separation, sdf, support_range,
+    box_box, box_edges, box_mtv_exact, box_vertices, plane_separation, sdf, support_range,
 };
 use shape::Shape;
 
@@ -90,241 +90,46 @@ fn plane_contacts(n: [f64; 3], d: f64, s: &Shape, flip: bool) -> Option<Vec<Cont
 // ---- 最近点 / 支撑点 ------------------------------------------------------
 
 /// 形状表面上离 p 最近的点。`None` = 椭球内部点（v1 保守）。
+/// 唯一的实现在 `cga_core::query`。
 fn closest_point(s: &Shape, p: [f64; 3]) -> Option<[f64; 3]> {
     match *s {
-        Shape::Sphere { c, r } => {
-            let d = sub(p, c);
-            let n = norm(d);
-            Some(if n < 1e-12 {
-                add(c, [r, 0.0, 0.0])
-            } else {
-                add(c, vec3_scale(d, r / n))
-            })
-        }
-        Shape::Plane { n, d } => Some(sub(p, vec3_scale(n, vec3_dot(n, p) - d))),
-        Shape::Box { c, axes, half } => {
-            let q = sub(p, c);
-            let mut out = c;
-            for i in 0..3 {
-                let x = vec3_dot(q, axes[i]).clamp(-half[i], half[i]);
-                out = add(out, vec3_scale(axes[i], x));
-            }
-            Some(out)
-        }
+        Shape::Sphere { c, r } => Some(cga_core::closest_point_sphere(c, r, p)),
+        Shape::Plane { n, d } => Some(cga_core::closest_point_plane(n, d, p)),
+        Shape::Box { c, axes, half } => Some(cga_core::closest_point_box(c, axes, half, p)),
         Shape::Cylinder { q, u, r, half } => {
-            let w = sub(p, q);
-            let x = vec3_dot(w, u);
-            let rad = sub(w, vec3_scale(u, x));
-            let rho = norm(rad);
-            let xc = if half <= 0.0 { x } else { x.clamp(-half, half) };
-            let rc = if rho > r { r } else { rho };
-            let dir = if rho < 1e-12 {
-                [1.0, 0.0, 0.0]
-            } else {
-                vec3_scale(rad, 1.0 / rho)
-            };
-            Some(add(q, add(vec3_scale(u, xc), vec3_scale(dir, rc))))
+            Some(cga_core::closest_point_cylinder(q, u, r, half, p))
         }
-        Shape::Cone { c, axis, r, h } => {
-            let q = sub(p, c);
-            let z = vec3_dot(q, axis);
-            let rad = sub(q, vec3_scale(axis, z));
-            let rho = norm(rad);
-            // 截面 (ρ, z) 上求截面三角形边的最近点，再映回 3D。
-            let apex = (0.0, h / 2.0);
-            let base = (r, -h / 2.0);
-            let axbot = (0.0, -h / 2.0);
-            let (q1, d1) = closest_on_seg((rho, z), apex, base);
-            let (q2, d2) = closest_on_seg((rho, z), base, axbot);
-            let (qr, qz) = if d1 <= d2 { q1 } else { q2 };
-            let dir = if rho < 1e-12 {
-                [1.0, 0.0, 0.0]
-            } else {
-                vec3_scale(rad, 1.0 / rho)
-            };
-            Some(add(c, add(vec3_scale(axis, qz), vec3_scale(dir, qr))))
-        }
+        Shape::Cone { c, axis, r, h } => Some(cga_core::closest_point_cone(c, axis, r, h, p)),
         Shape::Torus {
             c,
             axis,
             major,
             minor,
-        } => {
-            let q = sub(p, c);
-            let z = vec3_dot(q, axis);
-            let rad = sub(q, vec3_scale(axis, z));
-            let rho = norm(rad);
-            // 截面 (ρ, z)：环心 (major, 0)、半径 minor 的圆。
-            let d = [rho - major, z];
-            let n = (d[0] * d[0] + d[1] * d[1]).sqrt();
-            let (qr, qz) = if n < 1e-12 {
-                (major + minor, 0.0)
-            } else {
-                (major + minor * d[0] / n, minor * d[1] / n)
-            };
-            let dir = if rho < 1e-12 {
-                [1.0, 0.0, 0.0]
-            } else {
-                vec3_scale(rad, 1.0 / rho)
-            };
-            Some(add(c, add(vec3_scale(axis, qz), vec3_scale(dir, qr))))
-        }
-        Shape::Ellipsoid { c, axes, radii } => ellipsoid_closest(c, axes, radii, p).map(|x| x.1),
+        } => Some(cga_core::closest_point_torus(c, axis, major, minor, p)),
+        Shape::Ellipsoid { c, axes, radii } => cga_core::closest_point_ellipsoid(c, axes, radii, p),
     }
 }
 
-/// 2D 线段上的最近点（返回点与距离）。
-fn closest_on_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, f64), f64) {
-    let ab = (b.0 - a.0, b.1 - a.1);
-    let ap = (p.0 - a.0, p.1 - a.1);
-    let len2 = ab.0 * ab.0 + ab.1 * ab.1;
-    let t = if len2 > 0.0 {
-        ((ap.0 * ab.0 + ap.1 * ab.1) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let q = (a.0 + t * ab.0, a.1 + t * ab.1);
-    ((q), dist_seg(p, a, b))
-}
-
-/// 方向 v（单位）上的支撑点（v 方向的最远点）。
+/// 方向 v（单位）上的支撑点（v 方向的最远点）。唯一的实现在 `cga_core::query`。
 fn support_point(s: &Shape, v: [f64; 3]) -> Option<[f64; 3]> {
     match *s {
-        Shape::Sphere { c, r } => Some(add(c, vec3_scale(v, r))),
-        Shape::Box { c, axes, half } => {
-            let mut p = c;
-            for i in 0..3 {
-                let s = if vec3_dot(v, axes[i]) >= 0.0 {
-                    1.0
-                } else {
-                    -1.0
-                };
-                p = add(p, vec3_scale(axes[i], s * half[i]));
-            }
-            Some(p)
-        }
-        Shape::Cylinder { q, u, r, half } => {
-            if half <= 0.0 {
-                return None;
-            }
-            let vu = vec3_dot(v, u);
-            let cap = if vu >= 0.0 { half } else { -half };
-            let perp = sub(v, vec3_scale(u, vu));
-            let pl = norm(perp);
-            let rim = if pl < 1e-12 {
-                [0.0; 3]
-            } else {
-                vec3_scale(perp, r / pl)
-            };
-            Some(add(q, add(vec3_scale(u, cap), rim)))
-        }
-        Shape::Cone { c, axis, r, h } => {
-            let apex = add(c, vec3_scale(axis, h / 2.0));
-            let bc = add(c, vec3_scale(axis, -h / 2.0));
-            let perp = sub(v, vec3_scale(axis, vec3_dot(v, axis)));
-            let pl = norm(perp);
-            let rim = if pl < 1e-12 {
-                bc
-            } else {
-                add(bc, vec3_scale(perp, r / pl))
-            };
-            Some(if vec3_dot(v, apex) >= vec3_dot(v, rim) {
-                apex
-            } else {
-                rim
-            })
-        }
+        Shape::Sphere { c, r } => Some(cga_core::support_point_sphere(c, r, v)),
+        Shape::Box { c, axes, half } => Some(cga_core::support_point_box(c, axes, half, v)),
+        Shape::Cylinder { q, u, r, half } => cga_core::support_point_cylinder(q, u, r, half, v),
+        Shape::Cone { c, axis, r, h } => Some(cga_core::support_point_cone(c, axis, r, h, v)),
         Shape::Torus {
             c,
             axis,
             major,
             minor,
-        } => {
-            let va = vec3_dot(v, axis);
-            let perp = sub(v, vec3_scale(axis, va));
-            let pl = norm(perp);
-            let m = if pl < 1e-12 {
-                c
-            } else {
-                add(c, vec3_scale(perp, major / pl))
-            };
-            Some(add(m, vec3_scale(v, minor)))
-        }
-        Shape::Ellipsoid { c, axes, radii } => {
-            let vi = [
-                vec3_dot(v, axes[0]),
-                vec3_dot(v, axes[1]),
-                vec3_dot(v, axes[2]),
-            ];
-            let s: f64 = (0..3)
-                .map(|i| (vi[i] * radii[i]) * (vi[i] * radii[i]))
-                .sum::<f64>()
-                .sqrt();
-            if s < 1e-12 {
-                return None;
-            }
-            let mut p = c;
-            for i in 0..3 {
-                p = add(p, vec3_scale(axes[i], radii[i] * radii[i] * vi[i] / s));
-            }
-            Some(p)
-        }
+        } => Some(cga_core::support_point_torus(c, axis, major, minor, v)),
+        Shape::Ellipsoid { c, axes, radii } => cga_core::support_point_ellipsoid(c, axes, radii, v),
         Shape::Plane { .. } => None,
     }
 }
 
-/// 椭球最近点：外部精确（单调对分），内部 → None。返回 (距离, 点)。
-pub(crate) fn ellipsoid_closest(
-    c: [f64; 3],
-    axes: [[f64; 3]; 3],
-    radii: [f64; 3],
-    p: [f64; 3],
-) -> Option<(f64, [f64; 3])> {
-    let q = sub(p, c);
-    let a = [
-        vec3_dot(q, axes[0]),
-        vec3_dot(q, axes[1]),
-        vec3_dot(q, axes[2]),
-    ];
-    let s: f64 = (0..3).map(|i| (a[i] / radii[i]) * (a[i] / radii[i])).sum();
-    if s <= 1.0 {
-        return None;
-    }
-    let f = |t: f64| -> f64 {
-        (0..3)
-            .map(|i| {
-                let v = radii[i] * a[i] / (t + radii[i] * radii[i]);
-                v * v
-            })
-            .sum::<f64>()
-            - 1.0
-    };
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-    while f(hi) > 0.0 {
-        hi *= 2.0;
-        if hi > 1e12 {
-            return None;
-        }
-    }
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if f(mid) > 0.0 {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let t = 0.5 * (lo + hi);
-    let mut out = c;
-    let mut d2 = 0.0;
-    for i in 0..3 {
-        let x = radii[i] * radii[i] * a[i] / (t + radii[i] * radii[i]);
-        d2 += (x - a[i]) * (x - a[i]);
-        out = add(out, vec3_scale(axes[i], x));
-    }
-    Some((d2.sqrt(), out))
-}
+// 椭球最近点的唯一实现在 `cga_core::ellipsoid_closest`（被 `pairs::sdf` 与
+// `contacts::closest_point` 直接调用）。
 
 // ---- 盒–盒接触流形 --------------------------------------------------------
 

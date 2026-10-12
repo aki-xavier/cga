@@ -119,61 +119,14 @@ pub fn contains_point(g: &Geometry, world: [f64; 16], p: [f64; 3]) -> Hit {
             contains_point(&a.inner[0], m, p)
         }
         prim => {
+            // 图元内外归属的唯一实现在 `cga_core::query`（三值：不可判定 → Unknown）。
             let pl = transform_point(inv_affine4(world), p);
-            local_contains(prim, pl)
-        }
-    }
-}
-
-/// 局部空间的点包含（局部约定与渲染器一致：柱/锥/环面/圆片轴 = +z，锥顶点
-/// 在 z=+h/2，盒/球/椭球心在原点，环面心在 z=0 平面）。
-fn local_contains(g: &Geometry, p: [f64; 3]) -> Hit {
-    match g {
-        Geometry::SphereGeometry(s) => bool_hit(norm(p) <= s.radius),
-        Geometry::PlaneGeometry(pl) => {
-            let n = pl.blade.euclidean_vector();
-            let nl = norm(n);
-            bool_hit(vec3_dot(p, n) / nl <= pl.blade.einf_coeff() / nl)
-        }
-        Geometry::BoxGeometry(b) => {
-            bool_hit(p.iter().zip(b.half.iter()).all(|(x, h)| x.abs() <= *h))
-        }
-        Geometry::CylinderGeometry(c) => {
-            let radial = (p[0] * p[0] + p[1] * p[1]).sqrt();
-            let axial_ok = c.half <= 0.0 || p[2].abs() <= c.half; // half ≤ 0 = 无限长
-            bool_hit(radial <= c.radius && axial_ok)
-        }
-        Geometry::ConeGeometry(c) => {
-            let radial = (p[0] * p[0] + p[1] * p[1]).sqrt();
-            let in_z = p[2] >= -c.height / 2.0 && p[2] <= c.height / 2.0;
-            let rmax = c.radius * (c.height / 2.0 - p[2]) / c.height;
-            bool_hit(in_z && radial <= rmax)
-        }
-        Geometry::TorusGeometry(t) => {
-            if t.arc < std::f64::consts::TAU - 1e-9 {
-                return Hit::Unknown; // 部分环面（弧管）v1 不支持
+            match prim.identity_params().contains(pl) {
+                cga_core::Membership::Inside => Hit::Yes,
+                cga_core::Membership::Outside => Hit::No,
+                cga_core::Membership::Unknown => Hit::Unknown,
             }
-            let q = (p[0] * p[0] + p[1] * p[1]).sqrt() - t.major;
-            bool_hit(q * q + p[2] * p[2] <= t.minor * t.minor)
         }
-        Geometry::EllipsoidGeometry(e) => {
-            let s: f64 = p
-                .iter()
-                .zip(e.radii.iter())
-                .map(|(x, r)| (x / r) * (x / r))
-                .sum();
-            bool_hit(s <= 1.0)
-        }
-        Geometry::CircleGeometry(_) | Geometry::CyclideGeometry(_) => Hit::Unknown,
-        Geometry::CsgGeometry(_) | Geometry::AffineGeometry(_) => unreachable!(),
-    }
-}
-
-fn bool_hit(b: bool) -> Hit {
-    if b {
-        Hit::Yes
-    } else {
-        Hit::No
     }
 }
 
@@ -227,7 +180,8 @@ pub fn probe(a: &Geometry, wa: [f64; 16], b: &Geometry, wb: [f64; 16]) -> (Hit, 
         }
     }
     if let Some(d) = separation(a, wa, b, wb) {
-        return (bool_hit(d <= 0.0), Some(d));
+        let hit = if d <= 0.0 { Hit::Yes } else { Hit::No };
+        return (hit, Some(d));
     }
     if let Geometry::CsgGeometry(c) = a {
         if c.op == cga_core::csg_node::CsgOp::Union {
@@ -341,29 +295,18 @@ pub fn world_aabb(g: &Geometry, world: [f64; 16]) -> Option<[[f64; 3]; 2]> {
     }
 }
 
+/// 局部包围盒（碰撞侧的口径）：图元的几何包围盒来自 `cga_core::query`
+/// （唯一实现），只有两处是**碰撞的保守策略**而非几何知识：
+/// 圆片不是实体（网格化/`bounds` 给 `None`）但碰撞要一个零厚度板；
+/// 环纹面的保守包围盒在碰撞侧不给（走 `Unknown` 路径）。
 fn local_bounds(g: &Geometry) -> Option<[[f64; 3]; 2]> {
-    let b = |lo: [f64; 3], hi: [f64; 3]| Some([lo, hi]);
     match g {
-        Geometry::SphereGeometry(s) => b([-s.radius; 3], [s.radius; 3]),
-        Geometry::PlaneGeometry(_) => None,
-        Geometry::BoxGeometry(x) => b([-x.half[0], -x.half[1], -x.half[2]], x.half),
-        Geometry::CylinderGeometry(c) if c.half > 0.0 => b(
-            [-c.radius, -c.radius, -c.half],
-            [c.radius, c.radius, c.half],
-        ),
-        Geometry::CylinderGeometry(_) => None,
-        Geometry::ConeGeometry(c) => b(
-            [-c.radius, -c.radius, -c.height / 2.0],
-            [c.radius, c.radius, c.height / 2.0],
-        ),
-        Geometry::TorusGeometry(t) => {
-            let e = t.major + t.minor;
-            b([-e, -e, -t.minor], [e, e, t.minor])
+        Geometry::CircleGeometry(c) => {
+            Some([[-c.radius, -c.radius, 0.0], [c.radius, c.radius, 0.0]])
         }
-        Geometry::EllipsoidGeometry(e) => b([-e.radii[0], -e.radii[1], -e.radii[2]], e.radii),
-        Geometry::CircleGeometry(c) => b([-c.radius, -c.radius, 0.0], [c.radius, c.radius, 0.0]),
         Geometry::CyclideGeometry(_) => None,
         Geometry::CsgGeometry(_) | Geometry::AffineGeometry(_) => unreachable!(),
+        prim => prim.identity_params().bounds(),
     }
 }
 

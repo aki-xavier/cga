@@ -1900,6 +1900,39 @@ fn test_mass_density_prop_and_report() {
 }
 
 #[test]
+fn test_mass_scaled_object_uses_rigid_world_only() {
+    // scale/mirror 走仿射包装：几何已折进线性部分，质量属性的 world 必须是刚体的
+    // （mass.rs 契约）。锥 r=0.5 h=2 均匀放大 2 倍 ⇒ 实际 r=1 h=4，质心在轴上
+    // z = −h/4 = −1（闭式）。线性部分被作用两次时 cog.z 是 −2.0。
+    let src = r#"export default <scene><cone r={0.5} h={2} scale={2} density={1.0} /></scene>;"#;
+    let run = run_jsx(src, None, "").expect("run");
+    let mp = run.mass_props[0].expect("锥有质量属性");
+    let want_m = std::f64::consts::PI * 4.0 / 3.0; // π·r²·h/3，r=1 h=4
+    assert!(
+        (mp.mass - want_m).abs() / want_m < 1e-2,
+        "mass {} vs {want_m}",
+        mp.mass
+    );
+    assert!(
+        mp.cog[0].abs() < 1e-2 && mp.cog[1].abs() < 1e-2,
+        "cog {:?} 应在轴上",
+        mp.cog
+    );
+    assert!(
+        (mp.cog[2] + 1.0).abs() < 1e-2,
+        "cog.z={} 期望 −1.0（−2.0 是线性部分被作用两次的旧错值）",
+        mp.cog[2]
+    );
+    // 惯量与密度同约定：I_zz = 3/10·m·r²（r=1）。
+    let want_iz = 0.3 * want_m;
+    assert!(
+        (mp.inertia[2][2] - want_iz).abs() / want_iz < 2e-2,
+        "I_zz={} vs {want_iz}",
+        mp.inertia[2][2]
+    );
+}
+
+#[test]
 fn test_settle_pendulum_and_double() {
     // 单摆：臂沿 +x，末端球，重力 −y → 平衡 q* = −π/2（竖直下垂，闭式）。
     let pend = |extra: &str| {

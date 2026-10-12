@@ -1,218 +1,18 @@
-use cga_core::{
-    vec3_dot, vec3_sub, AffineParams, BoxParams, ConeParams, CsgOp, CyclideParams, CylinderParams,
-    EllipsoidParams, GeometryParams, PlaneParams, SphereParams, TorusParams,
-};
+//! 网格化（marching tetrahedra + 焊接 + 朝向统一）。
+//!
+//! `field`（符号隐式）与 `bounds` 的唯一实现在 `cga_core::geometry::query`
+//! （`GeometryParams::field` / `GeometryParams::bounds`）；本模块只负责离散化。
 
-fn to_local(a_inv3: [[f64; 3]; 3], t_inv: [f64; 3], p: [f64; 3]) -> [f64; 3] {
-    [
-        a_inv3[0][0] * p[0] + a_inv3[0][1] * p[1] + a_inv3[0][2] * p[2] + t_inv[0],
-        a_inv3[1][0] * p[0] + a_inv3[1][1] * p[1] + a_inv3[1][2] * p[2] + t_inv[1],
-        a_inv3[2][0] * p[0] + a_inv3[2][1] * p[1] + a_inv3[2][2] * p[2] + t_inv[2],
-    ]
-}
+use cga_core::GeometryParams;
+use cga_core::{vec3_dot, vec3_sub};
 
-fn sphere_field(p: SphereParams, x: [f64; 3]) -> f64 {
-    vec3_dot(vec3_sub(x, p.c), vec3_sub(x, p.c)) - p.r * p.r
-}
-
-fn plane_field(p: PlaneParams, x: [f64; 3]) -> f64 {
-    vec3_dot(p.n, x) - p.d
-}
-
-fn cylinder_field(p: CylinderParams, x: [f64; 3]) -> f64 {
-    let rel = vec3_sub(x, p.q);
-    let s = vec3_dot(rel, p.u);
-    let rad = vec3_sub(rel, [p.u[0] * s, p.u[1] * s, p.u[2] * s]);
-    let f = vec3_dot(rad, rad) - p.r * p.r;
-    if p.h < 0.0 {
-        return f;
-    }
-    f.max(s.abs() - p.h)
-}
-
-fn box_field(p: BoxParams, x: [f64; 3]) -> f64 {
-    let q = vec3_sub(x, p.c);
-    let mut f =
-        (vec3_dot(q, p.axes[0]).abs() - p.half[0]).max(vec3_dot(q, p.axes[1]).abs() - p.half[1]);
-    f = f.max(vec3_dot(q, p.axes[2]).abs() - p.half[2]);
-    f
-}
-
-fn cone_field(p: ConeParams, x: [f64; 3]) -> f64 {
-    let l = to_local(p.a_inv3, p.t_inv, x);
-    let s = l[2] - p.h / 2.0;
-    let k2 = 1.0 + (p.r / p.h) * (p.r / p.h);
-    let f = l[0] * l[0] + l[1] * l[1] + s * s - k2 * s * s;
-    f.max(s).max(-(s + p.h))
-}
-
-fn ellipsoid_field(p: EllipsoidParams, x: [f64; 3]) -> f64 {
-    let l = to_local(p.a_inv3, p.t_inv, x);
-    vec3_dot(l, l) - 1.0
-}
-
-fn torus_field(p: TorusParams, x: [f64; 3]) -> f64 {
-    let l = to_local(p.a_inv3, p.t_inv, x);
-    let r2 = p.major * p.major;
-    let f =
-        (vec3_dot(l, l) + r2 - p.minor * p.minor).powi(2) - 4.0 * r2 * (l[0] * l[0] + l[1] * l[1]);
-    if p.arc >= std::f64::consts::TAU {
-        return f;
-    }
-    let mut theta = l[1].atan2(l[0]);
-    if theta < 0.0 {
-        theta += std::f64::consts::TAU;
-    }
-    f.max(theta - p.arc)
-}
-
-fn cyclide_field(p: CyclideParams, x: [f64; 3]) -> f64 {
-    let l = to_local(p.a_inv3, p.t_inv, x);
-    let x0 = l[0] - p.shift[0];
-    let y0 = l[1] - p.shift[1];
-    let z0 = l[2] - p.shift[2];
-    let bb = p.b * p.b - p.d * p.d;
-    let rho = x0 * x0 + y0 * y0 + z0 * z0;
-    (rho + bb).powi(2) - 4.0 * (x0 * p.a - p.c * p.d).powi(2) - 4.0 * p.b * p.b * y0 * y0
-}
-
-fn affine_field(p: &AffineParams, x: [f64; 3]) -> f64 {
-    p.inner.field(to_local(p.a_inv3, p.t_inv, x))
-}
-
-fn csg_field(op: CsgOp, children: &[GeometryParams], x: [f64; 3]) -> f64 {
-    match op {
-        CsgOp::Union => {
-            let mut f = f64::INFINITY;
-            for c in children {
-                let v = c.field(x);
-                if v < f {
-                    f = v;
-                }
-            }
-            f
-        }
-        CsgOp::Intersection => {
-            let mut f = f64::NEG_INFINITY;
-            for c in children {
-                let v = c.field(x);
-                if v > f {
-                    f = v;
-                }
-            }
-            f
-        }
-        CsgOp::Difference => {
-            let mut f = children[0].field(x);
-            for c in &children[1..] {
-                let v = -c.field(x);
-                if v > f {
-                    f = v;
-                }
-            }
-            f
-        }
-    }
-}
-
-/// 几何的网格化扩展（bake/field/bounds）。孤儿规则：这些曾是 `GeometryParams`
-/// 的固有方法，拆出 cga-core 后改成扩展 trait——调用语法不变（`params.bake(step)`）。
+/// 几何的网格化扩展（`bake`）。`field`/`bounds` 不在这里：它们是
+/// `cga_core::query` 的固有方法（唯一实现），本 trait 只留网格化。
 pub trait BakeExt {
-    fn field(&self, x: [f64; 3]) -> f64;
-    fn bounds(&self) -> Option<[[f64; 3]; 2]>;
     fn bake(&self, step: f64) -> Result<BakedMesh, String>;
 }
 
 impl BakeExt for GeometryParams {
-    fn field(&self, x: [f64; 3]) -> f64 {
-        match self {
-            GeometryParams::SphereParams(p) => sphere_field(*p, x),
-            GeometryParams::PlaneParams(p) => plane_field(*p, x),
-            GeometryParams::CylinderParams(p) => cylinder_field(*p, x),
-            GeometryParams::BoxParams(p) => box_field(*p, x),
-            GeometryParams::ConeParams(p) => cone_field(*p, x),
-            GeometryParams::EllipsoidParams(p) => ellipsoid_field(*p, x),
-            GeometryParams::TorusParams(p) => torus_field(*p, x),
-            GeometryParams::CyclideParams(p) => cyclide_field(*p, x),
-            GeometryParams::AffineParams(p) => affine_field(p, x),
-            GeometryParams::CsgParams(p) => csg_field(p.op, &p.children, x),
-            GeometryParams::CircleParams(_) => panic!("circle is not a solid (no field)"),
-        }
-    }
-
-    fn bounds(&self) -> Option<[[f64; 3]; 2]> {
-        match self {
-            GeometryParams::SphereParams(p) => Some([
-                [p.c[0] - p.r, p.c[1] - p.r, p.c[2] - p.r],
-                [p.c[0] + p.r, p.c[1] + p.r, p.c[2] + p.r],
-            ]),
-            GeometryParams::PlaneParams(_) => None,
-            GeometryParams::CylinderParams(p) => {
-                if p.h < 0.0 {
-                    return None;
-                }
-                let mut lo = [0.0; 3];
-                let mut hi = [0.0; 3];
-                for i in 0..3 {
-                    let e = p.u[i].abs() * p.h + p.r;
-                    lo[i] = p.q[i] - e;
-                    hi[i] = p.q[i] + e;
-                }
-                Some([lo, hi])
-            }
-            GeometryParams::BoxParams(p) => {
-                let mut lo = [0.0; 3];
-                let mut hi = [0.0; 3];
-                for i in 0..3 {
-                    let mut e = 0.0;
-                    for j in 0..3 {
-                        e += p.axes[j][i].abs() * p.half[j];
-                    }
-                    lo[i] = p.c[i] - e;
-                    hi[i] = p.c[i] + e;
-                }
-                Some([lo, hi])
-            }
-            GeometryParams::ConeParams(p) => Some(corners_bounds(
-                [-p.r, -p.r, -p.h / 2.0],
-                [p.r, p.r, p.h / 2.0],
-                &p.a_fwd,
-            )),
-            GeometryParams::TorusParams(p) => {
-                let e = p.major + p.minor;
-                Some(corners_bounds(
-                    [-e, -e, -p.minor],
-                    [e, e, p.minor],
-                    &p.a_fwd,
-                ))
-            }
-            GeometryParams::EllipsoidParams(p) => {
-                Some(corners_bounds([-1.0; 3], [1.0; 3], &p.a_fwd))
-            }
-            GeometryParams::CyclideParams(p) => {
-                let r = p.d + p.c;
-                Some(corners_bounds(
-                    [p.shift[0] - p.a - r, p.shift[1] - p.b - r, p.shift[2] - r],
-                    [p.shift[0] + p.a + r, p.shift[1] + p.b + r, p.shift[2] + r],
-                    &p.a_fwd,
-                ))
-            }
-            GeometryParams::CsgParams(p) => {
-                let bs: Vec<_> = p.children.iter().map(|c| c.bounds()).collect();
-                match p.op {
-                    CsgOp::Difference => bs.into_iter().next().unwrap_or(None),
-                    CsgOp::Union => combine_bounds(&bs, Fold::Union),
-                    CsgOp::Intersection => combine_bounds(&bs, Fold::Intersect),
-                }
-            }
-            GeometryParams::AffineParams(p) => {
-                let b = p.inner.bounds()?;
-                Some(corners_bounds(b[0], b[1], &p.a_fwd))
-            }
-            GeometryParams::CircleParams(_) => None,
-        }
-    }
-
     fn bake(&self, step: f64) -> Result<BakedMesh, String> {
         if !step.is_finite() || step <= 0.0 {
             return Err(format!("bake: bad step {step}"));
@@ -264,7 +64,11 @@ impl BakeExt for GeometryParams {
         for k in 0..=nz {
             for j in 0..=ny {
                 for i in 0..=nx {
-                    vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = self.field(at(i, j, k));
+                    let v = self.field(at(i, j, k)).ok_or_else(|| {
+                        "bake: geometry has no implicit field (circle is a surface, not a solid)"
+                            .to_string()
+                    })?;
+                    vals[k * (ny + 1) * (nx + 1) + j * (nx + 1) + i] = v;
                 }
             }
         }
@@ -301,78 +105,7 @@ impl BakeExt for GeometryParams {
     }
 }
 
-fn apply_fwd(a_fwd: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
-    [
-        a_fwd[0] * p[0] + a_fwd[1] * p[1] + a_fwd[2] * p[2] + a_fwd[3],
-        a_fwd[4] * p[0] + a_fwd[5] * p[1] + a_fwd[6] * p[2] + a_fwd[7],
-        a_fwd[8] * p[0] + a_fwd[9] * p[1] + a_fwd[10] * p[2] + a_fwd[11],
-    ]
-}
-
-fn corners_bounds(lo: [f64; 3], hi: [f64; 3], a_fwd: &[f64; 16]) -> [[f64; 3]; 2] {
-    let mut mn = [f64::INFINITY; 3];
-    let mut mx = [f64::NEG_INFINITY; 3];
-    for &i in &[lo[0], hi[0]] {
-        for &j in &[lo[1], hi[1]] {
-            for &k in &[lo[2], hi[2]] {
-                let q = apply_fwd(a_fwd, [i, j, k]);
-                for a in 0..3 {
-                    if q[a] < mn[a] {
-                        mn[a] = q[a];
-                    }
-                    if q[a] > mx[a] {
-                        mx[a] = q[a];
-                    }
-                }
-            }
-        }
-    }
-    [mn, mx]
-}
-
-/// 子件包围盒的折叠方向。两者的区别只有逐轴 min/max 的方向：并集外扩，
-/// 交集结内收。
-#[derive(Clone, Copy)]
-enum Fold {
-    Union,
-    Intersect,
-}
-
-/// 折叠一组可选包围盒：`None`（无界/未给出）跳过，全为 `None` 时返回 `None`。
-fn combine_bounds(list: &[Option<[[f64; 3]; 2]>], fold: Fold) -> Option<[[f64; 3]; 2]> {
-    let mut out: Option<[[f64; 3]; 2]> = None;
-    for b in list.iter().flatten() {
-        out = Some(match out {
-            None => *b,
-            Some([mn, mx]) => {
-                let mut lo = mn;
-                let mut hi = mx;
-                for a in 0..3 {
-                    match fold {
-                        Fold::Union => {
-                            if b[0][a] < lo[a] {
-                                lo[a] = b[0][a];
-                            }
-                            if b[1][a] > hi[a] {
-                                hi[a] = b[1][a];
-                            }
-                        }
-                        Fold::Intersect => {
-                            if b[0][a] > lo[a] {
-                                lo[a] = b[0][a];
-                            }
-                            if b[1][a] < hi[a] {
-                                hi[a] = b[1][a];
-                            }
-                        }
-                    }
-                }
-                [lo, hi]
-            }
-        });
-    }
-    out
-}
+// `combine_bounds`/`Fold`（子件包围盒折叠）已随 `bounds` 移到 `cga_core::query`。
 
 const CORN: [[usize; 3]; 8] = [
     [0, 0, 0],
@@ -415,13 +148,16 @@ fn lerp_pt(a: [f64; 3], va: f64, b: [f64; 3], vb: f64) -> [f64; 3] {
     ]
 }
 
-fn grad(params: &GeometryParams, x: [f64; 3]) -> [f64; 3] {
+/// 有限差分梯度。`None` = 该处没有隐式场（本模块只在网格节点场已断言有限的几何上用它，
+/// 因此调用方把它当 0 处理即可；朝向只是整体符号选择）。
+fn grad(params: &GeometryParams, x: [f64; 3]) -> Option<[f64; 3]> {
     let e = 1e-6;
-    [
-        (params.field([x[0] + e, x[1], x[2]]) - params.field([x[0] - e, x[1], x[2]])) / (2.0 * e),
-        (params.field([x[0], x[1] + e, x[2]]) - params.field([x[0], x[1] - e, x[2]])) / (2.0 * e),
-        (params.field([x[0], x[1], x[2] + e]) - params.field([x[0], x[1], x[2] - e])) / (2.0 * e),
-    ]
+    let f = |p: [f64; 3]| params.field(p);
+    Some([
+        (f([x[0] + e, x[1], x[2]])? - f([x[0] - e, x[1], x[2]])?) / (2.0 * e),
+        (f([x[0], x[1] + e, x[2]])? - f([x[0], x[1] - e, x[2]])?) / (2.0 * e),
+        (f([x[0], x[1], x[2] + e])? - f([x[0], x[1], x[2] - e])?) / (2.0 * e),
+    ])
 }
 
 fn emit_tri(
@@ -722,14 +458,14 @@ fn orient_outward(mesh: &mut BakedMesh, params: &GeometryParams) {
         let mut best_conf = -1.0;
         for &fi in &comp {
             let (nrm, cen) = face_geom(fi);
-            let conf = vec3_dot(nrm, grad(params, cen)).abs();
+            let conf = grad(params, cen).map_or(0.0, |g| vec3_dot(nrm, g).abs());
             if conf > best_conf {
                 best_conf = conf;
                 best = fi;
             }
         }
         let (nrm, cen) = face_geom(best);
-        flip[best] = vec3_dot(nrm, grad(params, cen)) < 0.0;
+        flip[best] = grad(params, cen).is_some_and(|g| vec3_dot(nrm, g) < 0.0);
         let mut stack = vec![best];
         let mut done = vec![false; n];
         done[best] = true;

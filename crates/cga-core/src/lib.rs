@@ -33,3 +33,6 @@ pub use affine_geom::*;
 
 pub mod csg_node;
 pub use csg_node::*;
+
+pub mod query;
+pub use query::*;

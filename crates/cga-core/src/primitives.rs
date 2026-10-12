@@ -70,24 +70,22 @@ impl Multivector {
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
+    /// 点到平面（blade 形式）的有符号距离。退化法向 → 1e300 哨兵（历史约定，保留）。
+    /// 唯一的数值定义在 [`crate::query::sdf_plane`]。
     pub fn plane_dist(&self, p: &Multivector) -> f64 {
         let c = p.coords();
         let v = self.euclidean_vector();
         let d = self.einf_coeff();
-        let nl = vec3_len(v);
-        if nl < 1e-12 {
+        if vec3_len(v) < 1e-12 {
             return 1e300;
         }
-        (v[0] * c[0] + v[1] * c[1] + v[2] * c[2] - d) / nl
+        crate::query::sdf_plane(v, d, c).unwrap_or(1e300)
     }
 
+    /// 点到球面（blade 形式）的有符号距离。唯一的数值定义在 [`crate::query::sdf_sphere`]。
     pub fn sphere_dist(&self, p: &Multivector) -> f64 {
         let (c, r) = self.to_sphere();
-        let pc = p.coords();
-        let dx = pc[0] - c[0];
-        let dy = pc[1] - c[1];
-        let dz = pc[2] - c[2];
-        (dx * dx + dy * dy + dz * dz).sqrt() - r
+        crate::query::sdf_sphere(c, r, p.coords())
     }
 }
 
@@ -121,19 +119,21 @@ impl Cylinder {
         }
     }
 
+    /// 点到柱面的有符号距离（无限长柱：轴向不参与）。唯一的数值定义在
+    /// [`crate::query::sdf_cylinder_section`]。
     pub fn dist(&self, p: &Multivector) -> f64 {
         let c = p.coords();
-        let dx = c[0] - self.axis_point[0];
-        let dy = c[1] - self.axis_point[1];
-        let dz = c[2] - self.axis_point[2];
-        let ux = self.axis_dir[0];
-        let uy = self.axis_dir[1];
-        let uz = self.axis_dir[2];
-        let dot = dx * ux + dy * uy + dz * uz;
-        let ex = dx - dot * ux;
-        let ey = dy - dot * uy;
-        let ez = dz - dot * uz;
-        let d = (ex * ex + ey * ey + ez * ez).sqrt();
-        d - self.radius
+        let w = [
+            c[0] - self.axis_point[0],
+            c[1] - self.axis_point[1],
+            c[2] - self.axis_point[2],
+        ];
+        let s = w[0] * self.axis_dir[0] + w[1] * self.axis_dir[1] + w[2] * self.axis_dir[2];
+        let rad = [
+            w[0] - s * self.axis_dir[0],
+            w[1] - s * self.axis_dir[1],
+            w[2] - s * self.axis_dir[2],
+        ];
+        crate::query::sdf_cylinder_section(self.radius, -1.0, vec3_len(rad), s)
     }
 }
